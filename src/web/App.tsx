@@ -3094,15 +3094,15 @@ function ApiGuideDialog({ llm, tts, onClose }: { llm: { label: string; href: str
   </div>;
 }
 
-function InvitationAccessPanel({ access, pending, onClaim }: {
+function InvitationAccessPanel({ access, pending, onClaim, onContinue }: {
   access: InvitationAccessStatus | null;
   pending: boolean;
   onClaim: (inviteCode: string, displayName: string) => Promise<boolean>;
+  onContinue?: () => void;
 }) {
   const [displayName, setDisplayName] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const connected = access?.connected === true;
-  const localCommunity = access?.user?.id === "community-local";
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!displayName.trim() || !inviteCode.trim()) return;
@@ -3113,17 +3113,17 @@ function InvitationAccessPanel({ access, pending, onClaim }: {
       <span><Wifi size={15} /><span><strong>验证内测身份</strong><small>PRIVATE BETA ACCESS</small></span></span>
       <span className={`service-connection-state ${connected ? "is-connected" : "is-pending"}`}><StatusDot tone={connected ? "ready" : "muted"} />{connected ? "已验证" : "未验证"}</span>
     </div>
-    {connected ? <div className="invitation-connected-summary">
+    {connected ? <><div className="invitation-connected-summary">
       <div className="invitation-profile-mark" aria-hidden="true">{access.user?.displayName?.trim().slice(0, 1).toUpperCase() || "O"}</div>
-      <div><span className="console-code">{localCommunity ? "LOCAL COMMUNITY MODE" : "AUTHORIZED OPERATOR"}</span><h3>{localCommunity ? "社区本地模式" : access.user?.displayName}</h3><p>{localCommunity ? "请先在本机设置中配置自己的 AI 与语音服务。" : `${access.device?.name} 已获得本次内测权限。`}</p></div>
+      <div><span className="console-code">AUTHORIZED OPERATOR</span><h3>{access.user?.displayName}</h3><p>{access.device?.name} 已通过邀请码验证。</p></div>
       <Check size={22} />
-    </div> : <form className="invitation-form" onSubmit={submit}>
-      <div className="invitation-copy"><h3>输入你的邀请码</h3><p>验证通过后，这台 Mac 会自动接通节目文案和五位主持人的声线。</p></div>
+    </div>{onContinue && <button className="primary-button invitation-continue-button" type="button" onClick={onContinue}>下一步，音乐授权 <ArrowRight size={15} /></button>}</> : <form className="invitation-form" onSubmit={submit}>
+      <div className="invitation-copy"><h3>输入你的邀请码</h3><p>验证通过后，这台 Mac 会自动接通节目文案和六位主持人的声线。</p></div>
       <label>你的名字<input autoComplete="name" maxLength={40} placeholder="例如：小林" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
       <label>团队邀请码<input autoComplete="off" maxLength={40} spellCheck={false} placeholder="OMR-XXXXXX" value={inviteCode} onChange={(event) => setInviteCode(event.target.value.toUpperCase())} /></label>
-      <button className="primary-button" type="submit" disabled={pending || !displayName.trim() || !inviteCode.trim()}>{pending ? <LoaderCircle size={15} className="spin" /> : <ArrowRight size={15} />}{pending ? "正在验证" : "验证并继续"}</button>
+      <button className="primary-button" type="submit" disabled={pending || !displayName.trim() || !inviteCode.trim()}>{pending ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />}{pending ? "正在验证" : "验证邀请码"}</button>
     </form>}
-    <div className="managed-service-strip"><Check size={13} /><span>{localCommunity ? "服务配置由使用者自行提供" : "无需填写模型或语音 API Key"}</span><span>{localCommunity ? "密钥仅保存在本机钥匙串" : "设备凭证仅保存在本机钥匙串"}</span></div>
+    <div className="managed-service-strip"><Check size={13} /><span>无需填写模型或语音 API Key</span><span>设备凭证仅保存在本机钥匙串</span></div>
   </section>;
 }
 
@@ -3502,7 +3502,6 @@ function SetupView({
   const settingsHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const hostChoiceRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [connectStage, setConnectStage] = useState<"invite" | "music">("invite");
-  const invitationWasReadyRef = useRef(false);
   const autoQrAttemptRef = useRef<string | null>(null);
   const startMusicLoginRef = useRef(onStartMusicLogin);
   startMusicLoginRef.current = onStartMusicLogin;
@@ -3519,21 +3518,20 @@ function SetupView({
     ? selectedGenreLabels.length > 0 ? `按风格: ${selectedGenreLabels.join(" / ")}` : "按风格: 请选择风格"
     : `按氛围: ${scene.label}`;
   const musicConnectReady = selectedApiStatus?.authenticated === true;
+  const accessVerified = invitationAccess?.connected === true;
   const invitationReady = invitationAccess?.connected === true && aiConfig?.llm.hasKey === true && aiConfig?.tts.hasKey === true;
   useEffect(() => {
     if (phase !== "connect") return;
-    if (!invitationReady && connectStage !== "invite") setConnectStage("invite");
-    if (invitationReady && !invitationWasReadyRef.current) setConnectStage("music");
-    invitationWasReadyRef.current = invitationReady;
-  }, [connectStage, invitationReady, phase]);
+    if (!accessVerified && connectStage !== "invite") setConnectStage("invite");
+  }, [accessVerified, connectStage, phase]);
   useEffect(() => {
-    if (phase !== "connect" || connectStage !== "music" || !invitationReady || !selectedApiSource) return;
+    if (phase !== "connect" || connectStage !== "music" || !accessVerified || !selectedApiSource) return;
     if (!selectedApiStatus?.configured || selectedApiStatus.authenticated || loginForSelected || musicLoginPending) return;
     const attemptKey = `${selectedApiSource}:${invitationAccess?.device?.id ?? "device"}`;
     if (autoQrAttemptRef.current === attemptKey) return;
     autoQrAttemptRef.current = attemptKey;
     startMusicLoginRef.current(selectedApiSource);
-  }, [connectStage, invitationAccess?.device?.id, invitationReady, loginForSelected, musicLoginPending, phase, selectedApiSource, selectedApiStatus?.authenticated, selectedApiStatus?.configured]);
+  }, [accessVerified, connectStage, invitationAccess?.device?.id, loginForSelected, musicLoginPending, phase, selectedApiSource, selectedApiStatus?.authenticated, selectedApiStatus?.configured]);
   const toggleGenre = (genre: MusicGenreId) => {
     if (!musicGenres.includes(genre) && musicGenres.length >= MAX_MUSIC_GENRES) return;
     onMusicGenresChange(musicGenres.includes(genre)
@@ -3588,12 +3586,12 @@ function SetupView({
           <div className="connection-mini-progress" aria-label={`连接进度，第 ${connectStage === "invite" ? 1 : 2} 步，共 2 步`}>
             <button type="button" className={connectStage === "invite" ? "active" : "done"} onClick={() => setConnectStage("invite")}><span>1</span>验证邀请</button>
             <i aria-hidden="true" />
-            <button type="button" className={connectStage === "music" ? "active" : ""} disabled={!invitationReady} onClick={() => setConnectStage("music")}><span>2</span>音乐授权</button>
+            <button type="button" className={connectStage === "music" ? "active" : ""} disabled={!accessVerified} onClick={() => setConnectStage("music")}><span>2</span>音乐授权</button>
           </div>
         </div>
         {errorMessage && <div className="feedback-region connection-feedback"><ErrorBanner title={connectStage === "invite" ? "邀请码未通过" : "音乐平台连接失败"} message={errorMessage} onDismiss={onDismissError} /></div>}
         <div className="onboarding-grid onboarding-grid-single">
-          {connectStage === "invite" && <InvitationAccessPanel access={invitationAccess} pending={invitationPending} onClaim={onClaimInvitation} />}
+          {connectStage === "invite" && <InvitationAccessPanel access={invitationAccess} pending={invitationPending} onClaim={onClaimInvitation} onContinue={() => setConnectStage("music")} />}
           {connectStage === "music" && <section className="onboarding-service-card music-onboarding-card">
             <div className="onboarding-card-heading"><span><Music2 size={15} /><span><strong>选择音乐平台</strong><small>授权保存在当前 Mac</small></span></span><button className="text-button" type="button" onClick={onRefreshSources}><RefreshCw size={13} />刷新</button></div>
             <div className="source-list compact-source-list">{sources.map((source) => <SourceRow key={source.sourceId} source={source} selected={selectedSource === source.sourceId} diagnosticUnavailable={diagnosticsUnavailable && source.sourceId === "qq_music"} musicApiStatus={musicApiStatus} onSelect={() => onSourceChange(source.sourceId)} />)}</div>

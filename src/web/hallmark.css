@@ -8573,6 +8573,12 @@ button:disabled,
   color: #00ff8a;
 }
 
+.invitation-continue-button {
+  width: calc(100% - 3rem);
+  min-height: 3rem;
+  margin: 0 1.5rem 1.5rem;
+}
+
 @media (max-width: 900px) {
   .invitation-form {
     grid-template-columns: 1fr 1fr;
@@ -8606,6 +8612,11 @@ button:disabled,
   .invitation-connected-summary {
     margin: 1rem;
     padding: 1rem;
+  }
+
+  .invitation-continue-button {
+    width: calc(100% - 2rem);
+    margin: 0 1rem 1rem;
   }
 }
 

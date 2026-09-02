@@ -1495,17 +1495,8 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
   const engine = options.engine ?? (await loadEngine());
   const loadedProviders: { host?: HostProviderLike; tts?: TtsProviderLike; netease?: NeteaseProviderLike; qq?: QqProviderLike } = await loadProviders().catch(() => ({}));
   const cloudAccessStore = options.cloudAccessStore ?? new CloudAccessStore();
-  const localAiMode = process.env.ONE_RADIO_AI_MODE === "local";
-  const localAccessStatus = () => ({
-    configured: true,
-    connected: true,
-    state: "connected" as const,
-    user: { id: "community-local", displayName: "Community" },
-    device: { id: "community-local", name: "Local Mac" },
-    detail: "社区版本地模式已启用，请在设置中配置自己的 AI 服务。",
-  });
   const aiConfigStore = options.aiConfigStore
-    ?? (localAiMode ? new LocalAiConfigStore() : new ManagedAiConfigStore(cloudAccessStore));
+    ?? (process.env.ONE_RADIO_AI_MODE === "local" ? new LocalAiConfigStore() : new ManagedAiConfigStore(cloudAccessStore));
   const hostProvider = options.hostProvider ?? new LocalConfiguredHostProvider(aiConfigStore);
   const ttsProvider = options.ttsProvider ?? new LocalConfiguredTtsProvider(aiConfigStore);
   const neteaseProvider = options.neteaseProvider ?? loadedProviders.netease;
@@ -3743,7 +3734,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     }
     if (method === "GET" && pathname === "/api/access/status") {
       assertPlayerControlAuthorized(req);
-      writeJson(res, 200, { access: localAiMode ? localAccessStatus() : await cloudAccessStore.status({ verify: parsedUrl.searchParams.get("verify") === "1" }) });
+      writeJson(res, 200, { access: await cloudAccessStore.status({ verify: parsedUrl.searchParams.get("verify") === "1" }) });
       return;
     }
     if (method === "GET" && pathname === "/api/device/status") {
