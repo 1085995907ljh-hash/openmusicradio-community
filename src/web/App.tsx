@@ -845,11 +845,30 @@ function App() {
   const aiConnectionReady = invitationAccess?.connected === true && Boolean(aiConfig?.llm.hasKey && aiConfig?.tts.hasKey);
   const musicConnectionVerified = Boolean(isApiMusicSource(selectedSource) && selectedMusicApiStatus?.authenticated === true);
   const initializationReady = musicConnectionVerified && aiConnectionReady;
-  const canCreate = selectedDiagnostic.playbackReady && selectedDiagnostic.hostedProgramAllowed
-    && (isApiMusicSource(selectedSource) ? selectedMusicApiStatus?.authenticated === true : selectedDiagnostic.accountConnected === true)
-    && aiConnectionReady
-    && (recommendationMode === "atmosphere" || musicGenres.length > 0)
-    && !isCreating;
+  const createBlocker = !aiConnectionReady
+    ? "请先完成邀请码验证，接通节目文案和主持声线。"
+    : recommendationMode === "genre" && musicGenres.length === 0
+      ? "按风格推荐时，请至少选择一种音乐风格。"
+      : isApiMusicSource(selectedSource)
+        ? selectedMusicApiStatus?.authenticated !== true
+          ? `请先在连接页完成${SOURCE_LABELS[selectedSource]}扫码授权。`
+          : selectedMusicApiStatus?.state !== "ready"
+            ? `${SOURCE_LABELS[selectedSource]}连接正在检查，请返回连接页刷新后重试。`
+            : !selectedDiagnostic.playbackReady || !selectedDiagnostic.hostedProgramAllowed
+              ? `${SOURCE_LABELS[selectedSource]}音源尚未准备好，请返回连接页刷新。`
+              : null
+        : sourceTransport === "failed"
+          ? "本机诊断不可用，请返回连接页刷新后重试。"
+          : selectedDiagnostic.desktopState === "automation_denied"
+            ? "请在系统设置的辅助功能中允许本机服务控制音乐客户端。"
+            : selectedDiagnostic.desktopState === "screen_locked"
+              ? "请先解锁 Mac，再创建主持节目。"
+              : selectedDiagnostic.accountConnected !== true
+                ? "请先打开桌面音乐客户端。"
+                : !selectedDiagnostic.playbackReady || !selectedDiagnostic.hostedProgramAllowed
+                  ? "当前音源尚不能创建主持节目。"
+                  : null;
+  const canCreate = createBlocker === null && !isCreating;
   const programActive = Boolean(program && ["preparing", "on_air", "closing"].includes(program.status));
   const remainingSeconds = useMemo(() => {
     if (!program) return 0;
@@ -2057,7 +2076,10 @@ function App() {
 
   const handleCreate = async (event: FormEvent) => {
     event.preventDefault();
-    if (!canCreate) return;
+    if (!canCreate) {
+      if (createBlocker) setLastError(createBlocker);
+      return;
+    }
     setLastError(null);
     setNotice(null);
     setIsCreating(true);
@@ -2718,6 +2740,7 @@ function App() {
         onFamiliarityRatioChange={setFamiliarityRatio}
         onSubmit={(event) => void handleCreate(event)}
         canCreate={canCreate}
+        createBlocker={createBlocker}
         creating={isCreating}
         showDetails={showSourceDetails}
         onToggleDetails={() => setShowSourceDetails((show) => !show)}
@@ -3418,6 +3441,7 @@ function SetupView({
   onFamiliarityRatioChange,
   onSubmit,
   canCreate,
+  createBlocker,
   creating,
   showDetails,
   onToggleDetails,
@@ -3471,6 +3495,7 @@ function SetupView({
   onFamiliarityRatioChange: (value: number) => void;
   onSubmit: (event: FormEvent) => void;
   canCreate: boolean;
+  createBlocker: string | null;
   creating: boolean;
   showDetails: boolean;
   onToggleDetails: () => void;
@@ -3519,7 +3544,6 @@ function SetupView({
     : `按氛围: ${scene.label}`;
   const musicConnectReady = selectedApiStatus?.authenticated === true;
   const accessVerified = invitationAccess?.connected === true;
-  const invitationReady = invitationAccess?.connected === true && aiConfig?.llm.hasKey === true && aiConfig?.tts.hasKey === true;
   useEffect(() => {
     if (phase !== "connect") return;
     if (!accessVerified && connectStage !== "invite") setConnectStage("invite");
@@ -3557,27 +3581,6 @@ function SetupView({
     });
     return () => cancelAnimationFrame(frame);
   }, [phase]);
-  const createBlocker = !creating && !canCreate
-    ? !invitationReady
-      ? "请先输入团队邀请码，接通托管 AI 与主持声线。"
-      : recommendationMode === "genre" && musicGenres.length === 0
-        ? "按风格推荐时，请至少选择一种音乐风格。"
-        : isApiMusicSource(selectedSource)
-      ? selectedApiStatus?.authenticated !== true
-        ? `请先在连接页完成${SOURCE_LABELS[selectedSource]}扫码授权。`
-        : selectedApiStatus?.state !== "ready"
-          ? `${SOURCE_LABELS[selectedSource]}连接正在检查，请返回连接页刷新后重试。`
-          : `${SOURCE_LABELS[selectedSource]}音源当前不可开播，请返回连接页刷新。`
-      : diagnosticsUnavailable
-        ? "本机诊断不可用，请返回连接页刷新后重试。"
-        : selected.desktopState === "automation_denied"
-          ? "请在系统设置的辅助功能中允许本机服务控制音乐客户端。"
-          : selected.desktopState === "screen_locked"
-            ? "请先解锁 Mac，再创建主持节目。"
-            : selected.accountConnected !== true
-              ? "请先打开桌面音乐客户端。"
-              : "此音源尚不能创建主持节目。"
-    : null;
   return (
     <div className={`setup-layout setup-layout-${phase}`}>
       {phase === "connect" && <section className={`setup-column connect-platform-column connection-onboarding connection-onboarding-${connectStage}`}>
@@ -3692,7 +3695,7 @@ function SetupView({
             </div>
           </section>
 
-          <div className="form-submit-row"><button className="secondary-button" type="button" onClick={() => onPhaseChange("connect")} disabled={creating}>返回连接</button>{errorMessage ? <div className="form-feedback" role="alert"><TriangleAlert size={14} /><span>{errorMessage}</span><IconButton label="关闭错误提示" onClick={onDismissError}><X size={13} /></IconButton></div> : createBlocker ? <div className="brief-summary is-warning" role="status"><AlertTriangle size={14} /><span>{createBlocker}</span></div> : <div className="brief-summary"><span className="summary-dot" /><span>{durationMinutes} 分钟 · {recommendationSummary} · {selectedHost.name} · {SOURCE_SHORT_LABELS[selectedSource]}</span></div>}<button className="primary-button" disabled={!canCreate} type="submit">{creating ? <LoaderCircle size={16} className="spin" /> : <ArrowRight size={16} />}{creating ? "准备中" : "查看计划"}</button></div>
+          <div className="form-submit-row"><button className="secondary-button" type="button" onClick={() => onPhaseChange("connect")} disabled={creating}>返回连接</button>{errorMessage ? <div className="form-feedback" role="alert"><TriangleAlert size={14} /><span>{errorMessage}</span><IconButton label="关闭错误提示" onClick={onDismissError}><X size={13} /></IconButton></div> : createBlocker ? <div className="brief-summary is-warning" role="status"><AlertTriangle size={14} /><span>{createBlocker}</span></div> : <div className="brief-summary"><span className="summary-dot" /><span>{durationMinutes} 分钟 · {recommendationSummary} · {selectedHost.name} · {SOURCE_SHORT_LABELS[selectedSource]}</span></div>}<button className={`primary-button${!canCreate ? " is-blocked" : ""}`} disabled={creating} data-ready={canCreate ? "true" : "false"} type="submit">{creating ? <LoaderCircle size={16} className="spin" /> : <ArrowRight size={16} />}{creating ? "准备中" : "查看计划"}</button></div>
         </form>
       </section>}
     </div>

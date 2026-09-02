@@ -9821,14 +9821,22 @@ button:disabled,
 .setup-settings-screen .program-host-console {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .setup-settings-screen .host-form-block {
-  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .setup-settings-screen .host-grid {
+  min-height: 0;
+  height: 100%;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
   align-items: stretch;
   gap: var(--space-xs);
 }
@@ -9997,6 +10005,11 @@ button:disabled,
   min-height: 2.75rem;
 }
 
+.setup-settings-screen .form-submit-row .primary-button.is-blocked {
+  opacity: 0.72;
+  cursor: pointer;
+}
+
 @media (min-width: 85.0625rem) and (min-height: 47.5rem) and (max-height: 53.6875rem) {
   .setup-settings-screen {
     --settings-control-height: 2.5rem;
@@ -10022,6 +10035,28 @@ button:disabled,
 
   .setup-settings-screen .form-submit-row {
     min-height: 3.05rem;
+  }
+}
+
+@media (min-width: 64rem) and (max-height: 56rem) {
+  .setup-settings-screen .host-option .host-avatar {
+    max-height: 7.2rem;
+  }
+
+  .setup-settings-screen .host-card-copy {
+    min-height: 2.4rem;
+  }
+
+  .setup-settings-screen .host-card-copy p {
+    display: none;
+  }
+
+  .setup-settings-screen .host-preview-panel {
+    min-height: 2rem;
+  }
+
+  .setup-settings-screen .host-option .host-preview-button {
+    height: 2rem;
   }
 }
 
