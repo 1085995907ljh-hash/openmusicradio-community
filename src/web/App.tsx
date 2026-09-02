@@ -534,6 +534,14 @@ function readProgramPayload(payload: unknown): ProgramState | null {
   return USER_SOURCE_IDS.includes(value.spec.sourceId as (typeof USER_SOURCE_IDS)[number]) ? value : null;
 }
 
+function confirmRetryMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message.trim() : "";
+  const detail = raw && raw !== "确认状态未知。" && raw !== "未观察到确认结果"
+    ? raw.replace(/[。；;\s]+$/, "")
+    : "开播准备没有完成";
+  return `${detail}。歌曲和口播已保留，可以重新确认。`;
+}
+
 function readHostRetryPayload(payload: unknown): { required: boolean; message?: string } {
   if (!payload || typeof payload !== "object") return { required: false };
   const candidate = payload as { hostRetryRequired?: unknown; message?: unknown };
@@ -2297,12 +2305,12 @@ function App() {
         } else if (["on_air", "closing"].includes(remote.status)) {
           setNotice("确认响应丢失，但服务状态已完成对账。");
         } else if (["draft", "awaiting_confirmation"].includes(remote.status)) {
-          setLastError("确认请求未生效，节目仍可重新确认。");
+          setLastError(confirmRetryMessage(error));
         } else {
           setLastError(remote.error ?? "节目已结束，已恢复最终状态。");
         }
       } catch {
-        setLastError(error instanceof Error ? error.message : "确认状态未知。未启动本地回退，请刷新诊断后重试。");
+        setLastError(confirmRetryMessage(error));
         setView("confirm");
       }
     } finally {
