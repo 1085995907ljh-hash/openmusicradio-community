@@ -842,11 +842,11 @@ function App() {
     ?? FALLBACK_SOURCES.find((source) => source.sourceId === selectedSource)
     ?? FALLBACK_SOURCES.find((source) => source.sourceId === "qq_music")!;
   const selectedMusicApiStatus = isApiMusicSource(selectedSource) ? musicApiStatus[selectedSource] : undefined;
-  const aiConnectionReady = invitationAccess?.connected === true && Boolean(aiConfig?.llm.hasKey && aiConfig?.tts.hasKey);
+  const aiConnectionReady = invitationAccess?.connected === true;
   const musicConnectionVerified = Boolean(isApiMusicSource(selectedSource) && selectedMusicApiStatus?.authenticated === true);
   const initializationReady = musicConnectionVerified && aiConnectionReady;
   const createBlocker = !aiConnectionReady
-    ? "请先完成邀请码验证，接通节目文案和主持声线。"
+    ? "请先完成邀请码验证。"
     : recommendationMode === "genre" && musicGenres.length === 0
       ? "按风格推荐时，请至少选择一种音乐风格。"
       : isApiMusicSource(selectedSource)
@@ -2670,7 +2670,7 @@ function App() {
         host: apiMusic
           ? lockedArtifactsReady
           : Boolean(health.providers?.host?.configured && ["ready", "configured_unverified"].includes(health.providers.host.state ?? "")),
-        tts: apiMusic ? Boolean(aiConfig?.tts.hasKey) : Boolean(health.providers?.tts?.configured),
+        tts: apiMusic ? invitationAccess?.connected === true : Boolean(health.providers?.tts?.configured),
       };
       return <ConfirmView program={program} checks={checks} onExit={() => void handleExitProgram()} onConfirm={requestProgramConfirmation} confirming={isConfirming} exiting={isStopping} updating={planUpdating} onReplace={(trackId) => updatePlan("replace", { trackId })} onAdjust={(message) => updatePlan("adjust", { message })} onRegenerate={() => updatePlan("regenerate")} />;
     }
@@ -3324,7 +3324,7 @@ function LocalSettingsView({
           </div>
         </section>}
         {section === "ai" && <section className="settings-ai-section" role="tabpanel" aria-labelledby="settings-ai-title">
-          <div className="settings-section-heading"><div><span>MANAGED RADIO SERVICE</span><h3 id="settings-ai-title">AI 与语音</h3><p>节目编排、口播审核和五位主持声线由团队统一提供。本机不保存供应商 API Key。</p></div></div>
+          <div className="settings-section-heading"><div><span>MANAGED RADIO SERVICE</span><h3 id="settings-ai-title">AI 与语音</h3><p>节目编排、口播审核和六位主持声线由团队统一提供。本机不保存供应商 API Key。</p></div></div>
           <InvitationAccessPanel access={invitationAccess} pending={invitationPending} onClaim={onClaimInvitation} />
         </section>}
         {section === "playback" && <section role="tabpanel" aria-labelledby="settings-playback-title">
