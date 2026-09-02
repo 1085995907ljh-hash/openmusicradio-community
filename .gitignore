@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.env.local
+.DS_Store
+.hallmark/
+data/
+coverage/
+playwright-report/
+test-results/
+tmp/
+native/**/.build/
+*.log
+*.pid
+
+# Internal design exploration and generated review output
+/design/
+/docs/design/
+/docs/research/
+/skills/ai-radio-host/reports/

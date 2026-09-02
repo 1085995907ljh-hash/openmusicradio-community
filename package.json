@@ -1,0 +1,40 @@
+{
+  "name": "openmusicradio-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite --host 127.0.0.1",
+    "dev:server": "node --env-file-if-exists=.env.local --import tsx --watch src/server/index.ts",
+    "build:desktop-pet": "swift build -c release --package-path native/OneRadioPet",
+    "dev:netease": "HOST=127.0.0.1 PORT=4320 CORS_ALLOW_ORIGIN=http://127.0.0.1:5173,http://localhost:5173 ENABLE_PROXY=false ENABLE_GENERAL_UNBLOCK=false ENABLE_FLAC=false node scripts/netease-service.cjs",
+    "dev:qqmusic": "uv run --no-project --python 3.12 --with 'qqmusic-api-python==0.7.2' --with 'typing-extensions==4.16.0' python scripts/qqmusic-service.py",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run test && npm run build && npm run build:desktop-pet"
+  },
+  "dependencies": {
+    "@neteasecloudmusicapienhanced/api": "4.39.0",
+    "@vitejs/plugin-react": "latest",
+    "lucide-react": "latest",
+    "meyda": "^5.6.3",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest",
+    "ws": "^8.21.2"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@types/ws": "^8.18.1",
+    "playwright": "^1.62.1",
+    "pngjs": "^5.0.0",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}
