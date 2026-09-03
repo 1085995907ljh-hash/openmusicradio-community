@@ -52,6 +52,7 @@ import {
   DEFAULT_HOST_PROFILE,
   HOST_PROFILE_IDS,
   HOST_PROFILES,
+  hostDurationReachedCueUrl,
   MAX_MUSIC_GENRES,
   MUSIC_GENRE_IDS,
   MUSIC_GENRES,
@@ -764,6 +765,7 @@ function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const musicAudioRef = useRef<HTMLAudioElement | null>(null);
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const durationCueAudioRef = useRef<HTMLAudioElement | null>(null);
   const voicePreviewBusyRef = useRef(false);
   const cancelVoicePreview = useCallback(() => {
     const preview = voicePreviewAudioRef.current;
@@ -818,7 +820,7 @@ function App() {
     window.localStorage.setItem(LOCAL_AUDIO_OUTPUT_KEY, audioOutputId);
     let disposed = false;
     const applyOutput = async () => {
-      const elements = [musicAudioRef.current, audioRef.current].filter((item): item is HTMLAudioElement => Boolean(item));
+      const elements = [musicAudioRef.current, audioRef.current, durationCueAudioRef.current].filter((item): item is HTMLAudioElement => Boolean(item));
       try {
         await Promise.all(elements.map(async (element) => {
           const sinkElement = element as HTMLAudioElement & { setSinkId?: (sinkId: string) => Promise<void> };
@@ -1098,6 +1100,11 @@ function App() {
       music.removeAttribute("src");
       music.load();
       music.volume = 1;
+    }
+    const durationCue = durationCueAudioRef.current;
+    if (durationCue) {
+      durationCue.pause();
+      durationCue.currentTime = 0;
     }
     cancelVoicePreview();
     setAudioPlaying(false);
@@ -1706,11 +1713,48 @@ function App() {
   }, [program?.deadlineAt, program?.id, program?.status, stopAudio]);
 
   useEffect(() => {
+    const active = Boolean(program && !program.localOnly && ["preparing", "on_air"].includes(program.status));
+    if (!active || !program) return;
+    const cue = new Audio(hostDurationReachedCueUrl(program.spec.hostProfile ?? DEFAULT_HOST_PROFILE));
+    cue.preload = "auto";
+    durationCueAudioRef.current = cue;
+    const sinkElement = cue as HTMLAudioElement & { setSinkId?: (sinkId: string) => Promise<void> };
+    if (typeof sinkElement.setSinkId === "function") void sinkElement.setSinkId(audioOutputId).catch(() => undefined);
+    cue.load();
+    return () => {
+      if (durationCueAudioRef.current === cue) durationCueAudioRef.current = null;
+      cue.pause();
+      cue.removeAttribute("src");
+      cue.load();
+    };
+  }, [audioOutputId, program?.id, program?.localOnly, program?.spec.hostProfile, program?.status]);
+
+  useEffect(() => {
     if (!program || program.localOnly || program.status !== "on_air" || remainingSeconds > 0) return;
     if (durationReachedNoticeRef.current === program.id) return;
     durationReachedNoticeRef.current = program.id;
     setNotice("本档节目设定时长已到，将在当前歌曲完整播放后结束。");
-  }, [program?.id, program?.localOnly, program?.status, remainingSeconds, setNotice]);
+    const cue = durationCueAudioRef.current;
+    if (!cue) return;
+    const owner = `duration-reached:${program.id}`;
+    let disposed = false;
+    const playCue = () => {
+      if (disposed || durationCueAudioRef.current !== cue) return;
+      cue.currentTime = 0;
+      duckWebMusic(owner);
+      const finish = () => restoreWebMusic(owner);
+      cue.addEventListener("ended", finish, { once: true });
+      cue.addEventListener("error", finish, { once: true });
+      void cue.play().catch(finish);
+    };
+    const hostAudio = audioRef.current;
+    if (hostAudio && !hostAudio.paused && !hostAudio.ended) hostAudio.addEventListener("ended", playCue, { once: true });
+    else playCue();
+    return () => {
+      disposed = true;
+      hostAudio?.removeEventListener("ended", playCue);
+    };
+  }, [duckWebMusic, program?.id, program?.localOnly, program?.status, remainingSeconds, restoreWebMusic, setNotice]);
 
   useEffect(() => {
     if (!programActive || !program?.id) return;

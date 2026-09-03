@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 
 import { SCENE_PRESETS } from "../src/shared/contracts.js";
@@ -11,7 +11,7 @@ import {
   boostedHostTtsVolume,
   energyRangeForPhase,
 } from "../src/core/scenes.js";
-import { DEFAULT_HOST_PROFILE, HOST_PROFILE_IDS, HOST_PROFILES, hostPreviewText, hostTtsInstruction, hostTtsPersona } from "../src/shared/program-options.js";
+import { DEFAULT_HOST_PROFILE, HOST_DURATION_REACHED_TEXT, HOST_PROFILE_IDS, HOST_PROFILES, hostDurationReachedCueUrl, hostPreviewText, hostTtsInstruction, hostTtsPersona } from "../src/shared/program-options.js";
 
 test("the five scene presets are complete and materially different", () => {
   assert.deepEqual(Object.keys(SCENE_CONFIGS).sort(), [...SCENE_PRESETS].sort());
@@ -65,6 +65,18 @@ test("host order keeps the radio lineup readable and exposes all fixed voices", 
 
 test("each host profile has a static voice preview package", async () => {
   await Promise.all(HOST_PROFILE_IDS.map((profileId) => access(new URL(`../public/hosts/previews/${profileId}.mp3`, import.meta.url), constants.R_OK)));
+});
+
+test("each host profile has a fixed duration-reached voice cue", async () => {
+  assert.equal(HOST_DURATION_REACHED_TEXT, "本档节目设定的时间到了，听完这首歌，我们就结束今天的节目。");
+  await Promise.all(HOST_PROFILE_IDS.map(async (profileId) => {
+    assert.equal(hostDurationReachedCueUrl(profileId), `/hosts/cues/duration-reached/${profileId}.mp3`);
+    const url = new URL(`../public${hostDurationReachedCueUrl(profileId)}`, import.meta.url);
+    await access(url, constants.R_OK);
+    const audio = await readFile(url);
+    assert.ok(audio.byteLength > 50_000);
+    assert.equal(audio.subarray(0, 3).toString("ascii"), "ID3");
+  }));
 });
 
 test("host TTS instructions preserve personality for middle and closing breaks", () => {

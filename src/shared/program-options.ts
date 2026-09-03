@@ -60,6 +60,13 @@ export function hostPreviewText(profileId: HostProfileId): string {
   return `欢迎收听 Open Music Radio 电台，我是主持人${HOST_PROFILES[profileId].name}。`;
 }
 
+export const HOST_DURATION_REACHED_TEXT = "本档节目设定的时间到了，听完这首歌，我们就结束今天的节目。";
+
+export function hostDurationReachedCueUrl(profileId: HostProfileId): string {
+  const resolvedProfileId = HOST_PROFILES[profileId] ? profileId : DEFAULT_HOST_PROFILE;
+  return `/hosts/cues/duration-reached/${resolvedProfileId}.mp3`;
+}
+
 export function hostOpeningIdentity(profileId: HostProfileId): string {
   return `欢迎收听 Open Music Radio 电台，我是主持人${HOST_PROFILES[profileId].name}。`;
 }
