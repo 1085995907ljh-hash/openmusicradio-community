@@ -1,15 +1,46 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { LocalAiConfigStore } from "../src/server/local-ai-config.js";
+import { CloudAccessStore } from "../src/server/cloud-access.js";
 
 const tts = { provider: "qwen" as const, model: "cosyvoice-v2", voice: "longanxuan" };
 const run = promisify(execFile);
+
+test("managed access uses the shared cloud service and rejects implicit local preview authorization", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "one-radio-cloud-access-"));
+  const configPath = join(directory, "cloud-access.json");
+  const previousDeviceToken = process.env.ONE_RADIO_DEVICE_TOKEN;
+  const previousPreviewFlag = process.env.ONE_RADIO_ALLOW_LOCAL_PREVIEW;
+  process.env.ONE_RADIO_DEVICE_TOKEN = "preview-device-token";
+  delete process.env.ONE_RADIO_ALLOW_LOCAL_PREVIEW;
+  try {
+    await writeFile(configPath, JSON.stringify({
+      baseUrl: "local-preview://managed",
+      user: { id: "preview-user", displayName: "Preview" },
+      device: { id: "preview-device", name: "Preview Mac" },
+      connectedAt: new Date().toISOString(),
+    }));
+    const store = new CloudAccessStore(configPath, "unused-test-keychain", async () => { throw new Error("network must not be called"); });
+    const status = await store.status();
+    assert.equal(status.configured, true);
+    assert.equal(status.connected, false);
+    assert.equal(status.state, "invitation_required");
+    assert.match(status.detail ?? "", /正式邀请码/);
+    assert.equal(await store.baseUrl(), "https://one-radio-llm-proxy.soluna-notm302.workers.dev");
+  } finally {
+    if (previousDeviceToken === undefined) delete process.env.ONE_RADIO_DEVICE_TOKEN;
+    else process.env.ONE_RADIO_DEVICE_TOKEN = previousDeviceToken;
+    if (previousPreviewFlag === undefined) delete process.env.ONE_RADIO_ALLOW_LOCAL_PREVIEW;
+    else process.env.ONE_RADIO_ALLOW_LOCAL_PREVIEW = previousPreviewFlag;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("local AI settings reject credential-bearing custom endpoints", async () => {
   const directory = await mkdtemp(join(tmpdir(), "one-radio-ai-config-"));

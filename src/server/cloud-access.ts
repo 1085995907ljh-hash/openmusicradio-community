@@ -8,6 +8,7 @@ import { LocalAiConfigStore } from "./local-ai-config.js";
 
 const DEFAULT_CONFIG_PATH = join(homedir(), ".one-radio", "cloud-access.json");
 const DEFAULT_KEYCHAIN_SERVICE = "dev.openmusicradio.cloud-access";
+const DEFAULT_CLOUD_BASE_URL = "https://one-radio-llm-proxy.soluna-notm302.workers.dev";
 const LOCAL_PREVIEW_BASE_URL = "local-preview://managed";
 const LOCAL_PREVIEW_CODES = new Set([
   "OMR-NEON01",
@@ -66,7 +67,7 @@ export class CloudAccessStore {
 
   async status(options: { verify?: boolean } = {}): Promise<CloudAccessStatus> {
     const [record, token] = await Promise.all([this.readRecord(), this.readToken()]);
-    if (record?.baseUrl === LOCAL_PREVIEW_BASE_URL && token && process.env.NODE_ENV !== "production") {
+    if (record?.baseUrl === LOCAL_PREVIEW_BASE_URL && token && this.localPreviewEnabled()) {
       return {
         configured: true,
         connected: true,
@@ -79,6 +80,9 @@ export class CloudAccessStore {
     }
     const baseUrl = this.configuredBaseUrl();
     if (!baseUrl) return { configured: false, connected: false, state: "unconfigured", detail: "托管服务地址尚未配置。" };
+    if (record?.baseUrl === LOCAL_PREVIEW_BASE_URL) {
+      return { configured: true, connected: false, state: "invitation_required", detail: "本地测试授权已失效，请输入正式邀请码。" };
+    }
     if (!record || !token) return { configured: true, connected: false, state: "invitation_required", detail: "请输入团队邀请码连接这台设备。" };
     const connected: CloudAccessStatus = {
       configured: true,
@@ -112,7 +116,7 @@ export class CloudAccessStore {
     if (!/^[A-Z0-9-]{6,40}$/.test(code)) throw new Error("邀请码格式不正确。");
     if (!name || name.length > 40) throw new Error("请输入 1 到 40 个字符的名字。");
     const baseUrl = this.configuredBaseUrl();
-    if (!baseUrl) {
+    if (!baseUrl || (this.localPreviewEnabled() && LOCAL_PREVIEW_CODES.has(code))) {
       if (process.env.NODE_ENV === "production" || !LOCAL_PREVIEW_CODES.has(code)) throw new Error("邀请码无效，或托管服务尚未配置。");
       const record: PersistedCloudAccess = {
         baseUrl: LOCAL_PREVIEW_BASE_URL,
@@ -149,11 +153,11 @@ export class CloudAccessStore {
 
   async baseUrl(): Promise<string> {
     const stored = (await this.readRecord())?.baseUrl;
-    return stored === LOCAL_PREVIEW_BASE_URL ? "" : stored ?? this.configuredBaseUrl() ?? "";
+    return stored === LOCAL_PREVIEW_BASE_URL ? this.configuredBaseUrl() ?? "" : stored ?? this.configuredBaseUrl() ?? "";
   }
 
   async localPreview(): Promise<boolean> {
-    return (await this.readRecord())?.baseUrl === LOCAL_PREVIEW_BASE_URL && process.env.NODE_ENV !== "production";
+    return (await this.readRecord())?.baseUrl === LOCAL_PREVIEW_BASE_URL && this.localPreviewEnabled();
   }
 
   async disconnect(): Promise<void> {
@@ -169,8 +173,7 @@ export class CloudAccessStore {
   }
 
   private configuredBaseUrl(): string | null {
-    const value = process.env.ONE_RADIO_CLOUD_BASE_URL?.trim();
-    if (!value) return null;
+    const value = process.env.ONE_RADIO_CLOUD_BASE_URL?.trim() || DEFAULT_CLOUD_BASE_URL;
     try {
       const url = new URL(value);
       if (url.protocol !== "https:" && !(url.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(url.hostname))) return null;
@@ -178,6 +181,10 @@ export class CloudAccessStore {
     } catch {
       return null;
     }
+  }
+
+  private localPreviewEnabled(): boolean {
+    return process.env.NODE_ENV !== "production" && process.env.ONE_RADIO_ALLOW_LOCAL_PREVIEW === "1";
   }
 
   private async readRecord(): Promise<PersistedCloudAccess | null> {
