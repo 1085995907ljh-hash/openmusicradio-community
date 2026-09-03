@@ -68,6 +68,7 @@ import {
 import { advanceEnvelopeElapsed, envelopeVolume, musicBedDelayRemainingMs } from "./audio-envelope.js";
 import { RadioHostAvatar } from "./RadioHostPet";
 import { resolveRadioHostPetMood } from "./radio-host-pet.js";
+import { isBroadcastNavigationLocked } from "./topbar-policy.js";
 import {
   useCallback,
   useEffect,
@@ -877,7 +878,8 @@ function App() {
                   ? "当前音源尚不能创建主持节目。"
                   : null;
   const canCreate = createBlocker === null && !isCreating;
-  const programActive = Boolean(program && ["preparing", "on_air", "closing"].includes(program.status));
+  const broadcastNavigationLocked = isBroadcastNavigationLocked(program?.status);
+  const programActive = broadcastNavigationLocked;
   const remainingSeconds = useMemo(() => {
     if (!program) return 0;
     if (program.localOnly && program.deadlineAt && ["on_air", "preparing", "closing"].includes(program.status)) {
@@ -2814,7 +2816,8 @@ function App() {
           <TopStage index="05" label="播出中" state={["preparing", "on_air"].includes(view) ? "active" : view === "ended" ? "done" : "upcoming"} />
         </nav>}
         <div className="topbar-actions">
-          <IconButton label={view === "settings" ? "返回节目" : "本机设置"} className={`topbar-tool topbar-tool-settings${view === "settings" ? " is-active" : ""}`} onClick={() => {
+          <IconButton label={view === "settings" ? "返回节目" : broadcastNavigationLocked ? "播出中不可打开设置" : "本机设置"} disabled={broadcastNavigationLocked} className={`topbar-tool topbar-tool-settings${view === "settings" ? " is-active" : ""}`} onClick={() => {
+            if (broadcastNavigationLocked) return;
             if (view === "settings") {
               setView(settingsReturnViewRef.current === "settings" ? "setup" : settingsReturnViewRef.current);
               return;
@@ -2823,7 +2826,11 @@ function App() {
             cancelVoicePreview();
             setView("settings");
           }}>{view === "settings" ? <X size={20} strokeWidth={1.8} /> : <Settings2 size={20} strokeWidth={1.8} />}</IconButton>
-          <IconButton label="刷新诊断" className="topbar-tool topbar-tool-refresh" onClick={() => { void refreshSources(); void refreshHealth(); }}><RefreshCw size={20} strokeWidth={1.8} /></IconButton>
+          <IconButton label={broadcastNavigationLocked ? "播出中暂停刷新诊断" : "刷新诊断"} disabled={broadcastNavigationLocked} className="topbar-tool topbar-tool-refresh" onClick={() => {
+            if (broadcastNavigationLocked) return;
+            void refreshSources();
+            void refreshHealth();
+          }}><RefreshCw size={20} strokeWidth={1.8} /></IconButton>
         </div>
       </header>
 
