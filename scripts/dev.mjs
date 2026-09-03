@@ -10,15 +10,22 @@ let lockFd;
 for (let attempt = 0; attempt < 2; attempt += 1) {
   try {
     lockFd = openSync(lockPath, "wx", 0o600);
-    writeFileSync(lockFd, String(process.pid), "utf8");
+    writeFileSync(lockFd, JSON.stringify({ pid: process.pid, projectRoot: process.cwd(), startedAt: new Date().toISOString() }), "utf8");
     break;
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
-    const ownerPid = Number(readFileSync(lockPath, "utf8").trim());
+    const lockValue = readFileSync(lockPath, "utf8").trim();
+    let ownerPid;
+    try {
+      const parsed = JSON.parse(lockValue);
+      ownerPid = typeof parsed === "number" ? parsed : Number(parsed?.pid);
+    } catch {
+      ownerPid = Number(lockValue);
+    }
     try {
       if (Number.isInteger(ownerPid) && ownerPid > 1) process.kill(ownerPid, 0);
-      console.log("One Radio 开发服务已经在运行，继续使用 http://127.0.0.1:5173/。");
-      process.exit(0);
+      console.error("检测到另一份 One Radio 服务仍在运行。请执行 npm run restart 以加载当前版本。");
+      process.exit(1);
     } catch {
       unlinkSync(lockPath);
     }

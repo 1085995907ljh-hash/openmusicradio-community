@@ -63,6 +63,24 @@ npm run dev
 
 OpenMusicRadio 目前是 macOS 测试版本，公开安装包尚未发布。
 
+## 更新源码版本
+
+已经安装过社区版时，在项目目录运行下面的命令。
+
+```sh
+npm run update
+```
+
+程序会停止旧服务、拉取最新代码、重新安装依赖并启动新版本。请保持终端窗口打开。
+
+如果当前旧版本还没有 `npm run update`，只需执行一次下面三条命令。
+
+```sh
+git pull --ff-only
+npm ci
+npm run restart
+```
+
 社区仓库只包含客户端与本地运行所需代码，不包含托管服务、生产密钥和内部设计资料。
 
 ## License

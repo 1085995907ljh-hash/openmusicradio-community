@@ -8,6 +8,8 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "restart": "node scripts/restart.mjs",
+    "update": "node scripts/update.mjs",
     "dev:web": "vite --host 127.0.0.1",
     "dev:server": "node --env-file-if-exists=.env.local --import tsx --watch src/server/index.ts",
     "build:desktop-pet": "swift build -c release --package-path native/OneRadioPet",
