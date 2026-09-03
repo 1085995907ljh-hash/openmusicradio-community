@@ -1415,6 +1415,47 @@ test("NetEase planning uses playable quota backups for unavailable and trial-onl
   assert.equal(new Set(program.rundown.map((track: { artist: string }) => track.artist)).size, program.rundown.length);
 });
 
+test("delete and replace can use one short backup without rebuilding a full-duration pool", async (context) => {
+  const songs = Array.from({ length: 6 }, (_, index) => ({
+    id: String(17_500 + index),
+    title: `原位替换候选 ${index + 1}`,
+    artists: [{ id: String(17_600 + index), name: `原位替换艺人 ${index + 1}` }],
+    durationMs: index === 5 ? 180_000 : 360_000,
+  }));
+  const token = "single-replacement-backup-token";
+  const service = await createLocalService({
+    port: 0,
+    localControlToken: token,
+    neteaseProvider: planningProvider(songs, []),
+    hostProvider: groundedHostProvider(),
+    ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+  const createdResponse = await fetch(`${base}/programs`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ operationId: "single-backup-create", spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
+  });
+  assert.equal(createdResponse.status, 201);
+  const draft = (await json(createdResponse)).program;
+  assert.equal(draft.rundown.length, 5);
+  const originalIds = draft.rundown.map((track: { id: string }) => track.id);
+  const replaceIndex = 2;
+  const replaceResponse = await fetch(`${base}/programs/${draft.id}/replace`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ generation: draft.generation, planRevision: 0, operationId: "single-backup-replace", trackId: originalIds[replaceIndex] }),
+  });
+  assert.equal(replaceResponse.status, 200, await replaceResponse.clone().text());
+  const replaced = (await json(replaceResponse)).program;
+  assert.equal(replaced.rundown.length, 5);
+  assert.notEqual(replaced.rundown[replaceIndex].id, originalIds[replaceIndex]);
+  assert.deepEqual(replaced.rundown.filter((_: unknown, index: number) => index !== replaceIndex).map((track: { id: string }) => track.id), originalIds.filter((_: string, index: number) => index !== replaceIndex));
+});
+
 test("NetEase confirmation replaces a song that becomes trial-only before broadcast", async (context) => {
   const songs = Array.from({ length: 20 }, (_, index) => ({
     id: String(18_000 + index),

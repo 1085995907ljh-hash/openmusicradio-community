@@ -2492,6 +2492,8 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     preferences: UnknownRecord,
     signal: AbortSignal,
     onCompletedStep?: (step: 2 | 3) => void,
+    minimumDurationSeconds = spec.durationMinutes * 60,
+    minimumTrackCount = 1,
   ): Promise<ProgramRundownItem[]> => {
     const provider = providerId === "qq" ? await requireQq() : await requireNetease();
     if (typeof provider.songUrl !== "function") return [];
@@ -2694,7 +2696,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     for (let trackCount = 1; trackCount <= maximumTrackCount; trackCount += 1) {
       const candidate = selectApproximate(trackCount);
       const durationSeconds = candidate.reduce((total, track) => total + track.durationSeconds, 0);
-      if (durationSeconds < spec.durationMinutes * 60 || candidate.length === 0) continue;
+      if (durationSeconds < minimumDurationSeconds || candidate.length < minimumTrackCount) continue;
       const actualRatio = candidate.filter((track) => track.liked === true).length * 100 / candidate.length;
       const ratioDistance = Math.abs(actualRatio - targetRatio);
       if (ratioDistance < bestRatioDistance || (ratioDistance === bestRatioDistance && durationSeconds < bestDurationSeconds)) {
@@ -2765,7 +2767,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       ...artifact.preferences,
       programPlan: artifact.preferences.programPlan.filter((value) => !isRecord(value) || !currentIds.has(String(value.id))),
     };
-    const replacements = (await prepareAccountRundown(providerId, spec, replacementPreferences, signal))
+    const replacements = (await prepareAccountRundown(providerId, spec, replacementPreferences, signal, undefined, 1, invalidIndexes.length))
       .filter((item) => !currentIds.has(item.id));
     if (replacements.length < invalidIndexes.length) {
       throw new ServiceError("PLAYBACK_PERMISSION_CHANGED", 409, "当前账号可完整播放的歌曲不足，请重新生成本次节目。");
@@ -4532,10 +4534,10 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               const replaceIndex = artifact.items.findIndex((track) => track.id === trackId);
               if (replaceIndex < 0) throw new ServiceError("INVALID_INPUT", 400, "要删除的歌曲不在当前节目单中。");
               const programPlan = Array.isArray(artifact.preferences.programPlan) ? artifact.preferences.programPlan : [];
-              const replacementPreferences = { ...artifact.preferences, programPlan: programPlan.filter((track) => !isRecord(track) || track.id !== trackId) };
-              const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
-              const candidates = await prepareAccountRundown(providerId, lockedState.spec, replacementPreferences, controller.signal);
               const currentIds = new Set(artifact.items.map((track) => track.id));
+              const replacementPreferences = { ...artifact.preferences, programPlan: programPlan.filter((track) => !isRecord(track) || !currentIds.has(String(track.id))) };
+              const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
+              const candidates = await prepareAccountRundown(providerId, lockedState.spec, replacementPreferences, controller.signal, undefined, 1, 1);
               const replacement = candidates.find((track) => !currentIds.has(track.id));
               if (!replacement) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "没有找到可播放的替补歌曲，请重新生成节目单。");
               ordered = artifact.items.map(({ hostScript: _hostScript, ...track }, index) => index === replaceIndex
