@@ -111,6 +111,22 @@ test("desktop programs do not invent song transitions from fixture timing", () =
   assert.equal(skipped.generation, (ticked?.generation ?? 0) + 1);
 });
 
+test("account programs finish the current song after the requested duration", () => {
+  const engine = new ProgramEngine({ now: () => BASE_TIME, controlLostAfterMs: 2_000_000 });
+  const created = engine.create(spec({ sourceId: "netease_music", durationMinutes: 30 }));
+  const confirmed = engine.confirm({ programId: created.id, nowMs: BASE_TIME });
+  const deadline = Date.parse(confirmed.deadlineAt as string);
+  engine.heartbeat({ programId: created.id, generation: confirmed.generation, nowMs: deadline - 1 });
+
+  const atDuration = engine.tick(deadline);
+  assert.equal(atDuration?.status, "on_air");
+  assert.equal(atDuration?.remainingSeconds, 0);
+
+  const afterCurrentSong = engine.next({ programId: created.id, generation: confirmed.generation, operationId: "finish-current-after-duration", nowMs: deadline + 1 });
+  assert.equal(afterCurrentSong.status, "completed");
+  assert.equal(afterCurrentSong.currentTrack, null);
+});
+
 test("repeating next and stop with the same operationId is idempotent", () => {
   const engine = new ProgramEngine({ now: () => BASE_TIME });
   const created = engine.create(spec());

@@ -120,6 +120,11 @@ interface PlannerChatMessage {
   text: string;
 }
 
+interface PlanUpdateResult {
+  ok: boolean;
+  message: string;
+}
+
 interface LocalProgram extends ProgramState {
   localOnly?: boolean;
   report: ReportEvent[];
@@ -805,6 +810,7 @@ function App() {
   const programRef = useRef<LocalProgram | null>(null);
   const desktopPetRevisionRef = useRef(0);
   const desktopPetSessionRef = useRef<{ id: string; startedAt: number; programId: string } | null>(null);
+  const durationReachedNoticeRef = useRef<string | null>(null);
   const settingsReturnViewRef = useRef<View>("setup");
   programRef.current = program;
 
@@ -1688,7 +1694,7 @@ function App() {
   }, [isConfirming, program?.id, program?.status, view]);
 
   useEffect(() => {
-    if (!program?.deadlineAt || !["preparing", "on_air", "closing"].includes(program.status)) return;
+    if (!program?.localOnly || !program.deadlineAt || !["preparing", "on_air", "closing"].includes(program.status)) return;
     const delay = Math.max(0, new Date(program.deadlineAt).getTime() - Date.now());
     const timer = window.setTimeout(() => {
       void stopAudio();
@@ -1698,6 +1704,13 @@ function App() {
     }, delay);
     return () => window.clearTimeout(timer);
   }, [program?.deadlineAt, program?.id, program?.status, stopAudio]);
+
+  useEffect(() => {
+    if (!program || program.localOnly || program.status !== "on_air" || remainingSeconds > 0) return;
+    if (durationReachedNoticeRef.current === program.id) return;
+    durationReachedNoticeRef.current = program.id;
+    setNotice("本档节目设定时长已到，将在当前歌曲完整播放后结束。");
+  }, [program?.id, program?.localOnly, program?.status, remainingSeconds, setNotice]);
 
   useEffect(() => {
     if (!programActive || !program?.id) return;
@@ -2336,7 +2349,7 @@ function App() {
   };
 
   const updatePlan = async (action: "reorder" | "regenerate" | "adjust" | "replace", payload: Record<string, unknown> = {}) => {
-    if (!program || planUpdating) return false;
+    if (!program || planUpdating) return { ok: false, message: "节目单正在处理上一条要求，请稍后再试。" } satisfies PlanUpdateResult;
     const baseRevision = program.planRevision ?? 0;
     const operationId = makeId(`plan-${action}`);
     setPlanUpdating(true);
@@ -2346,20 +2359,21 @@ function App() {
       const remote = readProgramPayload(response);
       if (!remote) throw new Error("服务没有返回更新后的节目单。");
       setProgram((current) => current ? { ...current, ...remote } : current);
-      return true;
+      return { ok: true, message: response.message?.trim() || "节目单已更新。" } satisfies PlanUpdateResult;
     } catch (error) {
       try {
         const remote = readProgramPayload(await fetchJson<unknown>(`/programs/${program.id}`));
         if (remote && (remote.planRevision ?? 0) > baseRevision) {
           setProgram((current) => current ? { ...current, ...remote } : current);
           setNotice("调整响应中断，但已从本地服务恢复最新节目单。");
-          return true;
+          return { ok: true, message: "刚才的响应中断了，但我已经恢复了更新后的节目单。" } satisfies PlanUpdateResult;
         }
       } catch {
         // Preserve the original mutation error when no newer canonical plan is observable.
       }
-      setLastError(error instanceof Error ? error.message : "节目计划调整失败。");
-      return false;
+      const message = error instanceof Error ? error.message : "节目计划调整失败。";
+      setLastError(message);
+      return { ok: false, message } satisfies PlanUpdateResult;
     } finally {
       setPlanUpdating(false);
     }
@@ -3738,7 +3752,7 @@ function SourceGlyph({ sourceId }: { sourceId: SourceId }) {
   return <Music2 size={17} aria-hidden="true" />;
 }
 
-function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, updating, onReplace, onAdjust, onRegenerate }: { program: LocalProgram; checks: { source: boolean; player: boolean; service: boolean; host: boolean; tts: boolean }; onExit: () => void; onConfirm: () => void; confirming: boolean; exiting: boolean; updating: boolean; onReplace: (trackId: string) => Promise<boolean>; onAdjust: (message: string) => Promise<boolean>; onRegenerate: () => Promise<boolean> }) {
+function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, updating, onReplace, onAdjust, onRegenerate }: { program: LocalProgram; checks: { source: boolean; player: boolean; service: boolean; host: boolean; tts: boolean }; onExit: () => void; onConfirm: () => void; confirming: boolean; exiting: boolean; updating: boolean; onReplace: (trackId: string) => Promise<PlanUpdateResult>; onAdjust: (message: string) => Promise<PlanUpdateResult>; onRegenerate: () => Promise<PlanUpdateResult> }) {
   const apiMusic = isApiMusicSource(program.spec.sourceId);
   const rundown = program.rundown ?? [];
   const hostMoments = rundown.filter((track) => Boolean(track.hostMoment));
@@ -3766,8 +3780,8 @@ function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, 
     if (updating) return;
     setReplacingTrackId(track.id);
     appendMessage("user", `删除《${track.title}》并原位补一首。`);
-    const replaced = await onReplace(track.id);
-    appendMessage("assistant", replaced ? `《${track.title}》已删除。新歌已补入第 ${rundown.findIndex((item) => item.id === track.id) + 1} 位，相关口播也已重写。` : `《${track.title}》暂时无法替换，请查看页面错误后重试。`);
+    const result = await onReplace(track.id);
+    appendMessage("assistant", result.ok ? `《${track.title}》已删除。新歌已补入第 ${rundown.findIndex((item) => item.id === track.id) + 1} 位，相关口播也已重写。` : result.message);
     setReplacingTrackId(null);
   };
   const submitAdjustment = async () => {
@@ -3775,15 +3789,15 @@ function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, 
     if (!message || updating) return;
     appendMessage("user", message);
     setChat("");
-    const adjusted = await onAdjust(message);
-    appendMessage("assistant", adjusted ? "歌曲顺序已经按这条要求调整，相关衔接口播也已重新生成。" : "这次调整没有完成，请查看页面错误后重试。");
+    const result = await onAdjust(message);
+    appendMessage("assistant", result.message);
   };
   const regeneratePlan = async () => {
     if (updating) return;
     setRegenerating(true);
     appendMessage("user", "换一组歌曲推荐。");
-    const regenerated = await onRegenerate();
-    appendMessage("assistant", regenerated ? "已经重新推荐并生成节目单，你可以继续调整顺序或删除单曲。" : "重新推荐没有完成，请查看页面错误后重试。");
+    const result = await onRegenerate();
+    appendMessage("assistant", result.ok ? "已经重新推荐并生成节目单，你可以继续调整顺序或删除单曲。" : result.message);
     setRegenerating(false);
   };
   return (
@@ -4224,8 +4238,8 @@ function OnAirView({ program, remainingSeconds, onNext, onStop, nexting, stoppin
 
         <section className="air-detail-column">
           <div className="countdown-panel">
-            <div className="panel-kicker"><span><Clock3 size={14} />剩余时间</span><span className="countdown-note">{terminal ? "已停止" : `结束于 ${program.deadlineAt ? new Date(program.deadlineAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--"}`}</span></div>
-            <div className="countdown-value" role="timer" aria-live="off">{formatClock(remainingSeconds)}</div>
+            <div className="panel-kicker"><span><Clock3 size={14} />剩余时间</span><span className="countdown-note">{terminal ? "已停止" : remainingSeconds <= 0 ? "当前歌曲播完后结束" : `约 ${program.deadlineAt ? new Date(program.deadlineAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--"} 到时`}</span></div>
+            <div className="countdown-value" role="timer" aria-live="off">{remainingSeconds <= 0 && !terminal ? "本曲结束" : formatClock(remainingSeconds)}</div>
             <div className="track-progress-heading"><span>{current?.title ?? "当前曲目"}</span><span>{formatTrackDuration(Math.floor(trackElapsedSeconds))} / {effectiveTrackDuration > 0 ? formatTrackDuration(Math.floor(effectiveTrackDuration)) : "--:--"}</span></div>
             <div className="track-progress" role="progressbar" aria-label="当前歌曲播放进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(trackProgress)}><span style={{ width: `${trackProgress}%` }} /></div>
           </div>

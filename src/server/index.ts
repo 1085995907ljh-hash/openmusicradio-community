@@ -37,6 +37,7 @@ import { personalizeCandidates, type PersonalizationCandidate } from "../core/pe
 import { isDisallowedRecommendationCandidate, isExplorationVersionCandidate } from "../core/recommendation-guards.js";
 import { buildListeningProfile, inferSongTags } from "../core/listening-profile.js";
 import { isCompleteAccountPlayback } from "../core/playback-access.js";
+import { parseMusicSearchAdjustment } from "../core/rundown-adjustment.js";
 import { energyRangeForPhase, getSceneConfig, phaseForElapsedSeconds } from "../core/scenes.js";
 import {
   hostCharacterBounds,
@@ -107,6 +108,8 @@ const MAX_PUBLIC_PLAYLIST_DETAILS = 24;
 const PUBLIC_PLAYLIST_TRACK_SAMPLE_LIMIT = 24;
 const ATMOSPHERE_EXPLORATION_RATIO_MAX = 10;
 const LEGACY_DISCOVERY_YEARS = 10;
+const PROGRAM_DURATION_TOLERANCE_RATIO = 0.08;
+const MAX_PROGRAM_DURATION_SHORTFALL_SECONDS = 5 * 60;
 const SCENE_STYLE_TAGS: Record<ScenePreset, MusicGenreId[]> = {
   late_night: ["new_age", "rnb_soul", "jazz", "easy_listening", "folk"],
   study: ["easy_listening", "new_age", "jazz", "classical", "bossa_nova"],
@@ -114,6 +117,12 @@ const SCENE_STYLE_TAGS: Record<ScenePreset, MusicGenreId[]> = {
   commute: ["pop", "rnb_soul", "britpop", "folk", "electronic"],
   party: ["dance", "electronic", "hiphop", "rnb_soul", "rock"],
 };
+
+function minimumProgramDurationSeconds(durationMinutes: number): number {
+  const requestedSeconds = durationMinutes * 60;
+  const toleranceSeconds = Math.min(MAX_PROGRAM_DURATION_SHORTFALL_SECONDS, requestedSeconds * PROGRAM_DURATION_TOLERANCE_RATIO);
+  return Math.max(1, Math.floor(requestedSeconds - toleranceSeconds));
+}
 const MAINSTREAM_DISCOVERY_STYLES = new Set<MusicGenreId>(["pop", "rock", "electronic", "hiphop", "rnb_soul"]);
 const DEFAULT_LOW_SHARE_STYLES = new Set<MusicGenreId>(["new_age", "world", "ethnic", "latin", "easy_listening", "dance", "bossa_nova"]);
 const SCENE_PLAYLIST_QUERY_TERMS: Record<ScenePreset, readonly string[]> = {
@@ -2492,7 +2501,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     preferences: UnknownRecord,
     signal: AbortSignal,
     onCompletedStep?: (step: 2 | 3) => void,
-    minimumDurationSeconds = spec.durationMinutes * 60,
+    minimumDurationSeconds = minimumProgramDurationSeconds(spec.durationMinutes),
     minimumTrackCount = 1,
   ): Promise<ProgramRundownItem[]> => {
     const provider = providerId === "qq" ? await requireQq() : await requireNetease();
@@ -4270,7 +4279,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           if (isRecord(preferences.listenerProfile)) listenerProfile = preferences.listenerProfile as unknown as ProgramListenerProfile;
           plannedAccountRundown = await prepareAccountRundown(providerId, spec, preferences, signal, (step) => updateCreateProgress(step));
             const plannedSeconds = plannedAccountRundown.reduce((total, track) => total + track.durationSeconds, 0);
-            if (plannedAccountRundown.length === 0 || plannedSeconds < spec.durationMinutes * 60) {
+            if (plannedAccountRundown.length === 0 || plannedSeconds < minimumProgramDurationSeconds(spec.durationMinutes)) {
               const label = qqApiSource ? "QQ 音乐" : "网易云";
             throw new ServiceError(qqApiSource ? "QQ_PROVIDER_ERROR" : "NETEASE_NO_PLAYABLE_TRACKS", 409, plannedAccountRundown.length === 0
                 ? `没有从你的听歌画像与当前场景中找到可播放的${label}歌曲。`
@@ -4513,9 +4522,10 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             const replay = planOperationResults.get(operationKeyValue);
             if (replay) {
               if (replay.action !== typedAction || replay.baseRevision !== baseRevision) throw new ServiceError("OPERATION_REUSED", 409, publicMessage("OPERATION_REUSED"));
-              return lockedState;
+              return { state: lockedState, message: null };
             }
             if (artifact.revision !== baseRevision) throw new ServiceError("GENERATION_MISMATCH", 409, "节目单已经变化，请刷新后再调整。");
+            let actionMessage: string | null = null;
             let ordered: ProgramRundownItem[];
             if (typedAction === "regenerate") {
               if (!artifact.preferences) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "选歌画像已丢失，请重新创建。");
@@ -4525,7 +4535,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               const freshPreferences = { ...artifact.preferences, programPlan: programPlan.filter((track) => !isRecord(track) || !currentIds.has(String(track.id))) };
               const fresh = await prepareAccountRundown(providerId, lockedState.spec, freshPreferences, controller.signal);
               const freshSeconds = fresh.reduce((total, track) => total + track.durationSeconds, 0);
-              ordered = freshSeconds >= lockedState.spec.durationMinutes * 60
+              ordered = freshSeconds >= minimumProgramDurationSeconds(lockedState.spec.durationMinutes)
                 ? fresh
                 : await prepareAccountRundown(providerId, lockedState.spec, artifact.preferences, controller.signal);
             } else if (typedAction === "replace") {
@@ -4544,18 +4554,49 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                 ? { ...replacement, hostMoment: track.hostMoment }
                 : track);
             } else {
-              const ids = typedAction === "adjust"
-                ? typeof hostProvider?.adjustRundown === "function"
-                  ? await hostProvider.adjustRundown({
-                      instruction: nonEmptyString(body.message, "message", 600),
-                      tracks: artifact.items.map((track) => ({ id: track.id, title: track.title, artist: track.artist, mood: track.mood })),
-                    }, controller.signal)
-                  : (() => { throw new ServiceError("HOST_PROVIDER_ERROR", 503, "当前模型不支持节目顺序调整。"); })()
-                : Array.isArray(body.trackIds) ? body.trackIds : [];
-              if (ids.length !== artifact.items.length || new Set(ids).size !== artifact.items.length || ids.some((id) => typeof id !== "string" || !artifact.items.some((track) => track.id === id))) {
-                throw new ServiceError("INVALID_INPUT", 400, "曲目顺序必须包含节目单中的全部歌曲且不能重复。");
+              const instruction = typedAction === "adjust" ? nonEmptyString(body.message, "message", 600) : "";
+              const searchAdjustment = typedAction === "adjust" ? parseMusicSearchAdjustment(instruction) : null;
+              if (searchAdjustment) {
+                if (!artifact.preferences) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "选歌画像已丢失，请重新创建。");
+                const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
+                const provider = providerId === "qq" ? await requireQq() : await requireNetease();
+                if (typeof provider.search !== "function") throw new ServiceError("MUSIC_SEARCH_UNAVAILABLE", 503, `当前${providerId === "qq" ? "QQ 音乐" : "网易云"}连接不支持搜索歌曲。`);
+                const searchResult = await invokeAccount(providerId, () => provider.search!(searchAdjustment.query, { limit: 100, offset: 0, signal: controller.signal }));
+                const searchSongs = isRecord(searchResult) && Array.isArray(searchResult.songs) ? searchResult.songs : [];
+                if (searchSongs.length === 0) throw new ServiceError("MUSIC_SEARCH_EMPTY", 409, `没有找到“${searchAdjustment.query}”的歌曲，可以换一个歌手、歌名或风格试试。`);
+                const currentIds = new Set(artifact.items.map((track) => track.id));
+                const searchPreferences = { ...artifact.preferences, programPlan: searchSongs.filter((track) => !isRecord(track) || !currentIds.has(String(track.id))) };
+                let candidates = await prepareAccountRundown(providerId, lockedState.spec, searchPreferences, controller.signal, undefined, 1, searchAdjustment.count);
+                if (candidates.length === 0 && searchAdjustment.count > 1) {
+                  candidates = await prepareAccountRundown(providerId, lockedState.spec, searchPreferences, controller.signal, undefined, 1, 1);
+                }
+                const additions = candidates.filter((track) => !currentIds.has(track.id)).slice(0, searchAdjustment.count);
+                if (additions.length === 0) throw new ServiceError("MUSIC_SEARCH_NOT_PLAYABLE", 409, `找到了“${searchAdjustment.query}”的相关歌曲，但当前账号没有可完整播放的新曲目。`);
+                const preferredIndexes = artifact.items.flatMap((track, index) => track.liked === true ? [] : [index]);
+                const fallbackIndexes = artifact.items.map((_, index) => index).filter((index) => !preferredIndexes.includes(index));
+                const replaceIndexes = [...preferredIndexes, ...fallbackIndexes].slice(0, additions.length);
+                const replacementByIndex = new Map(replaceIndexes.map((index, additionIndex) => [index, additions[additionIndex]!]));
+                ordered = artifact.items.map(({ hostScript: _hostScript, ...track }, index) => {
+                  const replacement = replacementByIndex.get(index);
+                  return replacement ? { ...replacement, hostMoment: track.hostMoment } : track;
+                });
+                const existingPlan = Array.isArray(artifact.preferences.programPlan) ? artifact.preferences.programPlan : [];
+                artifact.preferences = { ...artifact.preferences, programPlan: [...searchSongs, ...existingPlan] };
+                actionMessage = `已找到“${searchAdjustment.query}”的 ${additions.length} 首可播放歌曲，并更新节目单和相关口播。`;
+              } else {
+                const ids = typedAction === "adjust"
+                  ? typeof hostProvider?.adjustRundown === "function"
+                    ? await hostProvider.adjustRundown({
+                        instruction,
+                        tracks: artifact.items.map((track) => ({ id: track.id, title: track.title, artist: track.artist, mood: track.mood })),
+                      }, controller.signal)
+                    : (() => { throw new ServiceError("HOST_PROVIDER_ERROR", 503, "当前模型不支持节目顺序调整。"); })()
+                  : Array.isArray(body.trackIds) ? body.trackIds : [];
+                if (ids.length !== artifact.items.length || new Set(ids).size !== artifact.items.length || ids.some((id) => typeof id !== "string" || !artifact.items.some((track) => track.id === id))) {
+                  throw new ServiceError("INVALID_INPUT", 400, "曲目顺序必须包含节目单中的全部歌曲且不能重复。");
+                }
+                ordered = ids.map((id) => artifact.items.find((track) => track.id === id)!).filter(Boolean);
               }
-              ordered = ids.map((id) => artifact.items.find((track) => track.id === id)!).filter(Boolean);
             }
             if (typedAction === "regenerate") ordered = ordered.map(({ hostScript: _hostScript, ...track }) => track);
             else if (typedAction !== "replace") {
@@ -4571,9 +4612,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               const oldest = planOperationResults.keys().next().value;
               if (typeof oldest === "string") planOperationResults.delete(oldest); else break;
             }
-            return lockedState;
+            return { state: lockedState, message: actionMessage };
           });
-          writeJson(res, 200, { program: responseProgram(result), message: typedAction === "adjust" ? "AI 已按要求调整节目单并重写口播。" : typedAction === "replace" ? "已在原位置补入一首新歌，并重写口播。" : typedAction === "regenerate" ? "已重新生成节目单和主持词。" : "已更新曲序并重写相邻口播。" });
+          writeJson(res, 200, { program: responseProgram(result.state), message: result.message ?? (typedAction === "adjust" ? "AI 已按要求调整节目单并重写口播。" : typedAction === "replace" ? "已在原位置补入一首新歌，并重写口播。" : typedAction === "regenerate" ? "已重新生成节目单和主持词。" : "已更新曲序并重写相邻口播。") });
         } finally {
           req.off("aborted", abort);
           res.off("close", abort);

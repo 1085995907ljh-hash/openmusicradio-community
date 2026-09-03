@@ -991,13 +991,13 @@ test("NetEase planning treats familiarity as a target when the liked pool is emp
     headers: { "content-type": "application/json", "x-one-radio-control-token": token },
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 60, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 20 } }),
   });
-  assert.equal(response.status, 201);
+  assert.equal(response.status, 201, await response.clone().text());
   const program = (await json(response)).program;
   assert.equal(program.planSummary.targetFamiliarityRatio, 20);
   assert.equal(program.planSummary.actualFamiliarityRatio, 0);
   assert.equal(program.planSummary.familiarTracks, 0);
-  assert.equal(program.planSummary.unheardTracks, 20);
-  assert.ok(program.rundown.reduce((total: number, track: { durationSeconds: number }) => total + track.durationSeconds, 0) >= 60 * 60);
+  assert.equal(program.planSummary.unheardTracks, 19);
+  assert.ok(program.rundown.reduce((total: number, track: { durationSeconds: number }) => total + track.durationSeconds, 0) >= 60 * 60 * 0.92);
 });
 
 test("NetEase planning relaxes familiar quota when selected styles need discovery songs", async (context) => {
@@ -1415,6 +1415,24 @@ test("NetEase planning uses playable quota backups for unavailable and trial-onl
   assert.equal(new Set(program.rundown.map((track: { artist: string }) => track.artist)).size, program.rundown.length);
 });
 
+test("account planning treats requested duration as a soft target", async (context) => {
+  const songs = Array.from({ length: 7 }, (_, index) => ({
+    id: String(17_300 + index), title: `软时长歌曲 ${index + 1}`, artists: [{ id: String(17_400 + index), name: `软时长艺人 ${index + 1}` }], durationMs: 240_000,
+  }));
+  const token = "soft-duration-token";
+  const service = await createLocalService({ port: 0, localControlToken: token, neteaseProvider: planningProvider(songs, []), hostProvider: groundedHostProvider(), ttsProvider: readyTtsProvider });
+  await service.start();
+  context.after(() => service.stop());
+  const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-one-radio-control-token": token },
+    body: JSON.stringify({ operationId: "soft-duration-create", spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
+  });
+  assert.equal(response.status, 201);
+  const program = (await json(response)).program;
+  assert.equal(program.rundown.reduce((total: number, track: { durationSeconds: number }) => total + track.durationSeconds, 0), 28 * 60);
+});
+
 test("delete and replace can use one short backup without rebuilding a full-duration pool", async (context) => {
   const songs = Array.from({ length: 6 }, (_, index) => ({
     id: String(17_500 + index),
@@ -1454,6 +1472,61 @@ test("delete and replace can use one short backup without rebuilding a full-dura
   assert.equal(replaced.rundown.length, 5);
   assert.notEqual(replaced.rundown[replaceIndex].id, originalIds[replaceIndex]);
   assert.deepEqual(replaced.rundown.filter((_: unknown, index: number) => index !== replaceIndex).map((track: { id: string }) => track.id), originalIds.filter((_: string, index: number) => index !== replaceIndex));
+});
+
+test("planner chat finds requested music and returns useful success or failure messages", async (context) => {
+  const baseSongs = Array.from({ length: 6 }, (_, index) => ({
+    id: String(17_700 + index), title: `基础歌曲 ${index + 1}`, artists: [{ id: String(17_800 + index), name: `基础艺人 ${index + 1}` }], durationMs: 360_000,
+  }));
+  const requestedSongs = Array.from({ length: 3 }, (_, index) => ({
+    id: String(17_900 + index), title: `周杰伦候选 ${index + 1}`, artists: [{ id: "jay", name: "周杰伦" }], durationMs: 240_000,
+  }));
+  const baseProvider = planningProvider(baseSongs, []);
+  const searchTerms: string[] = [];
+  const token = "planner-search-token";
+  const service = await createLocalService({
+    port: 0,
+    localControlToken: token,
+    neteaseProvider: {
+      ...baseProvider,
+      search(keyword: string) {
+        searchTerms.push(keyword);
+        if (keyword === "周杰伦") return { songs: requestedSongs, total: requestedSongs.length };
+        if (keyword === "不存在的歌手") return { songs: [], total: 0 };
+        return { songs: baseSongs, total: baseSongs.length };
+      },
+      songDetail(ids: string[]) { return [...baseSongs, ...requestedSongs].filter((song) => ids.includes(song.id)); },
+      songUrl(id: string) { return { id, url: `https://music.126.net/${id}.mp3`, durationMs: [...baseSongs, ...requestedSongs].find((song) => song.id === id)?.durationMs }; },
+    },
+    hostProvider: groundedHostProvider(),
+    ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+  const createdResponse = await fetch(`${base}/programs`, {
+    method: "POST", headers,
+    body: JSON.stringify({ operationId: "planner-search-create", spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
+  });
+  assert.equal(createdResponse.status, 201);
+  const draft = (await json(createdResponse)).program;
+  const adjustedResponse = await fetch(`${base}/programs/${draft.id}/adjust`, {
+    method: "POST", headers,
+    body: JSON.stringify({ generation: draft.generation, planRevision: 0, operationId: "planner-search-adjust", message: "帮我找周杰伦的歌曲。" }),
+  });
+  assert.equal(adjustedResponse.status, 200, await adjustedResponse.clone().text());
+  const adjustedPayload = await json(adjustedResponse);
+  assert.match(adjustedPayload.message, /已找到“周杰伦”的 2 首可播放歌曲/);
+  assert.equal(adjustedPayload.program.rundown.filter((track: { artist: string }) => track.artist === "周杰伦").length, 2);
+  assert.ok(searchTerms.includes("周杰伦"));
+
+  const failedResponse = await fetch(`${base}/programs/${draft.id}/adjust`, {
+    method: "POST", headers,
+    body: JSON.stringify({ generation: draft.generation, planRevision: 1, operationId: "planner-search-empty", message: "找不存在的歌手的歌曲。" }),
+  });
+  assert.equal(failedResponse.status, 409);
+  assert.match((await json(failedResponse)).error, /没有找到“不存在的歌手”的歌曲/);
 });
 
 test("NetEase confirmation replaces a song that becomes trial-only before broadcast", async (context) => {
@@ -1537,10 +1610,11 @@ test("NetEase planning covers 120-minute programs that need more than one hundre
   });
   assert.equal(response.status, 201);
   const program = (await json(response)).program;
-  assert.equal(program.planSummary.totalTracks, 120);
+  assert.ok(program.planSummary.totalTracks > 100);
   assert.equal(program.planSummary.familiarTracks, 0);
   assert.equal(program.planSummary.actualFamiliarityRatio, 0);
-  assert.equal(new Set(program.rundown.map((track: { artist: string }) => track.artist)).size, 120);
+  assert.equal(new Set(program.rundown.map((track: { artist: string }) => track.artist)).size, program.planSummary.totalTracks);
+  assert.ok(program.rundown.reduce((total: number, track: { durationSeconds: number }) => total + track.durationSeconds, 0) >= 115 * 60);
   for (const track of program.rundown.filter((item: { hostScript?: { factIds?: string[] } }) => item.hostScript?.factIds?.length === 0)) {
     assert.doesNotMatch(track.hostScript.text, new RegExp(track.title));
     assert.doesNotMatch(track.hostScript.text, new RegExp(track.artist));

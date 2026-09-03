@@ -257,7 +257,8 @@ export class ProgramEngine {
     }
     const deadlineMs = this.state.deadlineAt ? Date.parse(this.state.deadlineAt) : null;
     if (deadlineMs !== null && now >= deadlineMs) {
-      this.completeAtDeadline(now);
+      if (this.state.spec.sourceId === "fixture") this.completeAtDeadline(now);
+      else this.state.remainingSeconds = 0;
       return this.getState();
     }
     if (deadlineMs !== null) {
@@ -321,6 +322,11 @@ export class ProgramEngine {
     if (!this.beforeSideEffect(now)) return this.rememberOperation(command.operationId, state, "next");
     if (state.status !== "on_air") return this.rememberOperation(command.operationId, state, "next");
     if (state.spec.sourceId !== "fixture") {
+      const deadlineMs = state.deadlineAt ? Date.parse(state.deadlineAt) : null;
+      if (deadlineMs !== null && now >= deadlineMs) {
+        this.completeAtDeadline(now);
+        return this.rememberOperation(command.operationId, state, "next");
+      }
       state.host = null;
       state.generation += 1;
       this.currentTrackEndsAtMs = null;
@@ -485,8 +491,11 @@ export class ProgramEngine {
     }
     const deadlineMs = this.state.deadlineAt ? Date.parse(this.state.deadlineAt) : null;
     if (deadlineMs !== null && nowMs >= deadlineMs) {
-      this.completeAtDeadline(nowMs);
-      return false;
+      if (this.state.spec.sourceId === "fixture") {
+        this.completeAtDeadline(nowMs);
+        return false;
+      }
+      this.state.remainingSeconds = 0;
     }
     if (deadlineMs !== null) {
       this.state.remainingSeconds = Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000));
