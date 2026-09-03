@@ -36,6 +36,7 @@ import { FIXTURE_TRACKS } from "../core/fixtures.js";
 import { personalizeCandidates, type PersonalizationCandidate } from "../core/personalization.js";
 import { isDisallowedRecommendationCandidate, isExplorationVersionCandidate } from "../core/recommendation-guards.js";
 import { buildListeningProfile, inferSongTags } from "../core/listening-profile.js";
+import { isCompleteAccountPlayback } from "../core/playback-access.js";
 import { energyRangeForPhase, getSceneConfig, phaseForElapsedSeconds } from "../core/scenes.js";
 import {
   hostCharacterBounds,
@@ -1868,6 +1869,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     if (!rundown || (!isCurrentTrack && !isSeamlessNextTrack)) {
       throw new ServiceError("AUDIO_NOT_FOUND", 404, publicMessage("AUDIO_NOT_FOUND"));
     }
+    const requestedItem = isCurrentTrack ? currentItem : nextItem;
     const provider = providerId === "qq" ? await requireQq() : await requireNetease();
     if (typeof provider.songUrl !== "function") throw new ServiceError(providerId === "qq" ? "QQ_UNAVAILABLE" : "NETEASE_UNAVAILABLE", 503, publicMessage(providerId === "qq" ? "QQ_UNAVAILABLE" : "NETEASE_UNAVAILABLE"));
     const streamKey = `${providerId}:${programId}:${generation}:${id}`;
@@ -1883,7 +1885,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     let idleTimer: NodeJS.Timeout | undefined;
     try {
       const playback = await invokeAccount(providerId, () => provider.songUrl!(id, { signal: controller.signal }));
-      if (!isRecord(playback) || typeof playback.url !== "string" || playback.url.length === 0) {
+      if (!isCompleteAccountPlayback(playback, requestedItem?.durationSeconds ? requestedItem.durationSeconds * 1_000 : null)) {
         throw new ServiceError("AUDIO_NOT_FOUND", 404, publicMessage("AUDIO_NOT_FOUND"));
       }
       const allowedUrl = providerId === "qq" ? isAllowedQqAudioUrl(playback.url) : isAllowedNeteaseAudioUrl(playback.url);
@@ -2519,7 +2521,8 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       } catch {
         return null;
       }
-      if (!isRecord(playback) || typeof playback.url !== "string" || playback.url.length === 0) return null;
+      const expectedDurationMs = typeof value.durationMs === "number" && value.durationMs > 0 ? value.durationMs : null;
+      if (!isCompleteAccountPlayback(playback, expectedDurationMs)) return null;
       const allowedUrl = providerId === "qq" ? isAllowedQqAudioUrl(playback.url) : isAllowedNeteaseAudioUrl(playback.url);
       if (!allowedUrl) return null;
       const durationMs = typeof value.durationMs === "number" && value.durationMs > 0 ? value.durationMs : 210_000;
@@ -2730,6 +2733,50 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     prepareAccountRundown("netease", spec, preferences, signal);
   const prepareQqRundown = (spec: ProgramSpec, preferences: UnknownRecord, signal: AbortSignal): Promise<ProgramRundownItem[]> =>
     prepareAccountRundown("qq", spec, preferences, signal);
+
+  const revalidateAccountRundown = async (
+    providerId: "netease" | "qq",
+    spec: ProgramSpec,
+    artifact: AccountRundown,
+    signal: AbortSignal,
+  ): Promise<{ items: ProgramRundownItem[]; replacedIndexes: number[] }> => {
+    const provider = providerId === "qq" ? await requireQq() : await requireNetease();
+    if (typeof provider.songUrl !== "function") throw new ServiceError(providerId === "qq" ? "QQ_UNAVAILABLE" : "NETEASE_UNAVAILABLE", 503, publicMessage(providerId === "qq" ? "QQ_UNAVAILABLE" : "NETEASE_UNAVAILABLE"));
+    const inspect = async (item: ProgramRundownItem): Promise<boolean> => {
+      try {
+        const playback = await invokeAccount(providerId, () => provider.songUrl!(item.id, { signal }));
+        return isCompleteAccountPlayback(playback, item.durationSeconds * 1_000);
+      } catch {
+        return false;
+      }
+    };
+    const validByIndex: boolean[] = [];
+    const concurrency = providerId === "qq" ? 1 : 8;
+    for (let offset = 0; offset < artifact.items.length; offset += concurrency) {
+      validByIndex.push(...await Promise.all(artifact.items.slice(offset, offset + concurrency).map(inspect)));
+    }
+    const invalidIndexes = validByIndex.flatMap((valid, index) => valid ? [] : [index]);
+    if (invalidIndexes.length === 0) return { items: artifact.items, replacedIndexes: [] };
+    if (!artifact.preferences || !Array.isArray(artifact.preferences.programPlan)) {
+      throw new ServiceError("PLAYBACK_PERMISSION_CHANGED", 409, "部分歌曲已无法由当前账号完整播放，请重新生成本次节目。");
+    }
+    const currentIds = new Set(artifact.items.map((item) => item.id));
+    const replacementPreferences = {
+      ...artifact.preferences,
+      programPlan: artifact.preferences.programPlan.filter((value) => !isRecord(value) || !currentIds.has(String(value.id))),
+    };
+    const replacements = (await prepareAccountRundown(providerId, spec, replacementPreferences, signal))
+      .filter((item) => !currentIds.has(item.id));
+    if (replacements.length < invalidIndexes.length) {
+      throw new ServiceError("PLAYBACK_PERMISSION_CHANGED", 409, "当前账号可完整播放的歌曲不足，请重新生成本次节目。");
+    }
+    const items = artifact.items.map((item) => ({ ...item }));
+    invalidIndexes.forEach((index, replacementIndex) => {
+      const previous = items[index]!;
+      items[index] = { ...replacements[replacementIndex]!, hostMoment: previous.hostMoment };
+    });
+    return { items, replacedIndexes: invalidIndexes };
+  };
 
   const createFinalHostScriptVersion = (spec: ProgramSpec, sourceItems: ProgramRundownItem[]): ProgramRundownItem[] => {
     const positions = new Set(evenlySpacedHostBreakIndices(sourceItems.length, spec.hostDensity));
@@ -4614,7 +4661,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           if (lockedState.spec.sourceId === "netease_music" || (lockedState.spec.sourceId === "qq_music" && qqApiEnabled)) {
             if (body.keepPlaylist === true) accountPlaylistKeepRequests.add(programId);
             const accountArtifact = accountRundowns.get(programId);
-            const exactAccountRundown = accountArtifact?.items;
+            let exactAccountRundown = accountArtifact?.items;
             if (!exactAccountRundown || !accountArtifact?.accountUid) {
               throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "开播前锁定的节目资料已丢失，请退出本次节目后重新创建。");
             }
@@ -4625,24 +4672,39 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             const hostTracks = exactAccountRundown.filter((item) => Boolean(item.hostScript));
             if (accountArtifact.hostScriptsPending || hostTracks.length === 0) throw new ServiceError("HOST_PROVIDER_ERROR", 409, "本次节目口播还没有通过审核，请先重新生成口播。");
             try {
-              if (hostTracks.some((item) => item.hostScript?.audioReady !== true || !accountArtifact.hostAudio.has(item.id))) {
+              const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
+              const provider = providerId === "qq" ? await requireQq() : await requireNetease();
+              const currentAccount = await invokeAccountStage(providerId, "核对账号", () => provider.account!(confirmController!.signal));
+              if (!isRecord(currentAccount) || currentAccount.uid !== accountArtifact.accountUid) {
+                throw new ServiceError("ACCOUNT_CHANGED", 409, `${providerId === "qq" ? "QQ 音乐" : "网易云"}账号已经变化，请退出本次节目后重新生成。`);
+              }
+              const revalidated = await revalidateAccountRundown(providerId, lockedState.spec, accountArtifact, confirmController!.signal);
+              if (revalidated.replacedIndexes.length > 0) {
+                const previousItems = exactAccountRundown;
+                const affectedIndexes = new Set(revalidated.replacedIndexes.flatMap((index) => index > 0 ? [index - 1, index] : [index]));
+                const relocked = await lockNeteaseHostScripts(lockedState.spec, revalidated.items, accountArtifact.listenerProfile, confirmController!.signal, "开播前发现个别歌曲无法由当前账号完整播放。请保持节目结构，只为替换后的免费可播歌曲修正相关衔接口播。");
+                exactAccountRundown = relocked.map((item, index) => affectedIndexes.has(index)
+                  ? item
+                  : { ...item, hostMoment: previousItems[index]?.hostMoment, hostScript: previousItems[index]?.hostScript });
+                accountArtifact.items = exactAccountRundown;
+                for (const index of affectedIndexes) {
+                  const previousId = previousItems[index]?.id;
+                  const replacementId = exactAccountRundown[index]?.id;
+                  if (previousId) accountArtifact.hostAudio.delete(previousId);
+                  if (replacementId) accountArtifact.hostAudio.delete(replacementId);
+                }
+                accountArtifact.revision += 1;
+              }
+              const revalidatedHostTracks = exactAccountRundown.filter((item) => Boolean(item.hostScript));
+              if (revalidatedHostTracks.some((item) => item.hostScript?.audioReady !== true || !accountArtifact.hostAudio.has(item.id))) {
                 const prepared = await prepareLockedHostAudio(lockedState.spec, exactAccountRundown, confirmController!.signal);
                 accountArtifact.items = prepared.items;
                 accountArtifact.hostAudio = prepared.audio;
+                exactAccountRundown = prepared.items;
               }
               if (lockedState.spec.sourceId === "qq_music" && qqApiEnabled) {
-                const provider = await requireQq();
-                const currentAccount = await invokeAccountStage("qq", "核对账号", () => provider.account!(confirmController!.signal));
-                if (!isRecord(currentAccount) || currentAccount.uid !== accountArtifact.accountUid) {
-                  throw new ServiceError("ACCOUNT_CHANGED", 409, "QQ 音乐账号已经变化，请退出本次节目后重新生成。");
-                }
                 await provisionQqPlaylist(programId, lockedState.spec, exactAccountRundown, accountArtifact.accountUid, confirmController!.signal);
               } else {
-                const provider = await requireNetease();
-                const currentAccount = await invokeAccountStage("netease", "核对账号", () => provider.account!(confirmController!.signal));
-                if (!isRecord(currentAccount) || currentAccount.uid !== accountArtifact.accountUid) {
-                  throw new ServiceError("ACCOUNT_CHANGED", 409, "网易云账号已经变化，请退出本次节目后重新生成。");
-                }
                 await provisionNeteasePlaylist(programId, lockedState.spec, exactAccountRundown, confirmController!.signal);
               }
             } catch (error) {

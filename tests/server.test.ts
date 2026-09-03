@@ -1368,7 +1368,7 @@ test("NetEase planning reserves discovery candidates before truncating a large l
   assert.equal(program.planSummary.familiarTracks * 100, program.planSummary.totalTracks * 20);
 });
 
-test("NetEase planning uses playable quota backups when higher-ranked songs are unavailable", async (context) => {
+test("NetEase planning uses playable quota backups for unavailable and trial-only songs", async (context) => {
   const likedSongs = Array.from({ length: 100 }, (_, index) => ({
     id: String(14_000 + index),
     title: `后备收藏 ${index + 1}`,
@@ -1381,7 +1381,8 @@ test("NetEase planning uses playable quota backups when higher-ranked songs are 
     artists: [{ id: String(17_000 + index), name: `后备探索艺术家 ${index + 1}` }],
     durationMs: 180_000,
   }));
-  const unavailableIds = new Set(likedSongs.slice(0, 10).map((song) => song.id));
+  const unavailableIds = new Set(likedSongs.slice(0, 5).map((song) => song.id));
+  const trialOnlyIds = new Set(likedSongs.slice(5, 10).map((song) => song.id));
   const provider = planningProvider([...likedSongs, ...discoverySongs], likedSongs.map((song) => song.id));
   const token = "playable-quota-backup-token";
   const service = await createLocalService({
@@ -1389,7 +1390,11 @@ test("NetEase planning uses playable quota backups when higher-ranked songs are 
     localControlToken: token,
     neteaseProvider: {
       ...provider,
-      songUrl(id: string) { return unavailableIds.has(id) ? { id, url: null } : { id, url: `https://music.126.net/${id}.mp3` }; },
+      songUrl(id: string) {
+        if (unavailableIds.has(id)) return { id, url: null };
+        if (trialOnlyIds.has(id)) return { id, url: `https://music.126.net/${id}-trial.mp3`, isTrial: true, durationMs: 30_000 };
+        return { id, url: `https://music.126.net/${id}.mp3`, durationMs: 180_000 };
+      },
     },
     hostProvider: groundedHostProvider(),
     ttsProvider: readyTtsProvider,
@@ -1406,7 +1411,64 @@ test("NetEase planning uses playable quota backups when higher-ranked songs are 
   assert.equal(program.planSummary.actualFamiliarityRatio, 20);
   assert.equal(program.planSummary.familiarTracks * 100, program.planSummary.totalTracks * 20);
   assert.ok(program.rundown.every((track: { id: string }) => !unavailableIds.has(track.id)));
+  assert.ok(program.rundown.every((track: { id: string }) => !trialOnlyIds.has(track.id)));
   assert.equal(new Set(program.rundown.map((track: { artist: string }) => track.artist)).size, program.rundown.length);
+});
+
+test("NetEase confirmation replaces a song that becomes trial-only before broadcast", async (context) => {
+  const songs = Array.from({ length: 20 }, (_, index) => ({
+    id: String(18_000 + index),
+    title: `免费候选 ${index + 1}`,
+    artists: [{ id: String(19_000 + index), name: `免费艺术家 ${index + 1}` }],
+    durationMs: 180_000,
+  }));
+  const trialOnlyIds = new Set<string>();
+  const storedTracks: string[] = [];
+  const baseProvider = planningProvider(songs, []);
+  const token = "confirm-free-playback-token";
+  const service = await createLocalService({
+    port: 0,
+    localControlToken: token,
+    neteaseProvider: {
+      ...baseProvider,
+      songUrl(id: string) {
+        return trialOnlyIds.has(id)
+          ? { id, url: `https://music.126.net/${id}-trial.mp3`, isTrial: true, durationMs: 30_000 }
+          : { id, url: `https://music.126.net/${id}.mp3`, isTrial: false, durationMs: 180_000 };
+      },
+      createPlaylist(name: string) { return { id: "9900", name }; },
+      addSongsToPlaylist(playlistId: string, trackIds: string[]) { storedTracks.splice(0, storedTracks.length, ...trackIds); return { playlistId, trackIds }; },
+      playlistDetail() { return { id: "9900", name: "AI 电台", tracks: storedTracks.map((id) => ({ id })) }; },
+    },
+    hostProvider: groundedHostProvider(),
+    ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+  const createdResponse = await fetch(`${base}/programs`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ operationId: "confirm-free-create", spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
+  });
+  assert.equal(createdResponse.status, 201);
+  const draft = (await json(createdResponse)).program;
+  const revokedId = draft.rundown[0].id;
+  const preservedScripts = new Map(draft.rundown.slice(1).map((track: { id: string; hostScript?: { text: string } }) => [track.id, track.hostScript?.text]));
+  trialOnlyIds.add(revokedId);
+
+  const confirmedResponse = await fetch(`${base}/programs/${draft.id}/confirm`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ generation: draft.generation, planRevision: 0, operationId: "confirm-free-confirm" }),
+  });
+  assert.equal(confirmedResponse.status, 200, JSON.stringify(await confirmedResponse.clone().json()));
+  const confirmed = (await json(confirmedResponse)).program;
+  assert.equal(confirmed.status, "on_air");
+  assert.ok(confirmed.rundown.every((track: { id: string }) => track.id !== revokedId));
+  assert.deepEqual(storedTracks, confirmed.rundown.map((track: { id: string }) => track.id));
+  assert.ok(confirmed.rundown.slice(1).every((track: { id: string; hostScript?: { text: string } }) => track.hostScript?.text === preservedScripts.get(track.id)));
 });
 
 test("NetEase planning covers 120-minute programs that need more than one hundred short tracks", async (context) => {

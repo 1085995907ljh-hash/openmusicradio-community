@@ -125,6 +125,7 @@ export interface NeteaseSongUrl {
   size: number | null;
   format: string | null;
   durationMs: number | null;
+  isTrial?: boolean;
 }
 
 export interface NeteaseQrLogin {
@@ -379,6 +380,7 @@ export class NeteaseApiProvider {
       size: optionalNonNegativeNumber(entry.size, "song URL item.size"),
       format: optionalString(entry.type, "song URL item.type"),
       durationMs: optionalNonNegativeNumber(entry.time, "song URL item.time"),
+      ...(entry.freeTrialInfo === undefined ? {} : { isTrial: entry.freeTrialInfo !== null }),
     };
   }
 

@@ -585,8 +585,16 @@ class QqMusicService:
         if not urls.data:
             return {"id": song_id, "url": None, "durationMs": _serialize_song(song)["durationMs"]}
         item = urls.data[0]
-        url = await self._resolve_url(item.purl, item.vkey)
-        return {"id": song_id, "url": url, "durationMs": _serialize_song(song)["durationMs"], "format": "mp3"}
+        authorized = item.result == 0
+        url = await self._resolve_url(item.purl, item.vkey) if authorized else None
+        return {
+            "id": song_id,
+            "url": url,
+            "durationMs": _serialize_song(song)["durationMs"],
+            "format": "mp3",
+            "complete": authorized and url is not None,
+            "authorizationCode": item.result,
+        }
 
     async def _resolve_url(self, purl: str, vkey: str) -> str | None:
         if not purl or not vkey:

@@ -129,7 +129,7 @@ test("playlist detail, song detail, and song URL have validated typed results", 
         return jsonResponse({ code: 200, playlist: { id: 3, name: "学习", description: null, trackCount: 1, tracks: [{ ...song, ar: [{ id: 0, name: "未知歌手" }] }] } });
       }
       if (url.pathname === "/song/detail") return jsonResponse({ code: 200, songs: [{ ...song, publishTime: Date.UTC(1998, 0, 1) }] });
-      return jsonResponse({ code: 200, data: [{ id: 42, url: "https://music.example/42.mp3", br: 320000, size: 123, type: "mp3", time: 201000 }] });
+      return jsonResponse({ code: 200, data: [{ id: 42, url: "https://music.example/42.mp3", br: 320000, size: 123, type: "mp3", time: 201000, freeTrialInfo: null }] });
     },
   });
 
@@ -142,10 +142,18 @@ test("playlist detail, song detail, and song URL have validated typed results", 
   assert.equal(playlist.tracks[0]?.artists[0]?.id, "0");
   assert.equal(songs[0]?.id, "42");
   assert.equal(songs[0]?.releaseYear, 1998);
-  assert.deepEqual(url, { id: "42", url: "https://music.example/42.mp3", bitrate: 320000, size: 123, format: "mp3", durationMs: 201000 });
+  assert.deepEqual(url, { id: "42", url: "https://music.example/42.mp3", bitrate: 320000, size: 123, format: "mp3", durationMs: 201000, isTrial: false });
   assert.match(paths[0] ?? "", /^\/playlist\/detail\?id=3$/);
   assert.match(paths[1] ?? "", /^\/song\/detail\?ids=42$/);
   assert.match(paths[2] ?? "", /^\/song\/url\/v1\?id=42&level=standard$/);
+});
+
+test("song URL preserves the Netease trial marker", async () => {
+  const provider = new NeteaseApiProvider({
+    env: { NETEASE_API_BASE_URL: "http://127.0.0.1:3000" },
+    fetchImpl: async () => jsonResponse({ code: 200, data: [{ id: 42, url: "https://music.example/42-trial.mp3", br: 128000, size: 480000, type: "mp3", time: 30000, freeTrialInfo: { start: 0, end: 30 } }] }),
+  });
+  assert.equal((await provider.songUrl(42)).isTrial, true);
 });
 
 test("song credits are read from structured lyric metadata", async () => {

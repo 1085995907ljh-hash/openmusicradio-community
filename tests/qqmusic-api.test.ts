@@ -173,7 +173,7 @@ test("QQ profile, history contract, recommendation, and playlist operations are 
     if (url.pathname === "/recommendations" || url.pathname === "/fm") return jsonResponse({ songs: [song] });
     if (url.pathname === "/song/42") return jsonResponse({ songs: [song] });
     if (url.pathname === "/song/42/similar") return jsonResponse({ songs: [song] });
-    if (url.pathname === "/song/42/url") return jsonResponse({ id: "42", url: "https://qqmusic.example/42.mp3", durationMs: 201_000, format: "mp3" });
+    if (url.pathname === "/song/42/url") return jsonResponse({ id: "42", url: "https://qqmusic.example/42.mp3", durationMs: 201_000, format: "mp3", complete: true, authorizationCode: 0 });
     if (url.pathname === "/playlist/3") return jsonResponse({ id: "3", dirId: "3", name: "学习", description: null, trackCount: 1, tracks: [song] });
     if (url.pathname === "/playlist" && init?.method === "POST") {
       playlistCreateBody = JSON.parse(String(init.body));
@@ -210,7 +210,7 @@ test("QQ profile, history contract, recommendation, and playlist operations are 
   assert.deepEqual(await target.personalFm(), [song]);
   assert.deepEqual(await target.songDetail(["42"]), [song]);
   assert.deepEqual(await target.similarSongs(42, { limit: 3 }), [song]);
-  assert.deepEqual(await target.songUrl(42), { id: "42", url: "https://qqmusic.example/42.mp3", durationMs: 201_000, format: "mp3" });
+  assert.deepEqual(await target.songUrl(42), { id: "42", url: "https://qqmusic.example/42.mp3", durationMs: 201_000, format: "mp3", complete: true, authorizationCode: 0 });
   assert.deepEqual(await target.playlistDetail(3), { id: "3", dirId: "3", name: "学习", description: null, trackCount: 1, tracks: [song] });
   assert.deepEqual(await target.createPlaylist("ai电台-深夜-夜航", undefined, { expectedUid: "88" }), { id: "78", name: "ai电台-深夜-夜航", dirId: "77" });
   assert.deepEqual(playlistCreateBody, { name: "ai电台-深夜-夜航", expectedUid: "88" });

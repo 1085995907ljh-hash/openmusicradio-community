@@ -69,6 +69,8 @@ export interface QqMusicSongUrl {
   url: string | null;
   durationMs: number | null;
   format?: string;
+  complete?: boolean;
+  authorizationCode?: number;
 }
 export interface QqMusicApiProviderOptions {
   env?: NodeJS.ProcessEnv;
@@ -262,6 +264,8 @@ export class QqMusicApiProvider {
       url,
       durationMs: root.durationMs === null || root.durationMs === undefined ? null : boundedNumber(root.durationMs, 0, Number.MAX_SAFE_INTEGER, "song URL duration"),
       ...(root.format === undefined ? {} : { format: requireString(root.format, "song URL format") }),
+      ...(root.complete === undefined ? {} : { complete: root.complete === true }),
+      ...(root.authorizationCode === undefined ? {} : { authorizationCode: boundedNumber(root.authorizationCode, 0, Number.MAX_SAFE_INTEGER, "song URL authorization code") }),
     };
   }
 
