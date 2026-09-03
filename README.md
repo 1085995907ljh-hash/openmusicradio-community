@@ -45,10 +45,14 @@ npm run dev
 电脑里已经安装 Codex、Claude Code 等可以操作终端的 AI 编程助手时，可以直接把下面这段话发给它：
 
 ```text
-请在我的 Mac 上安装并启动 OpenMusicRadio。项目地址是
+请在我的 Mac 上安装并启动 OpenMusicRadio。项目地址是：
 https://github.com/1085995907ljh-hash/openmusicradio-community.git
 
-请先检查 Git、Node.js、npm、uv 和 Swift 是否可用；缺少环境时说明原因并帮我完成安全安装。然后克隆项目，进入项目目录，执行 npm ci，把 .env.example 复制为 .env.local，再执行 npm run dev。请不要让我手动执行你能够代为完成的步骤，不要改动项目源码，也不要索取或展示任何密钥。最后确认本地服务已经正常启动，并告诉我浏览器访问地址；如果失败，请读取实际报错并继续排查。
+请检查运行项目所需的 Node.js、npm、uv 和 Swift。由于项目目前通过 GitHub 源码安装，也请确认 Git 可以正常下载和更新项目。缺少环境时，请说明原因并帮我安全安装。
+
+然后克隆项目，进入项目目录，执行 npm ci，把 .env.example 复制为 .env.local，再执行 npm run dev。请不要让我手动执行你能够代为完成的步骤，不要修改项目源码，也不要索取或展示任何密钥。
+
+最后确认服务已经正常启动，并告诉我浏览器访问地址；如果失败，请读取实际报错并继续排查。
 ```
 
 这是首次安装提示词，不是更新命令。安装完成后，仍需在页面填写名字和项目方提供的邀请码，再扫码授权自己的 QQ 音乐或网易云音乐账号。
