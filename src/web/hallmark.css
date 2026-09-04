@@ -9977,11 +9977,20 @@ button:disabled,
   min-height: 0;
   height: auto;
   flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(5, auto);
+  grid-template-areas:
+    "duration"
+    "host-settings"
+    "recommendation"
+    "content"
+    "familiarity";
   gap: var(--space-xs);
   align-content: space-between;
 }
 
 .setup-settings-screen .control-host-settings {
+  grid-area: host-settings;
   min-width: 0;
 }
 
@@ -10048,22 +10057,19 @@ button:disabled,
   }
 
   .setup-settings-screen .program-control-grid {
-    grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.28fr);
-    grid-template-rows: repeat(4, auto);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(5, auto);
     grid-template-areas:
-      "duration host-settings"
-      "recommendation recommendation"
-      "content content"
-      "familiarity familiarity";
+      "duration"
+      "host-settings"
+      "recommendation"
+      "content"
+      "familiarity";
     gap: 0.35rem;
   }
 
-  .setup-settings-screen .control-host-settings {
-    grid-area: host-settings;
-  }
-
   .setup-settings-screen .control-host-settings .host-lower-controls {
-    grid-template-columns: minmax(0, 1fr) minmax(7rem, 0.68fr);
+    grid-template-columns: minmax(0, 1fr) minmax(10.5rem, 0.42fr);
   }
 
   .setup-settings-screen .program-control-grid .field-label-row {
