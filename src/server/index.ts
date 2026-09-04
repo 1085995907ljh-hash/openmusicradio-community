@@ -99,8 +99,7 @@ const HOST_SCRIPT_MAX_ATTEMPTS = 2;
 const FIXTURE_TRACK_IDS = new Set(FIXTURE_TRACKS.map((track) => track.id));
 const DEFAULT_LISTENING_PROFILE_DIR = join(homedir(), "Library", "Application Support", "OneRadio", "profiles");
 const DESKTOP_PET_PREFERENCES_SUITE = process.env.ONE_RADIO_PET_PREFERENCES_SUITE?.trim() || "dev.openmusicradio.desktop-pet";
-const MAX_PROFILE_HISTORY_PROGRAMS = 30;
-const MAX_PUBLIC_PLAYLIST_QUERIES = 12;
+const MAX_PUBLIC_PLAYLIST_QUERIES = 18;
 const PUBLIC_PLAYLIST_SEARCH_LIMIT = 8;
 const MAX_PUBLIC_PLAYLIST_DETAILS = 24;
 const PUBLIC_PLAYLIST_TRACK_SAMPLE_LIMIT = 24;
@@ -124,29 +123,54 @@ function minimumProgramDurationSeconds(durationMinutes: number): number {
 const MAINSTREAM_DISCOVERY_STYLES = new Set<MusicGenreId>(["pop", "rock", "electronic", "hiphop", "rnb_soul"]);
 const DEFAULT_LOW_SHARE_STYLES = new Set<MusicGenreId>(["new_age", "world", "ethnic", "latin", "easy_listening", "dance", "bossa_nova"]);
 const STYLE_PLAYLIST_QUERY_TERMS: Readonly<Record<MusicGenreId, readonly string[]>> = {
-  pop: ["流行热歌 歌单", "华语流行 歌单", "欧美流行 歌单"],
-  rock: ["摇滚精选 歌单", "独立摇滚 歌单", "Alternative Rock 歌单"],
-  folk: ["民谣精选 歌单", "城市民谣 歌单", "Folk Acoustic 歌单"],
-  electronic: ["电子音乐精选 歌单", "House Techno 歌单", "Electronic Music 歌单"],
-  dance: ["舞曲律动 歌单", "Dance Pop 歌单", "Disco Groove 歌单"],
-  hiphop: ["说唱精选 歌单", "华语嘻哈 歌单", "Hip-Hop Rap 歌单"],
-  easy_listening: ["轻音乐精选 歌单", "舒缓纯音乐 歌单", "Easy Listening 歌单"],
-  jazz: ["爵士精选 歌单", "现代爵士 歌单", "Jazz Essentials 歌单"],
-  country: ["乡村音乐精选 歌单", "Country Music 歌单", "Modern Country 歌单"],
-  rnb_soul: ["R&B Soul 精选 歌单", "节奏布鲁斯 歌单", "Neo Soul 歌单"],
-  classical: ["古典音乐精选 歌单", "Classical Essentials 歌单", "室内乐 歌单"],
-  ethnic: ["民族音乐精选 歌单", "中国民族音乐 歌单", "传统民乐 歌单"],
-  britpop: ["英伦摇滚 歌单", "Britpop 歌单", "UK Indie 歌单"],
-  metal: ["金属乐精选 歌单", "Heavy Metal 歌单", "Alternative Metal 歌单"],
-  punk: ["朋克摇滚精选 歌单", "Punk Rock 歌单", "Pop Punk 歌单"],
-  blues: ["蓝调精选 歌单", "Blues Essentials 歌单", "Modern Blues 歌单"],
-  reggae: ["雷鬼精选 歌单", "Reggae Essentials 歌单", "Roots Reggae 歌单"],
-  world: ["世界音乐精选 歌单", "World Music 歌单", "全球音乐 歌单"],
-  latin: ["拉丁音乐精选 歌单", "Latin Pop 歌单", "Salsa 音乐 歌单"],
-  new_age: ["New Age 精选 歌单", "新世纪音乐 歌单", "氛围冥想音乐 歌单"],
-  gufeng: ["古风精选 歌单", "国风音乐 歌单", "中国风歌曲 歌单"],
-  post_rock: ["后摇精选 歌单", "Post-Rock 歌单", "氛围后摇 歌单"],
-  bossa_nova: ["Bossa Nova 精选 歌单", "巴萨诺瓦 歌单", "Brazilian Bossa 歌单"],
+  pop: ["流行热歌 歌单", "华语流行 歌单", "欧美流行 歌单", "当代流行好歌", "Pop Hits"],
+  rock: ["摇滚精选 歌单", "独立摇滚 歌单", "Alternative Rock 歌单", "吉他摇滚现场感", "Indie Rock Essentials"],
+  folk: ["民谣精选 歌单", "城市民谣 歌单", "Folk Acoustic 歌单", "木吉他唱作人", "民谣旅行歌单"],
+  electronic: ["电子音乐精选 歌单", "House Techno 歌单", "Electronic Music 歌单", "合成器电子乐", "Techno House Essentials"],
+  dance: ["舞曲律动 歌单", "Dance Pop 歌单", "Disco Groove 歌单", "舞池律动精选", "Disco Funk Dance"],
+  hiphop: ["说唱精选 歌单", "华语嘻哈 歌单", "Hip-Hop Rap 歌单", "说唱新声歌单", "Boom Bap Trap"],
+  easy_listening: ["轻音乐精选 歌单", "舒缓纯音乐 歌单", "Easy Listening 歌单", "安静器乐陪伴", "舒缓钢琴吉他"],
+  jazz: ["爵士精选 歌单", "现代爵士 歌单", "Jazz Essentials 歌单", "爵士咖啡馆", "Bebop Swing Collection"],
+  country: ["乡村音乐精选 歌单", "Country Music 歌单", "Modern Country 歌单", "纳什维尔唱作人", "Americana Country"],
+  rnb_soul: ["R&B Soul 精选 歌单", "节奏布鲁斯 歌单", "Neo Soul 歌单", "灵魂乐律动", "Contemporary R&B"],
+  classical: ["古典音乐精选 歌单", "Classical Essentials 歌单", "室内乐 歌单", "交响乐必听", "钢琴协奏曲精选"],
+  ethnic: ["民族音乐精选 歌单", "中国民族音乐 歌单", "传统民乐 歌单", "民族器乐采风", "中国传统器乐"],
+  britpop: ["英伦摇滚 歌单", "Britpop 歌单", "UK Indie 歌单", "曼彻斯特独立摇滚", "Manchester Alternative Bands"],
+  metal: ["金属乐精选 歌单", "Heavy Metal 歌单", "Alternative Metal 歌单", "重型吉他金属", "Metal Essentials"],
+  punk: ["朋克摇滚精选 歌单", "Punk Rock 歌单", "Pop Punk 歌单", "车库朋克乐队", "Post Punk Essentials"],
+  blues: ["蓝调精选 歌单", "Blues Essentials 歌单", "Modern Blues 歌单", "芝加哥蓝调", "Delta Blues Collection"],
+  reggae: ["雷鬼精选 歌单", "Reggae Essentials 歌单", "Roots Reggae 歌单", "牙买加阳光律动", "Dub Ska Reggae"],
+  world: ["世界音乐精选 歌单", "World Music 歌单", "全球音乐 歌单", "环球声音采集", "Global Folk Collection"],
+  latin: ["拉丁音乐精选 歌单", "Latin Pop 歌单", "Salsa 音乐 歌单", "Bachata Salsa 律动", "Reggaeton Latin Hits"],
+  new_age: ["New Age 精选 歌单", "新世纪音乐 歌单", "氛围冥想音乐 歌单", "自然疗愈器乐", "Ambient Meditation"],
+  gufeng: ["古风精选 歌单", "国风音乐 歌单", "中国风歌曲 歌单", "国风唱作精选", "古琴笛箫国风"],
+  post_rock: ["后摇精选 歌单", "Post-Rock 歌单", "氛围后摇 歌单", "器乐摇滚渐进铺陈", "Instrumental Post Rock"],
+  bossa_nova: ["Bossa Nova 精选 歌单", "巴萨诺瓦 歌单", "Brazilian Bossa 歌单", "里约午后爵士", "Samba Bossa Nova"],
+};
+const STYLE_PLAYLIST_EVIDENCE: Readonly<Record<MusicGenreId, RegExp>> = {
+  pop: /流行|pop|热歌|hits|city pop|k-?pop|j-?pop/i,
+  rock: /摇滚|rock|alternative|吉他乐队/i,
+  folk: /民谣|folk|acoustic|木吉他|唱作人/i,
+  electronic: /电子|电音|electronic|techno|house|synth|合成器/i,
+  dance: /舞曲|dance|disco|舞池|groove/i,
+  hiphop: /说唱|嘻哈|hip.?hop|rap|trap|boom bap/i,
+  easy_listening: /轻音乐|舒缓|easy listening|器乐|钢琴|吉他/i,
+  jazz: /爵士|jazz|bebop|swing/i,
+  country: /乡村|country|nashville|americana|纳什维尔/i,
+  rnb_soul: /r&b|rnb|soul|节奏布鲁斯|灵魂乐|neo soul/i,
+  classical: /古典|classical|交响|协奏曲|室内乐/i,
+  ethnic: /民族|民乐|传统器乐|ethnic/i,
+  britpop: /英伦|britpop|uk indie|british alternative|曼彻斯特/i,
+  metal: /金属|metal|重型吉他/i,
+  punk: /朋克|punk|车库摇滚/i,
+  blues: /蓝调|布鲁斯|blues/i,
+  reggae: /雷鬼|reggae|roots reggae|dub|ska|牙买加/i,
+  world: /世界音乐|world music|global folk|环球声音/i,
+  latin: /拉丁|latin|salsa|bachata|reggaeton/i,
+  new_age: /new age|新世纪|冥想|疗愈|ambient/i,
+  gufeng: /古风|国风|中国风|古琴|笛箫/i,
+  post_rock: /后摇|post.?rock|器乐摇滚|instrumental rock/i,
+  bossa_nova: /bossa nova|巴萨诺瓦|samba bossa|里约/i,
 };
 const MUSIC_GENRE_QUERY_ALIASES: Readonly<Record<MusicGenreId, readonly string[]>> = {
   pop: ["流行", "pop"],
@@ -624,6 +648,23 @@ function stylePublicPlaylistQueries(scenePreset: ScenePreset, styleTags: readonl
   return [...new Set(queries)];
 }
 
+function genreForPlaylistQuery(query: string, genres: readonly MusicGenreId[]): MusicGenreId | null {
+  const normalized = query.normalize("NFKC").toLocaleLowerCase();
+  for (const genre of genres) {
+    if (STYLE_PLAYLIST_QUERY_TERMS[genre].some((term) => normalized.includes(term.normalize("NFKC").toLocaleLowerCase()))) return genre;
+  }
+  return null;
+}
+
+function playlistHasStyleEvidence(value: unknown, genre: MusicGenreId): boolean {
+  if (!isRecord(value)) return false;
+  const text = [value.name, value.description]
+    .filter((field): field is string => typeof field === "string" && field.trim().length > 0)
+    .join(" ")
+    .normalize("NFKC");
+  return STYLE_PLAYLIST_EVIDENCE[genre].test(text);
+}
+
 function seededSampleScore(seed: string, ...parts: Array<string | number>): number {
   const digest = createHash("sha256").update([seed, ...parts].join(":"), "utf8").digest();
   return digest.readUInt32BE(0) / 0xffff_ffff;
@@ -831,29 +872,14 @@ async function loadListeningProfileSnapshot(providerId: "netease" | "qq", uid: s
 }
 
 function recentProgramTrackIds(snapshot: UnknownRecord | null): string[] {
-  if (!snapshot || !Array.isArray(snapshot.programHistory)) return [];
-  const ids = snapshot.programHistory
+  if (!snapshot) return [];
+  const playedIds = Array.isArray(snapshot.playedTracks)
+    ? snapshot.playedTracks.flatMap((entry) => isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [])
+    : [];
+  const legacyIds = Array.isArray(snapshot.programHistory) ? snapshot.programHistory
     .flatMap((entry) => isRecord(entry) && Array.isArray(entry.trackIds) ? entry.trackIds : [])
-    .filter((id): id is string => typeof id === "string" && id.trim().length > 0);
-  return [...new Set(ids)];
-}
-
-function nextProgramHistory(snapshot: UnknownRecord | null, program: {
-  createdAt: string;
-  scenePreset: ScenePreset;
-  musicGenres: readonly MusicGenreId[];
-  trackIds: readonly string[];
-}): UnknownRecord[] {
-  const previous = snapshot && Array.isArray(snapshot.programHistory) ? snapshot.programHistory.filter(isRecord) : [];
-  return [
-    {
-      createdAt: program.createdAt,
-      scenePreset: program.scenePreset,
-      musicGenres: [...program.musicGenres],
-      trackIds: [...program.trackIds],
-    },
-    ...previous,
-  ].slice(0, MAX_PROFILE_HISTORY_PROGRAMS);
+    .filter((id): id is string => typeof id === "string" && id.trim().length > 0) : [];
+  return [...new Set([...playedIds, ...legacyIds])];
 }
 
 async function persistListeningProfileSnapshot(
@@ -875,22 +901,35 @@ async function persistListeningProfileSnapshot(
   await rename(temporary, path);
 }
 
-async function persistProgramHistorySnapshot(
+async function persistPlayedTrackSnapshot(
   providerId: "netease" | "qq",
   uid: string | undefined,
   preferences: UnknownRecord | undefined,
   spec: ProgramSpec,
-  items: ProgramRundownItem[],
+  track: ProgramRundownItem | undefined,
+  programId: string,
 ): Promise<void> {
-  if (!uid || !preferences || items.length === 0) return;
-  const previousSnapshot = isRecord(preferences.previousSnapshot) ? preferences.previousSnapshot : null;
-  await persistListeningProfileSnapshot(providerId, uid, {
-    programHistory: nextProgramHistory(previousSnapshot, {
-      createdAt: nowIso(),
+  if (!uid || !preferences || !track) return;
+  const latestSnapshot = await loadListeningProfileSnapshot(providerId, uid);
+  const previousSnapshot = latestSnapshot ?? (isRecord(preferences.previousSnapshot) ? preferences.previousSnapshot : null);
+  const previousPlayed = previousSnapshot && Array.isArray(previousSnapshot.playedTracks)
+    ? previousSnapshot.playedTracks.filter(isRecord)
+    : [];
+  const playedTracks = [
+    {
+      id: track.id,
+      title: track.title,
+      artist: track.artist,
+      playedAt: nowIso(),
+      programId,
       scenePreset: spec.scenePreset,
       musicGenres: programStyleTags(spec.scenePreset, spec.musicGenres ?? []),
-      trackIds: items.map((track) => track.id),
-    }),
+    },
+    ...previousPlayed.filter((entry) => entry.id !== track.id),
+  ];
+  await persistListeningProfileSnapshot(providerId, uid, {
+    programHistory: previousSnapshot && Array.isArray(previousSnapshot.programHistory) ? previousSnapshot.programHistory : [],
+    playedTracks,
     counts: isRecord(preferences.counts) ? preferences.counts : {},
     favoriteArtists: Array.isArray(preferences.favoriteArtists) ? preferences.favoriteArtists : [],
     profile: isRecord(preferences.profile) ? preferences.profile : {},
@@ -2313,8 +2352,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const playlistSearchGroups = playlistSearchResults.flatMap((task, index) => {
       if (task.status !== "fulfilled" || !isRecord(task.value) || !Array.isArray(task.value.playlists)) return [];
       const query = publicPlaylistQueries[index] ?? "";
-      const queryTags = inferStyleTags({ searchQuery: query });
-      return [{ query, styleTags: queryTags.length > 0 ? queryTags : sceneStyleTags, playlists: task.value.playlists }];
+      const queryGenre = genreForPlaylistQuery(query, sceneStyleTags);
+      const queryTags = queryGenre ? [queryGenre] : inferStyleTags({ searchQuery: query });
+      return [{ query, styleTags: queryTags.length > 0 ? queryTags : sceneStyleTags, playlists: task.value.playlists, queryGenre }];
     }).sort((left, right) => seededSampleScore(playlistSamplingSeed, left.query) - seededSampleScore(playlistSamplingSeed, right.query));
     const maxPlaylistSearchLength = Math.max(0, ...playlistSearchGroups.map((group) => group.playlists.length));
     for (let playlistIndex = 0; playlistIndex < maxPlaylistSearchLength; playlistIndex += 1) {
@@ -2322,6 +2362,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         const playlist = group.playlists[playlistIndex];
         if (!isRecord(playlist) || typeof playlist.id !== "string" || seenPublicPlaylistIds.has(playlist.id)) continue;
         if (isDisallowedRecommendationCandidate(playlist)) continue;
+        if (recommendationMode === "genre" && (!group.queryGenre || !playlistHasStyleEvidence(playlist, group.queryGenre))) continue;
         seenPublicPlaylistIds.add(playlist.id);
         publicPlaylistSeeds.push({ id: playlist.id, query: group.query, styleTags: group.styleTags });
       }
@@ -2334,6 +2375,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       if (task.status !== "fulfilled" || !isRecord(task.value) || !Array.isArray(task.value.tracks)) return [];
       const playlist = publicPlaylistSeeds[index];
       if (!playlist) return [];
+      if (recommendationMode === "genre" && (playlist.styleTags.length !== 1 || !playlistHasStyleEvidence(task.value, playlist.styleTags[0]!))) return [];
       return task.value.tracks
         .map((song, trackIndex) => isRecord(song) ? {
           ...song,
@@ -2420,9 +2462,11 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const atmosphereExploration = isAtmosphereExploration(recommendationMode, familiarityRatio);
     const eraRanked = atmosphereExploration ? rerankAtmosphereExploration(decision.ranked) : decision.ranked;
     const likedTrackIds = new Set(likedIds.map(String));
-    const eligibleRanked = eraRanked.filter((entry) =>
-      likedTrackIds.has(String(entry.candidate.id)) || !isExplorationVersionCandidate(entry.candidate),
-    );
+    const playedTrackIds = new Set(previousProgramIds);
+    const eligibleRanked = eraRanked.filter((entry) => {
+      const id = String(entry.candidate.id);
+      return likedTrackIds.has(id) || (!playedTrackIds.has(id) && !isExplorationVersionCandidate(entry.candidate));
+    });
     const preferUniqueArtists = <T extends { candidate: object }>(entries: T[]): T[] => {
       const unique: T[] = [];
       const repeats: T[] = [];
@@ -2553,6 +2597,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     };
     await persistListeningProfileSnapshot(providerId, uid, {
       programHistory: Array.isArray(previousSnapshot?.programHistory) ? previousSnapshot.programHistory : [],
+      playedTracks: Array.isArray(previousSnapshot?.playedTracks) ? previousSnapshot.playedTracks : [],
       counts: result.counts,
       favoriteArtists,
       profile,
@@ -2585,11 +2630,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const provider = providerId === "qq" ? await requireQq() : await requireNetease();
     if (typeof provider.songUrl !== "function") return [];
     const planned = Array.isArray(preferences.programPlan) ? preferences.programPlan : [];
-    const previousProgramTrackIds = new Set(
-      Array.isArray(preferences.previousProgramTrackIds)
-        ? preferences.previousProgramTrackIds.filter((id): id is string => typeof id === "string")
-        : [],
-    );
     const playable: ProgramRundownItem[] = [];
     const usedIds = new Set<string>();
     const measuredEnergyById = new Map<string, number>();
@@ -2666,17 +2706,15 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const mode = recommendationModeForSpec(spec);
     const atmosphereExploration = isAtmosphereExploration(mode, requestedRatio);
     const explicitMusicStyles = mode === "genre";
-    const profileRecord = isRecord(preferences.listenerProfile) ? preferences.listenerProfile : {};
-    const currentStyleAffinities = selectedStyleAffinities(profileRecord, [...sceneStyleSet] as MusicGenreId[]);
-    const hasStyleFamiliarAnchors = currentStyleAffinities.some((affinity) => Array.isArray(affinity.familiarSongs) && affinity.familiarSongs.length > 0);
     const fitsProgramStyle = (track: ProgramRundownItem): boolean => {
       const tags = track.styleTags ?? [];
       if (tags.length > 0) return tags.some((tag) => sceneStyleSet.has(tag as MusicGenreId));
+      if (explicitMusicStyles) return false;
       return track.reasons.some((reason) => /scene (?:style|query style|search) reward|场景|氛围/.test(reason));
     };
     const familiarFitShare = familiar.length === 0 ? 0 : familiar.filter(fitsProgramStyle).length / familiar.length;
     const discoveryFitShare = discovery.length === 0 ? 0 : discovery.filter(fitsProgramStyle).length / discovery.length;
-    const strictSelectedStyle = explicitMusicStyles && discoveryFitShare >= 0.35;
+    const hasStyleFamiliarAnchors = familiar.some(fitsProgramStyle);
     const targetRatio = explicitMusicStyles && !hasStyleFamiliarAnchors && discoveryFitShare >= 0.35
       ? 0
       : discoveryFitShare >= 0.35 && familiarFitShare < 0.2
@@ -2689,8 +2727,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       const selectedStyleCounts = new Map([...sceneStyleSet].map((style) => [style, 0]));
       const lowShareStyleLimit = atmosphereExploration ? Math.max(1, Math.floor(trackCount * 0.2)) : Number.POSITIVE_INFINITY;
       let lowShareStyleCount = 0;
-      const maxPreviousRepeats = Math.floor(trackCount * 0.1);
-      let previousRepeats = 0;
       const matchingProgramStyles = (track: ProgramRundownItem): MusicGenreId[] => [
         ...new Set((track.styleTags ?? []).filter((tag): tag is MusicGenreId => sceneStyleSet.has(tag as MusicGenreId))),
       ];
@@ -2706,10 +2742,10 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         return (selectedStyleCounts.get(style) ?? 0) === lowest;
       };
       const take = (pool: ProgramRundownItem[], uniqueArtist: boolean, allowExplorationFallback: boolean): ProgramRundownItem | null => {
+        const requireStyleMatch = explicitMusicStyles;
         const canTake = (track: ProgramRundownItem): boolean =>
           !selectedIds.has(track.id)
           && (!uniqueArtist || !usedArtists.has(track.artist.toLocaleLowerCase()))
-          && (!previousProgramTrackIds.has(track.id) || previousRepeats < maxPreviousRepeats)
           && (
             allowExplorationFallback
             || !atmosphereExploration
@@ -2721,14 +2757,13 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           );
         const item = pool.find((track) => sceneStyleSet.size > 1 && fitsProgramStyle(track) && fillsUnderusedStyle(track) && canTake(track))
           ?? pool.find((track) => fitsProgramStyle(track) && canTake(track))
-          ?? (strictSelectedStyle ? null : pool.find(canTake));
+          ?? (requireStyleMatch ? null : pool.find(canTake));
         if (!item) return null;
         selectedIds.add(item.id);
         usedArtists.add(item.artist.toLocaleLowerCase());
         const style = leastRepresentedMatch(item);
         if (style) selectedStyleCounts.set(style, (selectedStyleCounts.get(style) ?? 0) + 1);
         if (atmosphereExploration && isLowShareDefaultStyle(item)) lowShareStyleCount += 1;
-        if (previousProgramTrackIds.has(item.id)) previousRepeats += 1;
         return item;
       };
       for (let index = 0; index < trackCount; index += 1) {
@@ -4350,11 +4385,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         let listenerProfile: ProgramListenerProfile | undefined;
         let accountUid: string | undefined;
         let accountPreferences: UnknownRecord | undefined;
-        let accountProviderId: "netease" | "qq" | undefined;
         if (accountSource) {
           const signal = createController!.signal;
           const providerId = qqApiSource ? "qq" : "netease";
-          accountProviderId = providerId;
           const preferences = await loadAccountPreferences(providerId, spec.scenePreset, signal, spec.familiarityRatio ?? 40, spec.musicGenres ?? [], recommendationModeForSpec(spec));
           updateCreateProgress(1);
           accountPreferences = preferences;
@@ -4391,7 +4424,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               artifact.hostScriptsFinalized = true;
               artifact.hostAudio.clear();
             }
-            await persistProgramHistorySnapshot(accountProviderId!, accountUid, accountPreferences, spec, locked);
           } catch (error) {
             if (isHostScriptQualityFailure(error)) {
               const locked = createFinalHostScriptVersion(spec, plannedAccountRundown);
@@ -4402,7 +4434,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                 artifact.hostScriptsFinalized = true;
                 artifact.hostAudio.clear();
               }
-              await persistProgramHistorySnapshot(accountProviderId!, accountUid, accountPreferences, spec, locked);
             } else if (error instanceof ServiceError && error.code === "HOST_PROVIDER_ERROR") {
               const artifact = accountRundowns.get(state.id);
               if (artifact) {
@@ -4649,23 +4680,25 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                   if (typeof provider.searchPlaylists !== "function" || typeof provider.playlistDetail !== "function") {
                     throw new ServiceError("MUSIC_SEARCH_UNAVAILABLE", 503, `当前${providerId === "qq" ? "QQ 音乐" : "网易云"}连接不支持风格歌单搜索。`);
                   }
-                  const playlistQueries = requestedGenreTags.flatMap((genre) => STYLE_PLAYLIST_QUERY_TERMS[genre]);
-                  const playlistResults = await Promise.allSettled(playlistQueries.map((query) => invokeAccount(providerId, () => provider.searchPlaylists!(query, { limit: PUBLIC_PLAYLIST_SEARCH_LIMIT, offset: 0, signal: controller.signal }))));
+                  const playlistQueries = requestedGenreTags.flatMap((genre) => STYLE_PLAYLIST_QUERY_TERMS[genre].map((query) => ({ genre, query })));
+                  const playlistResults = await Promise.allSettled(playlistQueries.map(({ query }) => invokeAccount(providerId, () => provider.searchPlaylists!(query, { limit: PUBLIC_PLAYLIST_SEARCH_LIMIT, offset: 0, signal: controller.signal }))));
                   const seenPlaylistIds = new Set<string>();
                   const playlistSeeds = playlistResults.flatMap((task, index) => {
                     const result = task.status === "fulfilled" ? task.value : null;
                     if (!isRecord(result) || !Array.isArray(result.playlists)) return [];
-                    const query = playlistQueries[index] ?? searchAdjustment.query;
+                    const queryEntry = playlistQueries[index];
+                    if (!queryEntry) return [];
                     return result.playlists.flatMap((playlist) => {
-                      if (!isRecord(playlist) || typeof playlist.id !== "string" || seenPlaylistIds.has(playlist.id) || isDisallowedRecommendationCandidate(playlist)) return [];
+                      if (!isRecord(playlist) || typeof playlist.id !== "string" || seenPlaylistIds.has(playlist.id) || isDisallowedRecommendationCandidate(playlist) || !playlistHasStyleEvidence(playlist, queryEntry.genre)) return [];
                       seenPlaylistIds.add(playlist.id);
-                      return [{ id: playlist.id, query }];
+                      return [{ id: playlist.id, query: queryEntry.query, genre: queryEntry.genre }];
                     });
                   }).slice(0, MAX_PUBLIC_PLAYLIST_DETAILS);
                   const playlistDetails = await Promise.all(playlistSeeds.map((playlist) => invokeAccount(providerId, () => provider.playlistDetail!(playlist.id, controller.signal))));
                   searchSongs = playlistDetails.flatMap((detail, index) => {
-                    if (!isRecord(detail) || !Array.isArray(detail.tracks)) return [];
-                    return detail.tracks.map((track) => withSearchContext(track, playlistSeeds[index]?.query ?? searchAdjustment.query, requestedGenreTags));
+                    const seed = playlistSeeds[index];
+                    if (!seed || !isRecord(detail) || !Array.isArray(detail.tracks) || !playlistHasStyleEvidence(detail, seed.genre)) return [];
+                    return detail.tracks.map((track) => withSearchContext(track, seed.query, [seed.genre]));
                   });
                 } else {
                   if (typeof provider.search !== "function") throw new ServiceError("MUSIC_SEARCH_UNAVAILABLE", 503, `当前${providerId === "qq" ? "QQ 音乐" : "网易云"}连接不支持搜索歌曲。`);
@@ -4766,8 +4799,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             artifact.hostScriptsPending = false;
             artifact.hostScriptsFinalized = true;
             artifact.revision += 1;
-            const providerId = lockedState.spec.sourceId === "qq_music" && qqApiEnabled ? "qq" : "netease";
-            await persistProgramHistorySnapshot(providerId, artifact.accountUid, artifact.preferences, lockedState.spec, locked);
             planOperationResults.set(operationKeyValue, { action: "regenerate-host", baseRevision, revision: artifact.revision });
             while (planOperationResults.size > 256) {
               const oldest = planOperationResults.keys().next().value;
@@ -4898,6 +4929,11 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           }
           await stopDesktopForTerminal(lockedState, nextState);
           scheduleProgramDeadline(nextState);
+          if (accountWriteSource && ACTIVE_STATUSES.has(nextState.status)) {
+            const artifact = accountRundowns.get(programId);
+            const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
+            await persistPlayedTrackSnapshot(providerId, artifact?.accountUid, artifact?.preferences, lockedState.spec, artifact?.items[artifact.index], programId).catch(() => undefined);
+          }
           if (operationId) rememberOperationResult(operationKey(programId, operationId), "confirm", nextState);
           return { state: nextState, replayed: false };
         }).finally(() => {
@@ -4971,6 +5007,10 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           const nextState = await invokeEngine(exhaustedNetease ? "stop" : action, [{ programId, operationId, generation: action === "stop" ? lockedState.generation : generation }]);
           if (!nextState) throw new ServiceError("ENGINE_INVALID_STATE", 500, publicMessage("INTERNAL_ERROR"));
           if (exactNeteaseTargetIndex !== null && exactNetease && ACTIVE_STATUSES.has(nextState.status)) exactNetease.index = exactNeteaseTargetIndex;
+          if (exactNeteaseTargetIndex !== null && exactNetease && ACTIVE_STATUSES.has(nextState.status)) {
+            const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
+            await persistPlayedTrackSnapshot(providerId, exactNetease.accountUid, exactNetease.preferences, lockedState.spec, exactNetease.items[exactNeteaseTargetIndex], programId).catch(() => undefined);
+          }
           await stopDesktopForTerminal(lockedState, nextState);
           rememberOperationResult(key, action, nextState, generation);
           return { state: nextState, replayed: false };

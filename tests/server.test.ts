@@ -1,7 +1,7 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1223,6 +1223,59 @@ test("explicit Britpop recommendations use style playlists instead of a British 
   assert.ok(program.rundown.every((track: { id: string }) => track.id.startsWith("britpop-playlist-")));
 });
 
+test("explicit genre recommendations reject unrelated fuzzy playlist results and use varied verified queries", async (context) => {
+  const reggaeSongs = Array.from({ length: 12 }, (_, index) => ({
+    id: `verified-reggae-${index + 1}`,
+    title: `Island Groove ${index + 1}`,
+    artists: [{ id: `reggae-artist-${index + 1}`, name: `Reggae Artist ${index + 1}` }],
+    durationMs: 180_000,
+  }));
+  const playlistQueries: string[] = [];
+  const detailIds: string[] = [];
+  const token = "verified-reggae-playlists-token";
+  const baseProvider = planningProvider(reggaeSongs, []);
+  const service = await createLocalService({
+    port: 0,
+    localControlToken: token,
+    neteaseProvider: {
+      ...baseProvider,
+      search() { return { songs: [], total: 0 }; },
+      searchPlaylists(keyword: string) {
+        playlistQueries.push(keyword);
+        return {
+          total: 2,
+          playlists: [
+            { id: `unrelated-${playlistQueries.length}`, name: "华语流行情歌热榜", description: "热门抒情歌曲", trackCount: reggaeSongs.length },
+            { id: `reggae-${playlistQueries.length}`, name: "牙买加 Reggae 与 Dub 律动", description: "Roots reggae and ska collection", trackCount: reggaeSongs.length },
+          ],
+        };
+      },
+      playlistDetail(id: string) {
+        detailIds.push(id);
+        return { id, name: "牙买加 Reggae 与 Dub 律动", description: "Roots reggae and ska collection", trackCount: reggaeSongs.length, tracks: reggaeSongs };
+      },
+    },
+    hostProvider: groundedHostProvider(),
+    ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+
+  const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-one-radio-control-token": token },
+    body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "party", sceneDescription: "", hostDensity: "low", energyCurve: "high", avoid: [], familiarityRatio: 10, recommendationMode: "genre", musicGenres: ["reggae"] } }),
+  });
+
+  assert.equal(response.status, 201, JSON.stringify(await response.clone().json()));
+  const program = (await json(response)).program;
+  assert.ok(playlistQueries.length >= 5);
+  assert.ok(playlistQueries.some((query) => /牙买加|Dub|Ska/i.test(query)));
+  assert.ok(detailIds.length > 0);
+  assert.ok(detailIds.every((id) => id.startsWith("reggae-")));
+  assert.ok(program.rundown.every((track: { id: string; styleTags?: string[] }) => track.id.startsWith("verified-reggae-") && track.styleTags?.includes("reggae")));
+});
+
 test("NetEase atmosphere exploration searches party playlists and samples different style pools", async (context) => {
   const likedSongs = Array.from({ length: 8 }, (_, index) => ({
     id: String(18_000 + index),
@@ -1360,18 +1413,20 @@ test("NetEase atmosphere exploration prefers mainstream public-playlist songs ov
   assert.ok(program.rundown.every((track: { title: string }) => track.title.startsWith("榜单运动新歌")));
 });
 
-test("NetEase planning keeps recent generated-program repeats under ten percent when enough fresh songs exist", async (context) => {
+test("NetEase planning excludes played exploration tracks but still permits liked replays", async (context) => {
   const previousSongs = Array.from({ length: 20 }, (_, index) => ({
     id: String(24_000 + index),
     title: `上次节目歌曲 ${index + 1}`,
     artists: [{ id: String(25_000 + index), name: `历史歌手 ${index + 1}` }],
     durationMs: 60_000,
+    styleTags: ["electronic"],
   }));
   const freshSongs = Array.from({ length: 30 }, (_, index) => ({
     id: String(26_000 + index),
     title: `新鲜派对歌曲 ${index + 1}`,
     artists: [{ id: String(27_000 + index), name: `新歌手 ${index + 1}` }],
     durationMs: 60_000,
+    styleTags: ["electronic"],
   }));
   const profileDir = mkdtempSync(join(tmpdir(), "one-radio-profile-"));
   const previousProfileDir = process.env.ONE_RADIO_PROFILE_DIR;
@@ -1385,14 +1440,14 @@ test("NetEase planning keeps recent generated-program repeats under ten percent 
   mkdirSync(profileDir, { recursive: true });
   writeFileSync(join(profileDir, `netease-${accountKey}.json`), JSON.stringify({
     version: 1,
-    programHistory: [{ createdAt: "2026-08-25T00:00:00.000Z", scenePreset: "party", musicGenres: ["electronic"], trackIds: previousSongs.map((song) => song.id) }],
+    playedTracks: previousSongs.map((song, index) => ({ id: song.id, title: song.title, artist: song.artists[0]!.name, playedAt: `2026-08-${String(index + 1).padStart(2, "0")}T00:00:00.000Z` })),
   }));
 
   const token = "recent-repeat-limit-token";
   const service = await createLocalService({
     port: 0,
     localControlToken: token,
-    neteaseProvider: planningProvider([...previousSongs, ...freshSongs], []),
+    neteaseProvider: planningProvider([...previousSongs, ...freshSongs], [previousSongs[0]!.id]),
     hostProvider: groundedHostProvider(),
     ttsProvider: readyTtsProvider,
   });
@@ -1402,15 +1457,15 @@ test("NetEase planning keeps recent generated-program repeats under ten percent 
   const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-one-radio-control-token": token },
-    body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "party", sceneDescription: "", hostDensity: "low", energyCurve: "high", avoid: [], familiarityRatio: 0, musicGenres: ["electronic"] } }),
+    body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "party", sceneDescription: "", hostDensity: "low", energyCurve: "high", avoid: [], familiarityRatio: 10, musicGenres: ["electronic"] } }),
   });
 
   assert.equal(response.status, 201);
   const program = (await json(response)).program;
   const previousIds = new Set(previousSongs.map((song) => song.id));
-  const repeatCount = program.rundown.filter((track: { id: string }) => previousIds.has(track.id)).length;
   assert.ok(program.rundown.length >= 10);
-  assert.ok(repeatCount <= Math.floor(program.rundown.length * 0.1));
+  assert.ok(program.rundown.some((track: { id: string }) => track.id === previousSongs[0]!.id));
+  assert.ok(program.rundown.every((track: { id: string }) => !previousIds.has(track.id) || track.id === previousSongs[0]!.id));
 });
 
 test("music atmosphere changes the account rundown arc without changing the candidate pool", async (context) => {
@@ -1818,6 +1873,7 @@ test("NetEase planning filters DJ and low-quality Chinese remix songs from the f
     title: `清洁电子 ${index + 1}`,
     artists: [{ id: `clean-artist-${index + 1}`, name: `清洁制作人 ${index + 1}` }],
     durationMs: 360_000,
+    styleTags: ["electronic"],
   }));
   const token = "low-quality-remix-filter-token";
   const service = await createLocalService({
@@ -2557,6 +2613,9 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   assert.ok(first.rundown.every((track: { hostMoment?: string; hostScript?: { text?: string } }) => !track.hostMoment || Boolean(track.hostScript?.text)));
   assert.equal(ttsCalls, 0, "draft creation must not synthesize speech before confirmation");
   assert.ok(first.listenerProfile.favoriteArtists.length > 0);
+  const profilePath = join(SERVER_TEST_PROFILE_DIR, `netease-${createHash("sha256").update("netease:7").digest("hex").slice(0, 24)}.json`);
+  const draftProfile = JSON.parse(readFileSync(profilePath, "utf8"));
+  assert.deepEqual(draftProfile.playedTracks, [], "generating a rundown must not mark every candidate as played");
   const originalIds = first.rundown.map((track: { id: string }) => track.id);
   const invalidReorder = await post(`/programs/${first.id}/reorder`, { generation: first.generation, planRevision: 0, operationId: "plan-invalid", trackIds: [originalIds[0], originalIds[0]] });
   assert.equal(invalidReorder.status, 400);
@@ -2604,6 +2663,8 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   assert.equal(confirmedResponse.status, 200);
   const confirmed = (await json(confirmedResponse)).program;
   assert.equal(confirmed.status, "on_air");
+  const confirmedProfile = JSON.parse(readFileSync(profilePath, "utf8"));
+  assert.equal(confirmedProfile.playedTracks[0]?.id, confirmed.currentTrack.id, "the first track is recorded when playback starts");
   assert.equal(confirmed.playlist.status, "ready");
   assert.equal(confirmed.playlist.name, first.plannedPlaylistName);
   assert.equal(confirmed.playlist.trackCount, playlistAdds[0]?.trackIds.length);
@@ -2657,7 +2718,12 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   assert.equal(playlistNamingCalls, 0);
   assert.match(playlistCreates[0] ?? "", /^AI电台-放松-[\p{Script=Han}]{3,6}$/u);
 
-  const stopped = (await json(await post(`/programs/${first.id}/stop`, { generation: confirmed.generation, operationId: "netease-stop-1" }))).program;
+  const advanced = (await json(await post(`/programs/${first.id}/next`, { generation: confirmed.generation, operationId: "netease-next-1" }))).program;
+  assert.notEqual(advanced.currentTrack.id, confirmed.currentTrack.id);
+  const advancedProfile = JSON.parse(readFileSync(profilePath, "utf8"));
+  assert.deepEqual(advancedProfile.playedTracks.slice(0, 2).map((track: { id: string }) => track.id), [advanced.currentTrack.id, confirmed.currentTrack.id]);
+
+  const stopped = (await json(await post(`/programs/${first.id}/stop`, { generation: advanced.generation, operationId: "netease-stop-1" }))).program;
   assert.equal(stopped.status, "stopped");
   assert.equal(stopped.playlist.status, "deleted");
   assert.equal(stopped.playlist.retention, "temporary");
