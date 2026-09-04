@@ -25,6 +25,7 @@ from typing import Any
 from qqmusic_api import Client, Credential
 from qqmusic_api.core.exceptions import BaseApiException
 from qqmusic_api.models.login import QR, QRLoginType
+from qqmusic_api.modules.search import SearchType
 from qqmusic_api.modules.song import SongFileInfo, SongFileType
 
 
@@ -463,6 +464,21 @@ class QqMusicService:
         songs = [_serialize_song(song) for song in (getattr(result, "song", None) or [])]
         return {"songs": songs, "total": len(songs)}
 
+    async def search_playlists(self, keyword: str, limit: int = 12, offset: int = 0) -> dict[str, Any]:
+        if not keyword.strip():
+            raise ValueError("keyword is required")
+        await self.require_auth()
+        page = offset // max(1, limit) + 1
+        result = await self.client.search.search_by_type(
+            keyword.strip(), search_type=SearchType.SONGLIST, num=limit, page=page
+        )
+        playlists = [
+            item
+            for item in (_serialize_playlist(playlist) for playlist in (getattr(result, "songlist", None) or []))
+            if item["id"]
+        ]
+        return {"playlists": playlists, "total": len(playlists)}
+
     async def playlists(self, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         credential = await self.require_auth()
         created = await self.client.user.get_created_songlist(credential.musicid, credential=credential)
@@ -844,6 +860,12 @@ async def _handle_client(service: QqMusicService, reader: asyncio.StreamReader, 
             payload = await service.preferences()
         elif method == "GET" and path == "/search":
             payload = await service.search((query.get("keyword") or [""])[0], int((query.get("limit") or [20])[0]), int((query.get("offset") or [0])[0]))
+        elif method == "GET" and path == "/search/playlists":
+            payload = await service.search_playlists(
+                (query.get("keyword") or [""])[0],
+                int((query.get("limit") or [12])[0]),
+                int((query.get("offset") or [0])[0]),
+            )
         elif method == "GET" and path == "/playlists":
             payload = await service.playlists(
                 int((query.get("limit") or [100])[0]),

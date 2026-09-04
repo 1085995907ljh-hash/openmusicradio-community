@@ -166,6 +166,7 @@ test("QQ profile, history contract, recommendation, and playlist operations are 
     const url = new URL(String(input));
     paths.push(`${init?.method ?? "GET"} ${url.pathname}${url.search}`);
     if (url.pathname === "/search") return jsonResponse({ songs: [song], total: 1 });
+    if (url.pathname === "/search/playlists") return jsonResponse({ playlists: [{ id: "3", tid: "3", dirId: "30", name: "摇滚精选", description: null, trackCount: 1, ownerUid: "88" }], total: 1 });
     if (url.pathname === "/playlists") return jsonResponse({ playlists: [{ id: "3", tid: "3", dirId: "30", name: "学习", description: null, trackCount: 1, ownerUid: "88" }], more: false });
     if (url.pathname === "/liked") return jsonResponse({ songs: [song] });
     if (url.pathname === "/recent") return jsonResponse({ records: [{ song, playedAt: 1234 }] });
@@ -201,6 +202,7 @@ test("QQ profile, history contract, recommendation, and playlist operations are 
   });
 
   assert.deepEqual((await target.search("中文 摇滚", { limit: 5, offset: 10 })).songs[0], song);
+  assert.deepEqual(await target.searchPlaylists("摇滚精选 歌单", { limit: 4, offset: 8 }), { playlists: [{ id: "3", tid: "3", dirId: "30", name: "摇滚精选", description: null, trackCount: 1, ownerUid: "88" }], total: 1 });
   assert.deepEqual(await target.userPlaylists("88"), { playlists: [{ id: "3", tid: "3", dirId: "30", name: "学习", description: null, trackCount: 1, ownerUid: "88" }], more: false });
   assert.deepEqual(await target.likedSongIds("88"), ["42"]);
   assert.deepEqual(await target.likedSongs({ limit: 500 }), [song]);
@@ -225,6 +227,7 @@ test("QQ profile, history contract, recommendation, and playlist operations are 
   assert.deepEqual(await target.setSongLiked(42, false, song.songType, undefined, { expectedUid: "88" }), { trackId: "42", liked: false });
   assert.deepEqual(unlikeSongBody, { liked: false, songType: 0, expectedUid: "88" });
   assert.match(paths.find((path) => path.startsWith("GET /search")) ?? "", /keyword=%E4%B8%AD%E6%96%87\+%E6%91%87%E6%BB%9A/);
+  assert.match(paths.find((path) => path.startsWith("GET /search/playlists")) ?? "", /keyword=%E6%91%87%E6%BB%9A%E7%B2%BE%E9%80%89\+%E6%AD%8C%E5%8D%95/);
   assert.ok(paths.includes("GET /recent?limit=100"));
   assert.ok(paths.includes("GET /liked?limit=500"));
   assert.ok(paths.includes("GET /history?period=week"));
@@ -298,6 +301,7 @@ test("malformed sidecar payloads and invalid user input fail closed", async () =
   });
   await assert.rejects(target.search("test"), (error: unknown) => error instanceof ProviderError && error.code === "invalid_response");
   await assert.rejects(target.search(""), (error: unknown) => error instanceof ProviderError && error.code === "invalid_input");
+  await assert.rejects(target.searchPlaylists(""), (error: unknown) => error instanceof ProviderError && error.code === "invalid_input");
   await assert.rejects(target.addSongsToPlaylist(1, [1, 1], undefined, { dirId: 2, expectedUid: "88" }), (error: unknown) => error instanceof ProviderError && error.code === "invalid_input");
   await assert.rejects(target.addSongsToPlaylist(1, [1], undefined), (error: unknown) => error instanceof ProviderError && error.code === "invalid_input");
   await assert.rejects(target.setSongLiked("mid42", true, 0, undefined, { expectedUid: "88" }), (error: unknown) => error instanceof ProviderError && error.code === "invalid_input");

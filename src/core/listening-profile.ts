@@ -49,10 +49,10 @@ const STYLE_RULES: ReadonlyArray<readonly [string, RegExp]> = [
   ["easy_listening", /轻音乐|easy.?listening|lo-?fi|lofi|低保真|纯音乐|instrumental|piano/i],
   ["jazz", /爵士|jazz|swing|bebop/i],
   ["country", /乡村|country/i],
-  ["rnb_soul", /r&b|rnb|节奏布鲁斯|灵魂|soul|neo.?soul|放克|funk/i],
+  ["rnb_soul", /r&b|rnb(?:_soul)?|节奏布鲁斯|灵魂|soul|neo.?soul|放克|funk/i],
   ["classical", /古典|classical|piano|orchestra/i],
   ["ethnic", /民族|中国传统|民族音乐|ethnic|蒙古|藏族|彝族|陕北民歌/i],
-  ["britpop", /英伦|britpop|british/i],
+  ["britpop", /英伦|britpop|uk indie/i],
   ["metal", /金属|metal/i],
   ["punk", /朋克|punk/i],
   ["blues", /蓝调|布鲁斯|blues/i],
@@ -60,7 +60,7 @@ const STYLE_RULES: ReadonlyArray<readonly [string, RegExp]> = [
   ["world", /世界音乐|world music|加勒比|印度|巴西|泰国/i],
   ["latin", /拉丁|latin|salsa/i],
   ["new_age", /new.?age|新世纪|氛围|ambient|drone|冥想|禅修/i],
-  ["gufeng", /古风|国风|中国风/i],
+  ["gufeng", /古风|国风|中国风|gufeng/i],
   ["post_rock", /后摇|post.?rock/i],
   ["bossa_nova", /bossa.?nova|巴萨诺瓦/i],
 ];
@@ -78,7 +78,12 @@ export function buildListeningProfile(input: ListeningProfileInput): ListeningPr
   const playlistSongs = input.playlistSongs ?? [];
   const addSong = (song: ListeningProfileSong, source: string): void => {
     if (!song.id || !song.title) return;
-    const clean = { id: song.id, title: song.title, artists: [...song.artists].filter(Boolean) };
+    const clean = {
+      id: song.id,
+      title: song.title,
+      artists: [...song.artists].filter(Boolean),
+      ...(song.tags?.length ? { tags: [...song.tags].filter(Boolean) } : {}),
+    };
     uniqueSongs.set(song.id, clean);
     const tags = inferSongTags(clean);
     if (tags.length === 0) return;
@@ -95,7 +100,7 @@ export function buildListeningProfile(input: ListeningProfileInput): ListeningPr
   for (const song of input.historySongs) addSong(song, "history");
   for (const song of playlistSongs) addSong(song, "playlist");
   const topSongs = [...uniqueSongs.values()].slice(0, 20);
-  const searchable = [...input.playlists, ...topSongs.flatMap((song) => [song.title, ...song.artists])].join(" ");
+  const searchable = input.playlists.join(" ");
   const inferredThemes = THEME_RULES.filter(([, , rule]) => rule.test(searchable)).map(([theme]) => theme);
   const styleTags = [...new Set([
     ...THEME_RULES.filter(([, , rule]) => rule.test(searchable)).map(([, tag]) => tag),
@@ -123,7 +128,7 @@ export function buildListeningProfile(input: ListeningProfileInput): ListeningPr
 }
 
 export function inferSongTags(song: ListeningProfileSong): string[] {
-  const searchable = [song.title, ...song.artists, ...(song.tags ?? [])].join(" ");
+  const searchable = (song.tags ?? []).join(" ");
   return [...new Set([
     ...THEME_RULES.filter(([, , rule]) => rule.test(searchable)).map(([, tag]) => tag),
     ...STYLE_RULES.filter(([, rule]) => rule.test(searchable)).map(([tag]) => tag),

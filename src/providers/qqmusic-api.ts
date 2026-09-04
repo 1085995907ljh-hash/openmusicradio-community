@@ -36,6 +36,7 @@ export interface QqMusicSong {
   releaseYear?: number;
 }
 export interface QqMusicSearchResult { songs: QqMusicSong[]; total: number }
+export interface QqMusicPlaylistSearchResult { playlists: QqMusicPlaylist[]; total: number }
 export interface QqMusicPlaylist {
   id: string;
   tid?: string;
@@ -189,6 +190,15 @@ export class QqMusicApiProvider {
     const offset = boundedInteger(options.offset, 0, 0, Number.MAX_SAFE_INTEGER, "search offset");
     const query = new URLSearchParams({ keyword: cleanKeywords, limit: String(limit), offset: String(offset) });
     return parseSearch(await this.request(`/search?${query}`, { method: "GET", signal: options.signal }));
+  }
+
+  async searchPlaylists(keywords: string, options: { limit?: number; offset?: number; signal?: AbortSignal } = {}): Promise<QqMusicPlaylistSearchResult> {
+    const cleanKeywords = keywords.trim();
+    if (!cleanKeywords) throw invalidInput("playlist search keywords must not be empty");
+    const limit = boundedInteger(options.limit, 12, 1, 50, "playlist search limit");
+    const offset = boundedInteger(options.offset, 0, 0, Number.MAX_SAFE_INTEGER, "playlist search offset");
+    const query = new URLSearchParams({ keyword: cleanKeywords, limit: String(limit), offset: String(offset) });
+    return parsePlaylistSearch(await this.request(`/search/playlists?${query}`, { method: "GET", signal: options.signal }));
   }
 
   async userPlaylists(_uid?: string | number, options: { limit?: number; offset?: number; signal?: AbortSignal } = {}): Promise<{ playlists: QqMusicPlaylist[]; more: boolean }> {
@@ -447,6 +457,13 @@ function parseAccount(value: unknown): QqMusicAccount {
 function parseSearch(value: unknown): QqMusicSearchResult {
   const root = asRecord(value, "QQ search");
   return { songs: boundedArray(root.songs, "QQ search songs", MAX_PERSONALIZATION_ITEMS).map(parseSong), total: boundedNumber(root.total, 0, Number.MAX_SAFE_INTEGER, "QQ search total") };
+}
+function parsePlaylistSearch(value: unknown): QqMusicPlaylistSearchResult {
+  const root = asRecord(value, "QQ playlist search");
+  return {
+    playlists: boundedArray(root.playlists, "QQ playlist search playlists", MAX_PERSONALIZATION_ITEMS).map(parsePlaylist),
+    total: boundedNumber(root.total, 0, Number.MAX_SAFE_INTEGER, "QQ playlist search total"),
+  };
 }
 function parsePlayRecords(value: unknown, field: string): QqMusicPlayRecord[] {
   return boundedArray(value, `${field} records`, MAX_PERSONALIZATION_ITEMS).map((item) => {

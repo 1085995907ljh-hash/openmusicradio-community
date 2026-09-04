@@ -1065,13 +1065,20 @@ test("NetEase planning relaxes familiar quota when selected styles need discover
     durationMs: 180_000,
   }));
   const token = "style-relaxed-quota-token";
+  const directSearchQueries: string[] = [];
   const baseProvider = planningProvider([...likedSongs, ...discoverySongs], likedSongs.map((song) => song.id));
   const service = await createLocalService({
     port: 0,
     localControlToken: token,
     neteaseProvider: {
       ...baseProvider,
-      search() { return { songs: discoverySongs, total: discoverySongs.length }; },
+      search(keyword: string) { directSearchQueries.push(keyword); return { songs: [], total: 0 }; },
+      searchPlaylists() {
+        return { total: 1, playlists: [{ id: "style-relaxed-playlist", name: "派对电子精选", description: null, trackCount: discoverySongs.length }] };
+      },
+      playlistDetail(id: string) {
+        return { id, name: "派对电子精选", description: null, trackCount: discoverySongs.length, tracks: discoverySongs };
+      },
     },
     hostProvider: groundedHostProvider(),
     ttsProvider: readyTtsProvider,
@@ -1089,6 +1096,7 @@ test("NetEase planning relaxes familiar quota when selected styles need discover
   assert.ok(program.planSummary.actualFamiliarityRatio < 75);
   assert.ok(program.planSummary.unheardTracks >= program.planSummary.familiarTracks);
   assert.ok(program.rundown.some((track: { title: string }) => track.title.startsWith("派对电子")));
+  assert.deepEqual(directSearchQueries, []);
 });
 
 test("NetEase planning anchors explicit styles to matching user artists and familiar songs", async (context) => {
@@ -1098,12 +1106,14 @@ test("NetEase planning anchors explicit styles to matching user artists and fami
       title: "R&B 私藏",
       artists: [{ id: "style-rnb-artist", name: "Soul Anchor" }],
       durationMs: 180_000,
+      styleTags: ["rnb_soul"],
     },
     {
       id: "style-rock-liked",
       title: "摇滚私藏",
       artists: [{ id: "style-rock-artist", name: "Rock Anchor" }],
       durationMs: 180_000,
+      styleTags: ["rock"],
     },
   ];
   const rockDiscoverySongs = Array.from({ length: 9 }, (_, index) => ({
@@ -1112,7 +1122,8 @@ test("NetEase planning anchors explicit styles to matching user artists and fami
     artists: [{ id: `style-rock-discovery-artist-${index + 1}`, name: `摇滚新艺术家 ${index + 1}` }],
     durationMs: 180_000,
   }));
-  const searchQueries: string[] = [];
+  const directSearchQueries: string[] = [];
+  const playlistQueries: string[] = [];
   const token = "style-anchor-token";
   const baseProvider = planningProvider([...likedSongs, ...rockDiscoverySongs], likedSongs.map((song) => song.id));
   const service = await createLocalService({
@@ -1121,10 +1132,15 @@ test("NetEase planning anchors explicit styles to matching user artists and fami
     neteaseProvider: {
       ...baseProvider,
       search(keyword: string) {
-        searchQueries.push(keyword);
-        return /摇滚|Rock Anchor/i.test(keyword)
-          ? { songs: rockDiscoverySongs, total: rockDiscoverySongs.length }
-          : { songs: [], total: 0 };
+        directSearchQueries.push(keyword);
+        return { songs: [], total: 0 };
+      },
+      searchPlaylists(keyword: string) {
+        playlistQueries.push(keyword);
+        return { total: 1, playlists: [{ id: "rock-anchor-playlist", name: keyword, description: null, trackCount: rockDiscoverySongs.length }] };
+      },
+      playlistDetail(id: string) {
+        return { id, name: "摇滚精选", description: null, trackCount: rockDiscoverySongs.length, tracks: rockDiscoverySongs };
       },
     },
     hostProvider: groundedHostProvider(),
@@ -1141,9 +1157,70 @@ test("NetEase planning anchors explicit styles to matching user artists and fami
 
   assert.equal(response.status, 201);
   const program = (await json(response)).program;
-  assert.ok(searchQueries.some((query) => /Rock Anchor/.test(query) && /摇滚|Rock/i.test(query)));
+  assert.deepEqual(directSearchQueries, []);
+  assert.ok(playlistQueries.some((query) => /Rock Anchor/.test(query) && /摇滚|Rock/i.test(query)));
   assert.ok(program.rundown.some((track: { id: string }) => track.id === "style-rock-liked"));
   assert.ok(program.rundown.every((track: { id: string }) => track.id !== "style-rnb-liked"));
+});
+
+test("explicit Britpop recommendations use style playlists instead of a British song-title search", async (context) => {
+  const playlistSongs = Array.from({ length: 12 }, (_, index) => ({
+    id: `britpop-playlist-${index + 1}`,
+    title: `英伦乐队作品 ${index + 1}`,
+    artists: [{ id: `britpop-artist-${index + 1}`, name: `UK Indie Artist ${index + 1}` }],
+    durationMs: 180_000,
+    popularity: 80 + index,
+  }));
+  const misleadingSongs = Array.from({ length: 12 }, (_, index) => ({
+    id: `british-title-${index + 1}`,
+    title: index === 0 ? "British" : `British Medley ${index + 1}`,
+    artists: [{ id: `unrelated-artist-${index + 1}`, name: `Unrelated Artist ${index + 1}` }],
+    durationMs: 180_000,
+    popularity: 99,
+  }));
+  const directSearchQueries: string[] = [];
+  const playlistQueries: string[] = [];
+  const token = "britpop-playlist-first-token";
+  const baseProvider = planningProvider([...playlistSongs, ...misleadingSongs], []);
+  const service = await createLocalService({
+    port: 0,
+    localControlToken: token,
+    neteaseProvider: {
+      ...baseProvider,
+      search(keyword: string) {
+        directSearchQueries.push(keyword);
+        return { songs: misleadingSongs, total: misleadingSongs.length };
+      },
+      searchPlaylists(keyword: string) {
+        playlistQueries.push(keyword);
+        return {
+          total: 1,
+          playlists: [{ id: `britpop-list-${playlistQueries.length}`, name: `${keyword} 精选`, description: null, trackCount: playlistSongs.length, ownerUid: "public-britpop", subscribed: false }],
+        };
+      },
+      playlistDetail(id: string) {
+        return { id, name: "英伦摇滚精选", description: null, trackCount: playlistSongs.length, tracks: playlistSongs };
+      },
+    },
+    hostProvider: groundedHostProvider(),
+    ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+
+  const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-one-radio-control-token": token },
+    body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "commute", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 10, recommendationMode: "genre", musicGenres: ["britpop"] } }),
+  });
+
+  assert.equal(response.status, 201, JSON.stringify(await response.clone().json()));
+  const program = (await json(response)).program;
+  assert.deepEqual(directSearchQueries, []);
+  assert.ok(playlistQueries.some((query) => /英伦摇滚|Britpop|UK Indie/.test(query)));
+  assert.ok(playlistQueries.every((query) => !/\bBritish\b/i.test(query)));
+  assert.ok(program.rundown.length > 0);
+  assert.ok(program.rundown.every((track: { id: string }) => track.id.startsWith("britpop-playlist-")));
 });
 
 test("NetEase atmosphere exploration searches party playlists and samples different style pools", async (context) => {
@@ -1532,8 +1609,12 @@ test("planner chat finds requested music and returns useful success or failure m
   const requestedSongs = Array.from({ length: 3 }, (_, index) => ({
     id: String(17_900 + index), title: `周杰伦候选 ${index + 1}`, artists: [{ id: "jay", name: "周杰伦" }], durationMs: 240_000,
   }));
+  const rockSongs = Array.from({ length: 3 }, (_, index) => ({
+    id: String(17_950 + index), title: `摇滚歌单候选 ${index + 1}`, artists: [{ id: `rock-${index}`, name: `摇滚艺人 ${index + 1}` }], durationMs: 240_000,
+  }));
   const baseProvider = planningProvider(baseSongs, []);
   const searchTerms: string[] = [];
+  const playlistSearchTerms: string[] = [];
   const token = "planner-search-token";
   const service = await createLocalService({
     port: 0,
@@ -1546,8 +1627,15 @@ test("planner chat finds requested music and returns useful success or failure m
         if (keyword === "不存在的歌手") return { songs: [], total: 0 };
         return { songs: baseSongs, total: baseSongs.length };
       },
-      songDetail(ids: string[]) { return [...baseSongs, ...requestedSongs].filter((song) => ids.includes(song.id)); },
-      songUrl(id: string) { return { id, url: `https://music.126.net/${id}.mp3`, durationMs: [...baseSongs, ...requestedSongs].find((song) => song.id === id)?.durationMs }; },
+      searchPlaylists(keyword: string) {
+        playlistSearchTerms.push(keyword);
+        return /(?:摇滚|Rock)/i.test(keyword)
+          ? { playlists: [{ id: "rock-playlist", name: "摇滚精选歌单" }], total: 1 }
+          : { playlists: [], total: 0 };
+      },
+      playlistDetail(id: string) { return id === "rock-playlist" ? { id, name: "摇滚精选歌单", tracks: rockSongs } : { id, tracks: [] }; },
+      songDetail(ids: string[]) { return [...baseSongs, ...requestedSongs, ...rockSongs].filter((song) => ids.includes(song.id)); },
+      songUrl(id: string) { return { id, url: `https://music.126.net/${id}.mp3`, durationMs: [...baseSongs, ...requestedSongs, ...rockSongs].find((song) => song.id === id)?.durationMs }; },
     },
     hostProvider: groundedHostProvider(),
     ttsProvider: readyTtsProvider,
@@ -1572,12 +1660,23 @@ test("planner chat finds requested music and returns useful success or failure m
   assert.equal(adjustedPayload.program.rundown.filter((track: { artist: string }) => track.artist === "周杰伦").length, 2);
   assert.ok(searchTerms.includes("周杰伦"));
 
+  const genreResponse = await fetch(`${base}/programs/${draft.id}/adjust`, {
+    method: "POST", headers,
+    body: JSON.stringify({ generation: draft.generation, planRevision: 1, operationId: "planner-genre-adjust", message: "帮我找几首摇滚歌曲。" }),
+  });
+  assert.equal(genreResponse.status, 200, await genreResponse.clone().text());
+  const genrePayload = await json(genreResponse);
+  assert.match(genrePayload.message, /已找到“摇滚”的 3 首可播放歌曲/);
+  assert.equal(genrePayload.program.rundown.filter((track: { artist: string }) => track.artist.startsWith("摇滚艺人")).length, 3);
+  assert.ok(playlistSearchTerms.some((term) => /摇滚/.test(term)));
+  assert.ok(!searchTerms.includes("摇滚"));
+
   const failedResponse = await fetch(`${base}/programs/${draft.id}/adjust`, {
     method: "POST", headers,
-    body: JSON.stringify({ generation: draft.generation, planRevision: 1, operationId: "planner-search-empty", message: "找不存在的歌手的歌曲。" }),
+    body: JSON.stringify({ generation: draft.generation, planRevision: 2, operationId: "planner-search-empty", message: "找不存在的歌手的歌曲。" }),
   });
   assert.equal(failedResponse.status, 409);
-  assert.match((await json(failedResponse)).error, /没有找到“不存在的歌手”的歌曲/);
+  assert.match((await json(failedResponse)).error, /没有找到“不存在的歌手”的可用歌曲/);
 });
 
 test("NetEase confirmation replaces a song that becomes trial-only before broadcast", async (context) => {
@@ -2281,17 +2380,17 @@ test("NetEase validation routes expose provider results without leaking credenti
     historyTracks: 1,
     dailyCandidates: 1,
     fmCandidates: 1,
-    sceneSearchCandidates: 1,
-    profileSearchQueries: 6,
-    profileSearchCandidates: 6,
+    sceneSearchCandidates: 0,
+    profileSearchQueries: 0,
+    profileSearchCandidates: 0,
     publicPlaylistQueries: 8,
     publicPlaylists: 0,
     publicPlaylistTracks: 0,
     similarCandidates: 0,
-    expandedSearchCandidates: 7,
+    expandedSearchCandidates: 0,
   });
   assert.equal(preferences.preferences.favoriteArtists[0].name, "测试歌手");
-  assert.equal(preferences.preferences.nextCandidate.title, "测试歌曲");
+  assert.equal(preferences.preferences.nextCandidate.title, "私人 FM 候选");
   assert.equal(preferences.preferences.nextCandidate.controlState, "awaiting_client_confirmation");
 
   const qrCreated = await json(await authorizedFetch(`${base}/login/qr`, { method: "POST" }));
@@ -2314,9 +2413,7 @@ test("NetEase validation routes expose provider results without leaking credenti
   const song = await json(await authorizedFetch(`${base}/song/101`));
   assert.equal(song.result.songs[0].id, "101");
   assert.deepEqual(song.result.playback, { available: true });
-  assert.deepEqual(calls.slice(0, 12), ["health", "health", "account", "user-playlists:7", "liked:7", "recent", "history:7", "daily", "fm", "search:relax chill easy listening New Age R&B/Soul 爵士 轻音乐 民谣:100:0", "song-detail:101,102", "playlist:9"]);
-  assert.ok(calls.includes("search:relax chill easy listening New Age 新世纪 氛围 Ambient Drone 冥想:50:0"));
-  assert.ok(calls.includes("search:测试歌手:50:0"));
+  assert.deepEqual(calls.slice(0, 12), ["health", "health", "account", "user-playlists:7", "liked:7", "recent", "history:7", "daily", "fm", "song-detail:101,102", "playlist:9", "account"]);
   assert.ok(calls.includes("qr-create"));
   assert.ok(calls.includes("qr-check:qr_key-123"));
   assert.ok(calls.includes("search:周杰伦:20:0"));
@@ -2371,6 +2468,9 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
     dailyRecommendations() { return songs.slice(2, 7); },
     personalFm() { return songs.slice(1, 6); },
     search() { return { songs, total: songs.length }; },
+    searchPlaylists() {
+      return { total: 1, playlists: [{ id: "7001", name: "深夜放松精选", description: null, trackCount: songs.length }] };
+    },
     songUrl(id: string) { return { id, url: `https://music.126.net/${id}.mp3`, bitrate: 320000, size: 1, format: "mp3", durationMs: 360_000 }; },
     createPlaylist(name: string) {
       playlistCreates.push(name);
@@ -2393,6 +2493,7 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
       return { trackId: id, liked };
     },
     playlistDetail(playlistId: string) {
+      if (playlistId === "7001") return { id: playlistId, name: "深夜放松精选", tracks: songs };
       return { id: playlistId, name: "AI 电台", tracks: (storedPlaylistTracks.get(playlistId) ?? []).map((id) => ({ id })) };
     },
   };
@@ -2811,7 +2912,7 @@ test("NetEase preferences distinguish complete signal failure from an empty prof
   const payload = await json(response);
   assert.equal(payload.preferences.state, "unavailable");
   assert.equal(payload.preferences.nextCandidate, null);
-  assert.equal(payload.preferences.failedSignals.length, 7);
+  assert.equal(payload.preferences.failedSignals.length, 6);
 });
 
 test("NetEase validation routes report unconfigured and upstream failure states truthfully", async (context) => {
@@ -3202,9 +3303,15 @@ test("account rundown drops public-host playback URLs before locking a draft", a
     songDetail() { return []; },
     recentSongs() { return []; },
     listeningHistory() { return []; },
-    dailyRecommendations() { return []; },
+    dailyRecommendations() { return songs; },
     personalFm() { return []; },
     search() { return { songs, total: songs.length }; },
+    searchPlaylists() {
+      return { total: 1, playlists: [{ id: "900", name: "学习专注精选", description: null, trackCount: songs.length }] };
+    },
+    playlistDetail(id: string) {
+      return { id, name: "学习专注精选", description: null, trackCount: songs.length, tracks: songs };
+    },
     songUrl(id: string) {
       return { id, url: id === "qq-bad-url" ? "https://example.com/public.mp3" : `https://isure.stream.qqmusic.qq.com/${id}.mp3` };
     },
@@ -3245,7 +3352,7 @@ test("QQ playlist confirmation repairs provider head-insert ordering before broa
     songDetail() { return []; },
     recentSongs() { return []; },
     listeningHistory() { return []; },
-    dailyRecommendations() { return []; },
+    dailyRecommendations() { return songs; },
     personalFm() { return []; },
     search() { return { songs, total: songs.length }; },
     songUrl(id: string) { return { id, url: `https://isure.stream.qqmusic.qq.com/${id}.mp3` }; },
@@ -3309,7 +3416,7 @@ test("QQ ambiguous playlist creation recovers the exact deterministic name inste
     songDetail() { return []; },
     recentSongs() { return []; },
     listeningHistory() { return []; },
-    dailyRecommendations() { return []; },
+    dailyRecommendations() { return [song]; },
     personalFm() { return []; },
     search() { return { songs: [song], total: 1 }; },
     songUrl(id: string) { return { id, url: `https://isure.stream.qqmusic.qq.com/${id}.mp3` }; },
@@ -3377,7 +3484,7 @@ test("QQ confirmation fails before account writes when playlist inventory exceed
     songDetail() { return []; },
     recentSongs() { return []; },
     listeningHistory() { return []; },
-    dailyRecommendations() { return []; },
+    dailyRecommendations() { return [song]; },
     personalFm() { return []; },
     search() { return { songs: [song], total: 1 }; },
     songUrl(id: string) { return { id, url: `https://isure.stream.qqmusic.qq.com/${id}.mp3` }; },

@@ -101,7 +101,7 @@ export const MUSIC_GENRES: Readonly<Record<MusicGenreId, MusicGenreOption>> = Ob
   rnb_soul: { id: "rnb_soul", label: "R&B/Soul", searchTerm: "R&B Soul 节奏布鲁斯 灵魂 Neo Soul Funk 放克" },
   classical: { id: "classical", label: "古典", searchTerm: "古典 Classical" },
   ethnic: { id: "ethnic", label: "民族", searchTerm: "民族 中国传统 民族音乐 Ethnic" },
-  britpop: { id: "britpop", label: "英伦", searchTerm: "英伦 Britpop British Rock" },
+  britpop: { id: "britpop", label: "英伦", searchTerm: "英伦摇滚 Britpop UK Indie" },
   metal: { id: "metal", label: "金属", searchTerm: "金属 Metal" },
   punk: { id: "punk", label: "朋克", searchTerm: "朋克 Punk" },
   blues: { id: "blues", label: "蓝调", searchTerm: "蓝调 布鲁斯 Blues" },

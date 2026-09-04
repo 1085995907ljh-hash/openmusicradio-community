@@ -100,8 +100,6 @@ const FIXTURE_TRACK_IDS = new Set(FIXTURE_TRACKS.map((track) => track.id));
 const DEFAULT_LISTENING_PROFILE_DIR = join(homedir(), "Library", "Application Support", "OneRadio", "profiles");
 const DESKTOP_PET_PREFERENCES_SUITE = process.env.ONE_RADIO_PET_PREFERENCES_SUITE?.trim() || "dev.openmusicradio.desktop-pet";
 const MAX_PROFILE_HISTORY_PROGRAMS = 30;
-const SCENE_STYLE_SEARCH_LIMIT = 100;
-const PROFILE_STYLE_SEARCH_LIMIT = 50;
 const MAX_PUBLIC_PLAYLIST_QUERIES = 12;
 const PUBLIC_PLAYLIST_SEARCH_LIMIT = 8;
 const MAX_PUBLIC_PLAYLIST_DETAILS = 24;
@@ -125,6 +123,56 @@ function minimumProgramDurationSeconds(durationMinutes: number): number {
 }
 const MAINSTREAM_DISCOVERY_STYLES = new Set<MusicGenreId>(["pop", "rock", "electronic", "hiphop", "rnb_soul"]);
 const DEFAULT_LOW_SHARE_STYLES = new Set<MusicGenreId>(["new_age", "world", "ethnic", "latin", "easy_listening", "dance", "bossa_nova"]);
+const STYLE_PLAYLIST_QUERY_TERMS: Readonly<Record<MusicGenreId, readonly string[]>> = {
+  pop: ["流行热歌 歌单", "华语流行 歌单", "欧美流行 歌单"],
+  rock: ["摇滚精选 歌单", "独立摇滚 歌单", "Alternative Rock 歌单"],
+  folk: ["民谣精选 歌单", "城市民谣 歌单", "Folk Acoustic 歌单"],
+  electronic: ["电子音乐精选 歌单", "House Techno 歌单", "Electronic Music 歌单"],
+  dance: ["舞曲律动 歌单", "Dance Pop 歌单", "Disco Groove 歌单"],
+  hiphop: ["说唱精选 歌单", "华语嘻哈 歌单", "Hip-Hop Rap 歌单"],
+  easy_listening: ["轻音乐精选 歌单", "舒缓纯音乐 歌单", "Easy Listening 歌单"],
+  jazz: ["爵士精选 歌单", "现代爵士 歌单", "Jazz Essentials 歌单"],
+  country: ["乡村音乐精选 歌单", "Country Music 歌单", "Modern Country 歌单"],
+  rnb_soul: ["R&B Soul 精选 歌单", "节奏布鲁斯 歌单", "Neo Soul 歌单"],
+  classical: ["古典音乐精选 歌单", "Classical Essentials 歌单", "室内乐 歌单"],
+  ethnic: ["民族音乐精选 歌单", "中国民族音乐 歌单", "传统民乐 歌单"],
+  britpop: ["英伦摇滚 歌单", "Britpop 歌单", "UK Indie 歌单"],
+  metal: ["金属乐精选 歌单", "Heavy Metal 歌单", "Alternative Metal 歌单"],
+  punk: ["朋克摇滚精选 歌单", "Punk Rock 歌单", "Pop Punk 歌单"],
+  blues: ["蓝调精选 歌单", "Blues Essentials 歌单", "Modern Blues 歌单"],
+  reggae: ["雷鬼精选 歌单", "Reggae Essentials 歌单", "Roots Reggae 歌单"],
+  world: ["世界音乐精选 歌单", "World Music 歌单", "全球音乐 歌单"],
+  latin: ["拉丁音乐精选 歌单", "Latin Pop 歌单", "Salsa 音乐 歌单"],
+  new_age: ["New Age 精选 歌单", "新世纪音乐 歌单", "氛围冥想音乐 歌单"],
+  gufeng: ["古风精选 歌单", "国风音乐 歌单", "中国风歌曲 歌单"],
+  post_rock: ["后摇精选 歌单", "Post-Rock 歌单", "氛围后摇 歌单"],
+  bossa_nova: ["Bossa Nova 精选 歌单", "巴萨诺瓦 歌单", "Brazilian Bossa 歌单"],
+};
+const MUSIC_GENRE_QUERY_ALIASES: Readonly<Record<MusicGenreId, readonly string[]>> = {
+  pop: ["流行", "pop"],
+  rock: ["摇滚", "rock"],
+  folk: ["民谣", "folk"],
+  electronic: ["电子", "electronic"],
+  dance: ["舞曲", "dance"],
+  hiphop: ["说唱", "嘻哈", "hiphop", "hip-hop", "rap"],
+  easy_listening: ["轻音乐", "easy listening"],
+  jazz: ["爵士", "jazz"],
+  country: ["乡村", "country"],
+  rnb_soul: ["r&b/soul", "r&b", "soul", "rnb soul"],
+  classical: ["古典", "classical"],
+  ethnic: ["民族", "ethnic"],
+  britpop: ["英伦", "英伦摇滚", "britpop", "uk indie"],
+  metal: ["金属", "metal"],
+  punk: ["朋克", "punk"],
+  blues: ["蓝调", "布鲁斯", "blues"],
+  reggae: ["雷鬼", "reggae"],
+  world: ["世界音乐", "world music"],
+  latin: ["拉丁", "latin"],
+  new_age: ["new age", "新世纪"],
+  gufeng: ["古风", "国风", "gufeng"],
+  post_rock: ["后摇", "post-rock", "post rock"],
+  bossa_nova: ["bossa nova", "巴萨诺瓦"],
+};
 const SCENE_PLAYLIST_QUERY_TERMS: Record<ScenePreset, readonly string[]> = {
   late_night: ["深夜 放松 氛围 歌单", "夜晚 松弛 音乐 歌单", "睡前 安静 陪伴 歌单", "Late Night Chill 歌单"],
   study: ["学习 专注 氛围 歌单", "工作 阅读 专注 歌单", "咖啡馆 学习 音乐 歌单", "Focus Study 歌单"],
@@ -542,42 +590,12 @@ function searchQueryForRecommendation(scenePreset: ScenePreset, styleTags: reado
     : [DESKTOP_SCENE_QUERY_TERMS[scenePreset], ...styleTags.map((genre) => MUSIC_GENRES[genre].label)].join(" ");
 }
 
-function styleSearchTerms(scenePreset: ScenePreset, musicGenres: readonly MusicGenreId[] = [], mode: NonNullable<ProgramSpec["recommendationMode"]> = musicGenres.length > 0 ? "genre" : "atmosphere"): string[] {
-  return programStyleTags(scenePreset, musicGenres)
-    .map((genre) => mode === "genre" ? MUSIC_GENRES[genre].searchTerm : `${DESKTOP_SCENE_QUERY_TERMS[scenePreset]} ${MUSIC_GENRES[genre].searchTerm}`);
-}
-
 function selectedStyleAffinities(profile: { styleAffinities?: unknown }, styleTags: readonly MusicGenreId[]): UnknownRecord[] {
   const wanted = new Set(styleTags);
   const affinities = Array.isArray(profile.styleAffinities) ? profile.styleAffinities : [];
   return affinities.filter((item): item is UnknownRecord =>
     isRecord(item) && typeof item.style === "string" && wanted.has(item.style as MusicGenreId),
   );
-}
-
-function styleAnchorQueries(scenePreset: ScenePreset, affinities: readonly UnknownRecord[], mode: NonNullable<ProgramSpec["recommendationMode"]> = "atmosphere"): string[] {
-  const queries: string[] = [];
-  for (const affinity of affinities) {
-    const style = typeof affinity.style === "string" && MUSIC_GENRE_IDS.includes(affinity.style as MusicGenreId)
-      ? affinity.style as MusicGenreId
-      : null;
-    if (!style) continue;
-    const styleTerm = MUSIC_GENRES[style].searchTerm;
-    const artists = Array.isArray(affinity.artists) ? affinity.artists : [];
-    for (const artist of artists.slice(0, 3)) {
-      if (isRecord(artist) && typeof artist.name === "string" && artist.name.trim()) {
-        queries.push(`${artist.name.trim()} ${styleTerm}`);
-        if (mode === "atmosphere") queries.push(`${artist.name.trim()} ${DESKTOP_SCENE_QUERY_TERMS[scenePreset]} ${styleTerm}`);
-      }
-    }
-    const familiarSongs = Array.isArray(affinity.familiarSongs) ? affinity.familiarSongs : [];
-    for (const song of familiarSongs.slice(0, 2)) {
-      if (!isRecord(song) || typeof song.title !== "string" || !song.title.trim()) continue;
-      const firstArtist = Array.isArray(song.artists) ? song.artists.find((item) => typeof item === "string" && item.trim()) : null;
-      queries.push(`${song.title.trim()} ${typeof firstArtist === "string" ? firstArtist.trim() : ""} 相似 ${styleTerm}`.trim());
-    }
-  }
-  return [...new Set(queries)];
 }
 
 function stylePublicPlaylistQueries(scenePreset: ScenePreset, styleTags: readonly MusicGenreId[], affinities: readonly UnknownRecord[], mode: NonNullable<ProgramSpec["recommendationMode"]> = "atmosphere", exploration = false): string[] {
@@ -593,15 +611,15 @@ function stylePublicPlaylistQueries(scenePreset: ScenePreset, styleTags: readonl
     const styleTerm = MUSIC_GENRES[genre].searchTerm;
     const affinity = byStyle.get(genre);
     const artists = affinity && Array.isArray(affinity.artists) ? affinity.artists : [];
-    for (const artist of artists.slice(0, 2)) {
+    for (const artist of artists.slice(0, mode === "genre" ? 1 : 2)) {
       if (isRecord(artist) && typeof artist.name === "string" && artist.name.trim()) {
         queries.push(mode === "atmosphere"
           ? `${artist.name.trim()} ${DESKTOP_SCENE_QUERY_TERMS[scenePreset]} ${styleTerm} 歌单`
-          : `${artist.name.trim()} ${styleTerm} 歌单`);
+          : `${artist.name.trim()} ${STYLE_PLAYLIST_QUERY_TERMS[genre][0]}`);
       }
     }
     if (mode === "atmosphere") queries.push(`${DESKTOP_SCENE_QUERY_TERMS[scenePreset]} ${styleTerm} 歌单`);
-    else queries.push(`${styleTerm} 热门 歌单`);
+    else queries.push(...STYLE_PLAYLIST_QUERY_TERMS[genre]);
   }
   return [...new Set(queries)];
 }
@@ -680,19 +698,34 @@ function withSearchContext(song: unknown, searchQuery: string, styleTags: readon
   return isRecord(song) ? { ...song, searchQuery, styleTags: [...styleTags] } : song;
 }
 
+function exactGenreQueryTags(query: string): MusicGenreId[] {
+  const normalize = (value: string) => value.normalize("NFKC").trim().toLocaleLowerCase().replace(/(?:音乐)?(?:风格|类型)$/u, "").trim();
+  const normalized = normalize(query);
+  if (!normalized) return [];
+  const match = (value: string) => MUSIC_GENRE_IDS.filter((genre) => MUSIC_GENRE_QUERY_ALIASES[genre].some((alias) => normalize(alias) === value));
+  const direct = match(normalized);
+  if (direct.length > 0) return direct;
+  const withoutMusicSuffix = normalized.replace(/音乐$/u, "").trim();
+  const musicStyle = withoutMusicSuffix === normalized ? [] : match(withoutMusicSuffix);
+  if (musicStyle.length > 0) return musicStyle;
+  const parts = normalized.split(/[、，,]|(?:和|与)/u).map(normalize).filter(Boolean);
+  if (parts.length < 2) return [];
+  const matched = parts.map((part) => MUSIC_GENRE_IDS.find((genre) => MUSIC_GENRE_QUERY_ALIASES[genre].some((alias) => normalize(alias) === part)));
+  return matched.every((genre): genre is MusicGenreId => genre !== undefined) ? [...new Set(matched)] : [];
+}
+
 function inferStyleTags(value: unknown, fallbackTags: readonly MusicGenreId[] = []): MusicGenreId[] {
   const record = isRecord(value) && isRecord(value.song) ? value.song : value;
   const fields: string[] = [];
   if (isRecord(record)) {
-    for (const key of ["title", "name", "genre", "searchQuery"] as const) {
+    for (const key of ["genre", "searchQuery"] as const) {
       if (typeof record[key] === "string") fields.push(record[key]);
     }
     if (Array.isArray(record.mood)) fields.push(...record.mood.filter((item): item is string => typeof item === "string"));
     if (Array.isArray(record.styleTags)) fields.push(...record.styleTags.filter((item): item is string => typeof item === "string"));
-    if (isRecord(record.album) && typeof record.album.name === "string") fields.push(record.album.name);
   }
   const text = fields.join(" ").toLocaleLowerCase();
-  const profileInferred = inferSongTags({ id: "style-probe", title: text, artists: [], tags: [] })
+  const profileInferred = inferSongTags({ id: "style-probe", title: "", artists: [], tags: [text] })
     .filter((tag): tag is MusicGenreId => MUSIC_GENRE_IDS.includes(tag as MusicGenreId));
   const inferred = MUSIC_GENRE_IDS.filter((genre) => {
     const option = MUSIC_GENRES[genre];
@@ -2163,7 +2196,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const previousProgramIds = recentProgramTrackIds(previousSnapshot);
     const sceneStyleTags = programStyleTags(scenePreset, musicGenres);
     const sceneSearchQuery = searchQueryForRecommendation(scenePreset, sceneStyleTags, recommendationMode);
-    const signalNames = ["userPlaylists", "likedSongIds", "recentSongs", "listeningHistory", "dailyRecommendations", "personalFm", "sceneSearch"] as const;
+    const signalNames = ["userPlaylists", "likedSongIds", "recentSongs", "listeningHistory", "dailyRecommendations", "personalFm"] as const;
     const tasks = await Promise.allSettled([
       invoke(() => provider.userPlaylists!(uid, { limit: 100, offset: 0, signal })),
       (async () => {
@@ -2188,7 +2221,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       invoke(() => provider.listeningHistory!(uid, { period: "week", signal })),
       invoke(() => provider.dailyRecommendations!({ signal })),
       invoke(() => provider.personalFm!(signal)),
-      invoke(() => provider.search!(sceneSearchQuery, { limit: SCENE_STYLE_SEARCH_LIMIT, offset: 0, signal })),
     ]);
     const valueAt = (index: number): unknown => tasks[index]?.status === "fulfilled" ? tasks[index].value : null;
     const playlistsValue = valueAt(0);
@@ -2200,11 +2232,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const history = Array.isArray(valueAt(3)) ? valueAt(3) as unknown[] : [];
     const daily = Array.isArray(valueAt(4)) ? valueAt(4) as unknown[] : [];
     const fm = Array.isArray(valueAt(5)) ? valueAt(5) as unknown[] : [];
-    const searchValue = valueAt(6);
-    let search = isRecord(searchValue) && Array.isArray(searchValue.songs)
-      ? searchValue.songs.map((song) => withSearchContext(song, sceneSearchQuery, sceneStyleTags))
-      : [];
-    const sceneSearchSongs = search;
+    const sceneSearchSongs: unknown[] = [];
     const playlistDetailResults: PromiseSettledResult<unknown>[] = [];
     if (typeof provider.playlistDetail === "function") {
       for (const playlist of playlists.slice(0, 8)) {
@@ -2212,7 +2240,15 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         const id = typeof playlist.id === "string" ? playlist.id : typeof playlist.dirId === "string" ? playlist.dirId : null;
         if (!id) continue;
         try {
-          playlistDetailResults.push({ status: "fulfilled", value: await invoke(() => provider.playlistDetail!(id, signal)) });
+          const value = await invoke(() => provider.playlistDetail!(id, signal));
+          const playlistName = typeof playlist.name === "string" ? playlist.name : "";
+          const playlistTags = inferStyleTags({ searchQuery: playlistName });
+          playlistDetailResults.push({
+            status: "fulfilled",
+            value: isRecord(value) && Array.isArray(value.tracks)
+              ? { ...value, tracks: value.tracks.map((song) => withSearchContext(song, playlistName, playlistTags)) }
+              : value,
+          });
         } catch (reason) {
           playlistDetailResults.push({ status: "rejected", reason });
         }
@@ -2243,47 +2279,30 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     if (isRecord(likedValue) && likedValue.truncated === true) failedSignals.push("likedSongDetails:truncated");
     if (playlistDetailResults.some((task) => task.status === "rejected")) failedSignals.push("playlistDetails:partial");
     const fulfilledSignals = tasks.filter((task) => task.status === "fulfilled").length;
-	    const profileSong = (value: unknown) => {
-	      const record = isRecord(value) ? value : null;
-	      const song = record && isRecord(record.song) ? record.song : record;
-	      if (!song || typeof song.id !== "string" || typeof song.title !== "string" || !Array.isArray(song.artists)) return null;
-	      const tags = inferStyleTags(song);
-	      return {
-	        id: song.id,
-	        title: song.title,
-	        artists: song.artists.filter(isRecord).map((artist) => typeof artist.name === "string" ? artist.name : "").filter(Boolean),
-	        ...(tags.length > 0 ? { tags } : {}),
-	      };
-	    };
+    const profileSong = (value: unknown) => {
+      const record = isRecord(value) ? value : null;
+      const song = record && isRecord(record.song) ? record.song : record;
+      if (!song || typeof song.id !== "string" || typeof song.title !== "string" || !Array.isArray(song.artists)) return null;
+      const tags = inferStyleTags(song);
+      return {
+        id: song.id,
+        title: song.title,
+        artists: song.artists.filter(isRecord).map((artist) => typeof artist.name === "string" ? artist.name : "").filter(Boolean),
+        ...(tags.length > 0 ? { tags } : {}),
+      };
+    };
     const baseProfile = buildListeningProfile({
       likedSongs: likedSongs.map(profileSong).filter((value): value is NonNullable<ReturnType<typeof profileSong>> => value !== null),
       recentSongs: recent.map(profileSong).filter((value): value is NonNullable<ReturnType<typeof profileSong>> => value !== null),
       historySongs: history.map(profileSong).filter((value): value is NonNullable<ReturnType<typeof profileSong>> => value !== null),
       playlistSongs: playlistSongs.map(profileSong).filter((value): value is NonNullable<ReturnType<typeof profileSong>> => value !== null),
       playlists: playlists.flatMap((playlist) => isRecord(playlist) && typeof playlist.name === "string" ? [playlist.name] : []),
-	    });
-	    const profile = baseProfile;
-	    const currentStyleAffinities = selectedStyleAffinities(profile, sceneStyleTags);
-	    const anchoredQueries = styleAnchorQueries(scenePreset, currentStyleAffinities, recommendationMode);
-
-	    const profileQueries = [
-	      ...anchoredQueries,
-	      ...styleSearchTerms(scenePreset, musicGenres, recommendationMode).slice(0, 6),
-	      ...(currentStyleAffinities.length > 0 ? [] : favoriteArtists.slice(0, 4).map((artist) => artist.name)),
-	      ...profile.topSongs.slice(0, 2).map((song) => `${song.title} ${song.artists[0] ?? ""}`.trim()),
-	    ].filter((query, index, all) => query.length > 0 && all.indexOf(query) === index).slice(0, 12);
-    const profileSearchResults = tasks[6]?.status === "fulfilled"
-      ? await Promise.allSettled(profileQueries.map((query) => invoke(() => provider.search!(query, { limit: PROFILE_STYLE_SEARCH_LIMIT, offset: 0, signal }))))
-      : [];
-    if (profileSearchResults.some((task) => task.status === "rejected")) failedSignals.push("profileSearch:partial");
-    const profileSearchSongs = profileSearchResults.flatMap((task, index) => {
-      if (task.status !== "fulfilled" || !isRecord(task.value) || !Array.isArray(task.value.songs)) return [];
-      const query = profileQueries[index] ?? "";
-      return task.value.songs.map((song) => withSearchContext(song, query, inferStyleTags({ searchQuery: query }, sceneStyleTags)));
     });
-	    const publicPlaylistQueries = stylePublicPlaylistQueries(scenePreset, sceneStyleTags, currentStyleAffinities, recommendationMode, isAtmosphereExploration(recommendationMode, familiarityRatio))
-	      .filter((query, index, all) => query.length > 0 && all.indexOf(query) === index)
-	      .slice(0, MAX_PUBLIC_PLAYLIST_QUERIES);
+    const profile = baseProfile;
+    const currentStyleAffinities = selectedStyleAffinities(profile, sceneStyleTags);
+    const publicPlaylistQueries = stylePublicPlaylistQueries(scenePreset, sceneStyleTags, currentStyleAffinities, recommendationMode, isAtmosphereExploration(recommendationMode, familiarityRatio))
+      .filter((query, index, all) => query.length > 0 && all.indexOf(query) === index)
+      .slice(0, MAX_PUBLIC_PLAYLIST_QUERIES);
     const playlistSamplingSeed = randomBytes(8).toString("hex");
     const playlistSearchResults = typeof provider.searchPlaylists === "function" && typeof provider.playlistDetail === "function" && publicPlaylistQueries.length > 0
       ? await Promise.allSettled(publicPlaylistQueries.map((query) => invoke(() => provider.searchPlaylists!(query, { limit: PUBLIC_PLAYLIST_SEARCH_LIMIT, offset: 0, signal }))))
@@ -2344,7 +2363,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       : [];
     if (similarResults.some((task) => task.status === "rejected")) failedSignals.push("similarSongs:partial");
     const similarSongs = similarResults.flatMap((task) => task.status === "fulfilled" && Array.isArray(task.value) ? task.value : []);
-    search = [...publicPlaylistSongs, ...profileSearchSongs, ...similarSongs, ...search];
+    const search = [...publicPlaylistSongs, ...similarSongs];
 
     const candidateFromSong = (value: unknown): PersonalizationCandidate | null => {
       const record = isRecord(value) && isRecord(value.song) ? value.song : value;
@@ -2375,15 +2394,15 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       };
     };
     const candidates = (values: unknown[]): PersonalizationCandidate[] => values.map(candidateFromSong).filter((value): value is PersonalizationCandidate => value !== null);
-	    const preferredArtists: Record<string, number> = Object.fromEntries(favoriteArtists.map((artist) => [artist.name, artist.score]));
-	    for (const affinity of currentStyleAffinities) {
-	      const artists = Array.isArray(affinity.artists) ? affinity.artists : [];
-	      for (const artist of artists) {
-	        if (!isRecord(artist) || typeof artist.name !== "string" || !artist.name.trim()) continue;
-	        const score = typeof artist.score === "number" && Number.isFinite(artist.score) ? artist.score : 0;
-	        preferredArtists[artist.name.trim()] = Math.max(preferredArtists[artist.name.trim()] ?? 0, score + 30);
-	      }
-	    }
+    const preferredArtists: Record<string, number> = Object.fromEntries(favoriteArtists.map((artist) => [artist.name, artist.score]));
+    for (const affinity of currentStyleAffinities) {
+      const artists = Array.isArray(affinity.artists) ? affinity.artists : [];
+      for (const artist of artists) {
+        if (!isRecord(artist) || typeof artist.name !== "string" || !artist.name.trim()) continue;
+        const score = typeof artist.score === "number" && Number.isFinite(artist.score) ? artist.score : 0;
+        preferredArtists[artist.name.trim()] = Math.max(preferredArtists[artist.name.trim()] ?? 0, score + 30);
+      }
+    }
     const recentTrackIds = recent.flatMap((value) => isRecord(value) && isRecord(value.song) && typeof value.song.id === "string" ? [value.song.id] : []);
     const decision = personalizeCandidates({
       liked: candidates(likedSongs),
@@ -2465,8 +2484,8 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         dailyCandidates: daily.length,
         fmCandidates: fm.length,
         sceneSearchCandidates: sceneSearchSongs.length,
-        profileSearchQueries: profileQueries.length,
-        profileSearchCandidates: profileSearchSongs.length,
+        profileSearchQueries: 0,
+        profileSearchCandidates: 0,
         publicPlaylistQueries: publicPlaylistQueries.length,
         publicPlaylists: publicPlaylistSeeds.length,
         publicPlaylistTracks: publicPlaylistSongs.length,
@@ -2479,16 +2498,16 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         favoriteArtists: favoriteArtists.map(({ name, score }) => ({ name, score })),
         topSongs: profile.topSongs.map((song) => ({ title: song.title, artists: song.artists })),
         playlistNames: profile.playlistNames,
-	        inferredThemes: profile.inferredThemes,
-	        styleTags: profile.styleTags,
-	        styleAffinities: profile.styleAffinities.map((affinity) => ({
-	          style: affinity.style,
-	          score: affinity.score,
-	          artists: affinity.artists.map((artist) => ({ name: artist.name, score: artist.score, songs: artist.songs })),
-	          familiarSongs: affinity.familiarSongs.map((song) => ({ title: song.title, artists: song.artists, sources: song.sources })),
-	          evidence: affinity.evidence,
-	        })),
-	        taggedSongs: profile.taggedSongs.map((song) => ({
+        inferredThemes: profile.inferredThemes,
+        styleTags: profile.styleTags,
+        styleAffinities: profile.styleAffinities.map((affinity) => ({
+          style: affinity.style,
+          score: affinity.score,
+          artists: affinity.artists.map((artist) => ({ name: artist.name, score: artist.score, songs: artist.songs })),
+          familiarSongs: affinity.familiarSongs.map((song) => ({ title: song.title, artists: song.artists, sources: song.sources })),
+          evidence: affinity.evidence,
+        })),
+        taggedSongs: profile.taggedSongs.map((song) => ({
           title: song.title,
           artists: song.artists,
           tags: song.tags,
@@ -2643,26 +2662,26 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     // as familiar, but a sparse pool must never block an otherwise valid show.
     const familiar = playable.filter((track) => track.liked === true);
     const discovery = playable.filter((track) => track.liked !== true);
-	    const sceneStyleSet = new Set(programStyleTags(spec.scenePreset, spec.musicGenres ?? []));
-	    const mode = recommendationModeForSpec(spec);
-	    const atmosphereExploration = isAtmosphereExploration(mode, requestedRatio);
-	    const explicitMusicStyles = mode === "genre";
-	    const profileRecord = isRecord(preferences.listenerProfile) ? preferences.listenerProfile : {};
-	    const currentStyleAffinities = selectedStyleAffinities(profileRecord, [...sceneStyleSet] as MusicGenreId[]);
-	    const hasStyleFamiliarAnchors = currentStyleAffinities.some((affinity) => Array.isArray(affinity.familiarSongs) && affinity.familiarSongs.length > 0);
-	    const fitsProgramStyle = (track: ProgramRundownItem): boolean => {
-	      const tags = track.styleTags ?? [];
-	      if (tags.length > 0) return tags.some((tag) => sceneStyleSet.has(tag as MusicGenreId));
+    const sceneStyleSet = new Set(programStyleTags(spec.scenePreset, spec.musicGenres ?? []));
+    const mode = recommendationModeForSpec(spec);
+    const atmosphereExploration = isAtmosphereExploration(mode, requestedRatio);
+    const explicitMusicStyles = mode === "genre";
+    const profileRecord = isRecord(preferences.listenerProfile) ? preferences.listenerProfile : {};
+    const currentStyleAffinities = selectedStyleAffinities(profileRecord, [...sceneStyleSet] as MusicGenreId[]);
+    const hasStyleFamiliarAnchors = currentStyleAffinities.some((affinity) => Array.isArray(affinity.familiarSongs) && affinity.familiarSongs.length > 0);
+    const fitsProgramStyle = (track: ProgramRundownItem): boolean => {
+      const tags = track.styleTags ?? [];
+      if (tags.length > 0) return tags.some((tag) => sceneStyleSet.has(tag as MusicGenreId));
       return track.reasons.some((reason) => /scene (?:style|query style|search) reward|场景|氛围/.test(reason));
     };
-	    const familiarFitShare = familiar.length === 0 ? 0 : familiar.filter(fitsProgramStyle).length / familiar.length;
-	    const discoveryFitShare = discovery.length === 0 ? 0 : discovery.filter(fitsProgramStyle).length / discovery.length;
-	    const strictSelectedStyle = explicitMusicStyles && discoveryFitShare >= 0.35;
-	    const targetRatio = explicitMusicStyles && !hasStyleFamiliarAnchors && discoveryFitShare >= 0.35
-	      ? 0
-	      : discoveryFitShare >= 0.35 && familiarFitShare < 0.2
-	      ? Math.min(requestedRatio, (spec.musicGenres?.length ?? 0) > 0 ? 35 : 45)
-	      : requestedRatio;
+    const familiarFitShare = familiar.length === 0 ? 0 : familiar.filter(fitsProgramStyle).length / familiar.length;
+    const discoveryFitShare = discovery.length === 0 ? 0 : discovery.filter(fitsProgramStyle).length / discovery.length;
+    const strictSelectedStyle = explicitMusicStyles && discoveryFitShare >= 0.35;
+    const targetRatio = explicitMusicStyles && !hasStyleFamiliarAnchors && discoveryFitShare >= 0.35
+      ? 0
+      : discoveryFitShare >= 0.35 && familiarFitShare < 0.2
+      ? Math.min(requestedRatio, (spec.musicGenres?.length ?? 0) > 0 ? 35 : 45)
+      : requestedRatio;
     const selectApproximate = (trackCount: number): ProgramRundownItem[] => {
       const selected: ProgramRundownItem[] = [];
       const selectedIds = new Set<string>();
@@ -2700,9 +2719,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               && (!isLowShareDefaultStyle(track) || lowShareStyleCount < lowShareStyleLimit)
             )
           );
-	        const item = pool.find((track) => sceneStyleSet.size > 1 && fitsProgramStyle(track) && fillsUnderusedStyle(track) && canTake(track))
-	          ?? pool.find((track) => fitsProgramStyle(track) && canTake(track))
-	          ?? (strictSelectedStyle ? null : pool.find(canTake));
+        const item = pool.find((track) => sceneStyleSet.size > 1 && fitsProgramStyle(track) && fillsUnderusedStyle(track) && canTake(track))
+          ?? pool.find((track) => fitsProgramStyle(track) && canTake(track))
+          ?? (strictSelectedStyle ? null : pool.find(canTake));
         if (!item) return null;
         selectedIds.add(item.id);
         usedArtists.add(item.artist.toLocaleLowerCase());
@@ -4624,10 +4643,36 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                 if (!artifact.preferences) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "选歌画像已丢失，请重新创建。");
                 const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
                 const provider = providerId === "qq" ? await requireQq() : await requireNetease();
-                if (typeof provider.search !== "function") throw new ServiceError("MUSIC_SEARCH_UNAVAILABLE", 503, `当前${providerId === "qq" ? "QQ 音乐" : "网易云"}连接不支持搜索歌曲。`);
-                const searchResult = await invokeAccount(providerId, () => provider.search!(searchAdjustment.query, { limit: 100, offset: 0, signal: controller.signal }));
-                const searchSongs = isRecord(searchResult) && Array.isArray(searchResult.songs) ? searchResult.songs : [];
-                if (searchSongs.length === 0) throw new ServiceError("MUSIC_SEARCH_EMPTY", 409, `没有找到“${searchAdjustment.query}”的歌曲，可以换一个歌手、歌名或风格试试。`);
+                const requestedGenreTags = exactGenreQueryTags(searchAdjustment.query);
+                let searchSongs: unknown[];
+                if (requestedGenreTags.length > 0) {
+                  if (typeof provider.searchPlaylists !== "function" || typeof provider.playlistDetail !== "function") {
+                    throw new ServiceError("MUSIC_SEARCH_UNAVAILABLE", 503, `当前${providerId === "qq" ? "QQ 音乐" : "网易云"}连接不支持风格歌单搜索。`);
+                  }
+                  const playlistQueries = requestedGenreTags.flatMap((genre) => STYLE_PLAYLIST_QUERY_TERMS[genre]);
+                  const playlistResults = await Promise.allSettled(playlistQueries.map((query) => invokeAccount(providerId, () => provider.searchPlaylists!(query, { limit: PUBLIC_PLAYLIST_SEARCH_LIMIT, offset: 0, signal: controller.signal }))));
+                  const seenPlaylistIds = new Set<string>();
+                  const playlistSeeds = playlistResults.flatMap((task, index) => {
+                    const result = task.status === "fulfilled" ? task.value : null;
+                    if (!isRecord(result) || !Array.isArray(result.playlists)) return [];
+                    const query = playlistQueries[index] ?? searchAdjustment.query;
+                    return result.playlists.flatMap((playlist) => {
+                      if (!isRecord(playlist) || typeof playlist.id !== "string" || seenPlaylistIds.has(playlist.id) || isDisallowedRecommendationCandidate(playlist)) return [];
+                      seenPlaylistIds.add(playlist.id);
+                      return [{ id: playlist.id, query }];
+                    });
+                  }).slice(0, MAX_PUBLIC_PLAYLIST_DETAILS);
+                  const playlistDetails = await Promise.all(playlistSeeds.map((playlist) => invokeAccount(providerId, () => provider.playlistDetail!(playlist.id, controller.signal))));
+                  searchSongs = playlistDetails.flatMap((detail, index) => {
+                    if (!isRecord(detail) || !Array.isArray(detail.tracks)) return [];
+                    return detail.tracks.map((track) => withSearchContext(track, playlistSeeds[index]?.query ?? searchAdjustment.query, requestedGenreTags));
+                  });
+                } else {
+                  if (typeof provider.search !== "function") throw new ServiceError("MUSIC_SEARCH_UNAVAILABLE", 503, `当前${providerId === "qq" ? "QQ 音乐" : "网易云"}连接不支持搜索歌曲。`);
+                  const searchResult = await invokeAccount(providerId, () => provider.search!(searchAdjustment.query, { limit: 100, offset: 0, signal: controller.signal }));
+                  searchSongs = isRecord(searchResult) && Array.isArray(searchResult.songs) ? searchResult.songs : [];
+                }
+                if (searchSongs.length === 0) throw new ServiceError("MUSIC_SEARCH_EMPTY", 409, `没有找到“${searchAdjustment.query}”的可用歌曲，可以换一个歌手、歌名或风格试试。`);
                 const currentIds = new Set(artifact.items.map((track) => track.id));
                 const searchPreferences = { ...artifact.preferences, programPlan: searchSongs.filter((track) => !isRecord(track) || !currentIds.has(String(track.id))) };
                 let candidates = await prepareAccountRundown(providerId, lockedState.spec, searchPreferences, controller.signal, undefined, 1, searchAdjustment.count);
