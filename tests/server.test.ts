@@ -1326,18 +1326,33 @@ test("QQ genre planning uses query-backed playlists when metadata is generic and
   assert.ok(program.rundown.every((track: { id: string; styleTags?: string[] }) => track.id.startsWith("qq-reggae-") && track.styleTags?.includes("reggae")));
 });
 
-test("explicit genre planning falls back to a short playable account list instead of failing the whole show", async (context) => {
-  const fallbackSong = {
-    id: "genre-last-resort-1",
-    title: "可播放保底歌曲",
-    artists: [{ id: "genre-last-resort-artist", name: "保底歌手" }],
+test("explicit genre planning tries alternate playlist names and pages while keeping a short target-style list", async (context) => {
+  const postRockSong = {
+    id: "alternate-post-rock-1",
+    title: "山海之间",
+    artists: [{ id: "alternate-post-rock-artist", name: "器乐乐队" }],
     durationMs: 180_000,
   };
-  const token = "genre-last-resort-token";
+  const playlistQueries: string[] = [];
+  const playlistOffsets: number[] = [];
+  const baseProvider = planningProvider([postRockSong], []);
+  const token = "genre-alternate-playlist-token";
   const service = await createLocalService({
     port: 0,
     localControlToken: token,
-    neteaseProvider: planningProvider([fallbackSong], []),
+    neteaseProvider: {
+      ...baseProvider,
+      searchPlaylists(keyword: string, options: { offset: number }) {
+        playlistQueries.push(keyword);
+        playlistOffsets.push(options.offset);
+        return /入门精选/.test(keyword) && options.offset === 8
+          ? { total: 1, playlists: [{ id: "alternate-post-rock-playlist", name: "山海收藏", description: null, trackCount: 1 }] }
+          : { total: 0, playlists: [] };
+      },
+      playlistDetail(id: string) {
+        return { id, name: "山海收藏", description: null, trackCount: 1, tracks: [postRockSong] };
+      },
+    },
     hostProvider: groundedHostProvider(),
     ttsProvider: readyTtsProvider,
   });
@@ -1347,12 +1362,15 @@ test("explicit genre planning falls back to a short playable account list instea
   const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-one-radio-control-token": token },
-    body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 60, scenePreset: "party", sceneDescription: "", hostDensity: "low", energyCurve: "high", avoid: [], familiarityRatio: 80, recommendationMode: "genre", musicGenres: ["reggae", "latin", "post_rock"] } }),
+    body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 60, scenePreset: "party", sceneDescription: "", hostDensity: "low", energyCurve: "high", avoid: [], familiarityRatio: 80, recommendationMode: "genre", musicGenres: ["post_rock"] } }),
   });
 
   assert.equal(response.status, 201, await response.clone().text());
   const program = (await json(response)).program;
-  assert.deepEqual(program.rundown.map((track: { id: string }) => track.id), [fallbackSong.id]);
+  assert.ok(playlistQueries.some((query) => /后摇 入门精选/.test(query)));
+  assert.ok(playlistOffsets.includes(8));
+  assert.deepEqual(program.rundown.map((track: { id: string }) => track.id), [postRockSong.id]);
+  assert.ok(program.rundown[0].styleTags.includes("post_rock"));
   assert.equal(program.planSummary.actualFamiliarityRatio, 0);
 });
 

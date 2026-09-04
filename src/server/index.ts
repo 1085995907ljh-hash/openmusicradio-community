@@ -99,10 +99,10 @@ const HOST_SCRIPT_MAX_ATTEMPTS = 2;
 const FIXTURE_TRACK_IDS = new Set(FIXTURE_TRACKS.map((track) => track.id));
 const DEFAULT_LISTENING_PROFILE_DIR = join(homedir(), "Library", "Application Support", "OneRadio", "profiles");
 const DESKTOP_PET_PREFERENCES_SUITE = process.env.ONE_RADIO_PET_PREFERENCES_SUITE?.trim() || "dev.openmusicradio.desktop-pet";
-const MAX_PUBLIC_PLAYLIST_QUERIES = 18;
+const MAX_PUBLIC_PLAYLIST_QUERIES = 30;
 const PUBLIC_PLAYLIST_SEARCH_LIMIT = 8;
-const MAX_PUBLIC_PLAYLIST_DETAILS = 24;
-const PUBLIC_PLAYLIST_TRACK_SAMPLE_LIMIT = 24;
+const MAX_PUBLIC_PLAYLIST_DETAILS = 36;
+const PUBLIC_PLAYLIST_TRACK_SAMPLE_LIMIT = 30;
 const ATMOSPHERE_EXPLORATION_RATIO_MAX = 10;
 const LEGACY_DISCOVERY_YEARS = 10;
 const PROGRAM_DURATION_TOLERANCE_RATIO = 0.08;
@@ -622,6 +622,17 @@ function selectedStyleAffinities(profile: { styleAffinities?: unknown }, styleTa
   );
 }
 
+function playlistQueriesForGenre(genre: MusicGenreId): string[] {
+  const label = MUSIC_GENRES[genre].label;
+  return [...new Set([
+    ...STYLE_PLAYLIST_QUERY_TERMS[genre],
+    `${label} 必听歌单`,
+    `${label} 经典与新声`,
+    `${label} 深度收藏`,
+    `${label} 入门精选`,
+  ])];
+}
+
 function stylePublicPlaylistQueries(scenePreset: ScenePreset, styleTags: readonly MusicGenreId[], affinities: readonly UnknownRecord[], mode: NonNullable<ProgramSpec["recommendationMode"]> = "atmosphere", exploration = false): string[] {
   const byStyle = new Map(affinities.flatMap((affinity) =>
     typeof affinity.style === "string" ? [[affinity.style, affinity] as const] : [],
@@ -643,7 +654,7 @@ function stylePublicPlaylistQueries(scenePreset: ScenePreset, styleTags: readonl
       }
     }
     if (mode === "atmosphere") queries.push(`${DESKTOP_SCENE_QUERY_TERMS[scenePreset]} ${styleTerm} 歌单`);
-    else queries.push(...STYLE_PLAYLIST_QUERY_TERMS[genre]);
+    else queries.push(...playlistQueriesForGenre(genre));
   }
   return [...new Set(queries)];
 }
@@ -651,7 +662,7 @@ function stylePublicPlaylistQueries(scenePreset: ScenePreset, styleTags: readonl
 function genreForPlaylistQuery(query: string, genres: readonly MusicGenreId[]): MusicGenreId | null {
   const normalized = query.normalize("NFKC").toLocaleLowerCase();
   for (const genre of genres) {
-    if (STYLE_PLAYLIST_QUERY_TERMS[genre].some((term) => normalized.includes(term.normalize("NFKC").toLocaleLowerCase()))) return genre;
+    if (playlistQueriesForGenre(genre).some((term) => normalized.includes(term.normalize("NFKC").toLocaleLowerCase()))) return genre;
   }
   return null;
 }
@@ -2353,15 +2364,19 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const publicPlaylistQueries = stylePublicPlaylistQueries(scenePreset, sceneStyleTags, currentStyleAffinities, recommendationMode, isAtmosphereExploration(recommendationMode, familiarityRatio))
       .filter((query, index, all) => query.length > 0 && all.indexOf(query) === index)
       .slice(0, MAX_PUBLIC_PLAYLIST_QUERIES);
+    const publicPlaylistSearchRequests = publicPlaylistQueries.map((query, index) => ({
+      query,
+      offset: recommendationMode === "genre" && index % 3 === 2 ? PUBLIC_PLAYLIST_SEARCH_LIMIT : 0,
+    }));
     const playlistSamplingSeed = randomBytes(8).toString("hex");
-    const playlistSearchResults = typeof provider.searchPlaylists === "function" && typeof provider.playlistDetail === "function" && publicPlaylistQueries.length > 0
-      ? await Promise.allSettled(publicPlaylistQueries.map((query) => invoke(() => provider.searchPlaylists!(query, { limit: PUBLIC_PLAYLIST_SEARCH_LIMIT, offset: 0, signal }))))
+    const playlistSearchResults = typeof provider.searchPlaylists === "function" && typeof provider.playlistDetail === "function" && publicPlaylistSearchRequests.length > 0
+      ? await Promise.allSettled(publicPlaylistSearchRequests.map(({ query, offset }) => invoke(() => provider.searchPlaylists!(query, { limit: PUBLIC_PLAYLIST_SEARCH_LIMIT, offset, signal }))))
       : [];
     if (playlistSearchResults.some((task) => task.status === "rejected")) failedSignals.push("publicPlaylistSearch:partial");
     const publicPlaylistSeedById = new Map<string, { id: string; query: string; styleTags: MusicGenreId[]; styleVerified: boolean }>();
     const playlistSearchGroups = playlistSearchResults.flatMap((task, index) => {
       if (task.status !== "fulfilled" || !isRecord(task.value) || !Array.isArray(task.value.playlists)) return [];
-      const query = publicPlaylistQueries[index] ?? "";
+      const query = publicPlaylistSearchRequests[index]?.query ?? "";
       const queryGenre = genreForPlaylistQuery(query, sceneStyleTags);
       const queryTags = queryGenre ? [queryGenre] : inferStyleTags({ searchQuery: query });
       return [{ query, styleTags: queryTags.length > 0 ? queryTags : sceneStyleTags, playlists: task.value.playlists, queryGenre }];
@@ -2731,8 +2746,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const familiarFitShare = familiar.length === 0 ? 0 : familiar.filter(fitsProgramStyle).length / familiar.length;
     const discoveryFitShare = discovery.length === 0 ? 0 : discovery.filter(fitsProgramStyle).length / discovery.length;
     const hasStyleFamiliarAnchors = familiar.some(fitsProgramStyle);
-    const stylePlayableDurationSeconds = playable.filter(fitsProgramStyle).reduce((total, track) => total + track.durationSeconds, 0);
-    const allowOffStyleFallback = explicitMusicStyles && stylePlayableDurationSeconds < minimumDurationSeconds;
     const targetRatio = explicitMusicStyles && !hasStyleFamiliarAnchors
       ? 0
       : discoveryFitShare >= 0.35 && familiarFitShare < 0.2
@@ -2759,7 +2772,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         const lowest = Math.min(...[...selectedStyleCounts.values()]);
         return (selectedStyleCounts.get(style) ?? 0) === lowest;
       };
-      const take = (pool: ProgramRundownItem[], uniqueArtist: boolean, allowExplorationFallback: boolean, allowStyleFallback = false): ProgramRundownItem | null => {
+      const take = (pool: ProgramRundownItem[], uniqueArtist: boolean, allowExplorationFallback: boolean): ProgramRundownItem | null => {
         const canTake = (track: ProgramRundownItem): boolean =>
           !selectedIds.has(track.id)
           && (!uniqueArtist || !usedArtists.has(track.artist.toLocaleLowerCase()))
@@ -2774,7 +2787,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           );
         const item = pool.find((track) => sceneStyleSet.size > 1 && fitsProgramStyle(track) && fillsUnderusedStyle(track) && canTake(track))
           ?? pool.find((track) => fitsProgramStyle(track) && canTake(track))
-          ?? (explicitMusicStyles && !allowStyleFallback ? null : pool.find(canTake));
+          ?? (explicitMusicStyles ? null : pool.find(canTake));
         if (!item) return null;
         selectedIds.add(item.id);
         usedArtists.add(item.artist.toLocaleLowerCase());
@@ -2794,11 +2807,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           ?? take(preferred, true, true)
           ?? take(alternate, true, true)
           ?? take(preferred, false, true)
-          ?? take(alternate, false, true)
-          ?? (allowOffStyleFallback ? take(preferred, true, true, true) : null)
-          ?? (allowOffStyleFallback ? take(alternate, true, true, true) : null)
-          ?? (allowOffStyleFallback ? take(preferred, false, true, true) : null)
-          ?? (allowOffStyleFallback ? take(alternate, false, true, true) : null);
+          ?? take(alternate, false, true);
         if (!item) break;
         selected.push(item);
       }
