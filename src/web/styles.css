@@ -404,6 +404,13 @@ textarea:focus, input:focus { border-color: #5f8765; }
 .playlist-account-status strong { color: var(--text); font-size: 11px; font-weight: 620; }
 .playlist-account-status small { color: var(--muted); font-size: 9px; }
 .playlist-account-status-local { color: var(--muted); background: var(--panel); }
+.playlist-program-specs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 14px 21px; border-bottom: 1px solid var(--border); background: rgba(7, 13, 10, .48); }
+.playlist-program-specs > div { min-width: 0; display: grid; gap: 4px; padding: 2px 12px; border-right: 1px solid var(--border); }
+.playlist-program-specs > div:first-child, .playlist-program-specs > div:nth-child(5) { padding-left: 0; }
+.playlist-program-specs > div:nth-child(4), .playlist-program-specs > div:last-child { border-right: 0; }
+.playlist-program-specs > div:nth-child(n + 5) { margin-top: 11px; }
+.playlist-program-specs dt { color: var(--subtle); font-size: 8px; }
+.playlist-program-specs dd { overflow: hidden; margin: 0; color: var(--text); font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .playlist-tracks { padding: 18px 21px 5px; }
 .playlist-tracks ol { list-style: none; margin: 13px 0 0; padding: 0; display: grid; }
 .playlist-tracks li { min-height: 64px; display: grid; grid-template-columns: 25px 42px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 8px 9px; border-bottom: 1px solid rgba(39, 48, 42, .65); }
@@ -1030,6 +1037,11 @@ body { background: #080a0b; }
 }
 
 @media (max-width: 520px) {
+  .playlist-program-specs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .playlist-program-specs > div { margin-top: 10px; padding-left: 0; }
+  .playlist-program-specs > div:nth-child(odd) { border-right: 1px solid var(--border); }
+  .playlist-program-specs > div:nth-child(even) { padding-left: 12px; border-right: 0; }
+  .playlist-program-specs > div:nth-child(-n + 2) { margin-top: 0; }
   .radio-landing { min-height: 100svh; }
   .landing-system { font-size: 7px; }
   .landing-channel { font-size: 7px; }

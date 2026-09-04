@@ -888,7 +888,7 @@ function App() {
                   : null;
   const canCreate = createBlocker === null && !isCreating;
   const broadcastNavigationLocked = isBroadcastNavigationLocked(program?.status);
-  const programActive = broadcastNavigationLocked;
+  const programActive = Boolean(program && ["preparing", "on_air", "closing"].includes(program.status));
   const remainingSeconds = useMemo(() => {
     if (!program) return 0;
     if (program.localOnly && program.deadlineAt && ["on_air", "preparing", "closing"].includes(program.status)) {
@@ -909,7 +909,9 @@ function App() {
       desktopPetRevisionRef.current = 0;
     }
     const mood = resolveRadioHostPetMood({
-        view: view === "generating" || view === "preparing" || view === "settings" ? "setup" : view,
+      view: view === "settings" && program.status === "on_air"
+        ? "on_air"
+        : view === "generating" || view === "preparing" || view === "settings" ? "setup" : view,
       programStatus: program.status,
       hostStatus: program.host?.status,
       creating: isCreating,
@@ -1841,7 +1843,7 @@ function App() {
 
   useEffect(() => {
     const track = program?.currentTrack;
-    const shouldPlay = Boolean(!showLanding && view === "on_air" && program && !program.localOnly && program.status === "on_air" && track?.audioUrl);
+    const shouldPlay = Boolean(!showLanding && program && !program.localOnly && program.status === "on_air" && track?.audioUrl);
     if (!shouldPlay || !program || !track?.audioUrl) {
       void stopAudio();
       return;
@@ -1859,11 +1861,11 @@ function App() {
       if (previousDuckOwner) restoreWebMusic(previousDuckOwner);
       if (!seamlessHandoff) void setMusicFromSource(track.audioUrl, key);
     }
-  }, [cancelHostForTrackChange, prepareMusicBehindHost, program?.currentTrack?.audioUrl, program?.currentTrack?.id, program?.generation, program?.id, program?.localOnly, program?.status, setMusicFromSource, showLanding, stopAudio, view]);
+  }, [cancelHostForTrackChange, prepareMusicBehindHost, program?.currentTrack?.audioUrl, program?.currentTrack?.id, program?.generation, program?.id, program?.localOnly, program?.status, setMusicFromSource, showLanding, stopAudio]);
 
   useEffect(() => {
     const track = program?.currentTrack;
-    if (showLanding || view !== "on_air" || !program || program.localOnly || program.status !== "on_air" || !track) return;
+    if (showLanding || !program || program.localOnly || program.status !== "on_air" || !track) return;
     const apiMusicSource = isApiMusicSource(program.spec.sourceId);
     const desktopSource = !apiMusicSource && program.spec.sourceId !== "fixture";
     const exactApiMusic = apiMusicSource && Boolean(track.audioUrl) && Array.isArray(program.rundown);
@@ -2114,7 +2116,7 @@ function App() {
       if (hostRetryTimerRef.current !== null) window.clearTimeout(hostRetryTimerRef.current);
       hostRetryTimerRef.current = null;
     };
-  }, [duckPlayerVolume, duckWebMusic, hostRetryNonce, program?.currentTrack?.id, program?.generation, program?.id, program?.localOnly, program?.spec.scenePreset, program?.status, releaseMusicWithoutHost, restoreDuckOperation, restorePlayerVolume, restoreWebMusic, scheduledDesktopHostSlot, showLanding, startMusicBehindHost, view]);
+  }, [duckPlayerVolume, duckWebMusic, hostRetryNonce, program?.currentTrack?.id, program?.generation, program?.id, program?.localOnly, program?.spec.scenePreset, program?.status, releaseMusicWithoutHost, restoreDuckOperation, restorePlayerVolume, restoreWebMusic, scheduledDesktopHostSlot, showLanding, startMusicBehindHost]);
 
   const handleHostAudioError = useCallback(() => {
     const audio = audioRef.current;
@@ -2694,7 +2696,7 @@ function App() {
     if (view === "settings") return <LocalSettingsView
       section={settingsSection}
       onSectionChange={setSettingsSection}
-      onClose={() => setView(settingsReturnViewRef.current === "settings" ? "setup" : settingsReturnViewRef.current)}
+      onClose={() => setView(program ? viewForProgramStatus(program.status) : settingsReturnViewRef.current === "settings" ? "setup" : settingsReturnViewRef.current)}
       sources={sources}
       sourceTransport={sourceTransport}
       health={health}
@@ -2875,10 +2877,10 @@ function App() {
           <TopStage index="05" label="播出中" state={["preparing", "on_air"].includes(view) ? "active" : view === "ended" ? "done" : "upcoming"} />
         </nav>}
         <div className="topbar-actions">
-          <IconButton label={view === "settings" ? "返回节目" : broadcastNavigationLocked ? "播出中不可打开设置" : "本机设置"} disabled={broadcastNavigationLocked} className={`topbar-tool topbar-tool-settings${view === "settings" ? " is-active" : ""}`} onClick={() => {
+          <IconButton label={view === "settings" ? "返回节目" : broadcastNavigationLocked ? "节目切换中，暂不可打开设置" : "本机设置"} disabled={broadcastNavigationLocked} className={`topbar-tool topbar-tool-settings${view === "settings" ? " is-active" : ""}`} onClick={() => {
             if (broadcastNavigationLocked) return;
             if (view === "settings") {
-              setView(settingsReturnViewRef.current === "settings" ? "setup" : settingsReturnViewRef.current);
+              setView(program ? viewForProgramStatus(program.status) : settingsReturnViewRef.current === "settings" ? "setup" : settingsReturnViewRef.current);
               return;
             }
             settingsReturnViewRef.current = view;
@@ -4335,6 +4337,11 @@ function PlaylistDialog({ program, onClose }: { program: LocalProgram; onClose: 
     };
   }, [onClose]);
   const tracks = program.rundown ?? [];
+  const selectedHost = HOST_PROFILES[program.spec.hostProfile ?? DEFAULT_HOST_PROFILE];
+  const density = HOST_DENSITY_OPTIONS.find((option) => option.value === program.spec.hostDensity);
+  const familiarity = FAMILIARITY_OPTIONS.find((option) => option.value === program.spec.familiarityRatio);
+  const genreLabels = (program.spec.musicGenres ?? []).map((genreId) => MUSIC_GENRES[genreId].label);
+  const recommendationMode = program.spec.recommendationMode === "genre" || genreLabels.length > 0 ? "genre" : "atmosphere";
   const playlistStatus = (() => {
     const playlist = program.playlist;
     if (!playlist) return { icon: <Info size={14} />, className: "playlist-account-status playlist-account-status-local", title: "这是本次电台的锁定歌单。", detail: `${SOURCE_LABELS[program.spec.sourceId]} · 本机节目记录` };
@@ -4351,6 +4358,15 @@ function PlaylistDialog({ program, onClose }: { program: LocalProgram; onClose: 
           <IconButton label="关闭歌单" onClick={onClose}><X size={17} /></IconButton>
         </div>
         <div className={playlistStatus.className} role="status">{playlistStatus.icon}<span><strong>{playlistStatus.title}</strong><small>{playlistStatus.detail}</small></span></div>
+        <dl className="playlist-program-specs" aria-label="本次节目参数">
+          <div><dt>音乐平台</dt><dd>{SOURCE_SHORT_LABELS[program.spec.sourceId]}</dd></div>
+          <div><dt>节目时长</dt><dd>{program.spec.durationMinutes} 分钟</dd></div>
+          <div><dt>主持人</dt><dd>{selectedHost.name}</dd></div>
+          <div><dt>推荐方式</dt><dd>{recommendationMode === "genre" ? "按风格推荐" : "按氛围推荐"}</dd></div>
+          <div><dt>{recommendationMode === "genre" ? "音乐风格" : "音乐氛围"}</dt><dd>{recommendationMode === "genre" ? genreLabels.join(" / ") || "未指定" : SCENE_META[program.spec.scenePreset].label}</dd></div>
+          <div><dt>熟悉 / 探索</dt><dd>{familiarity?.label ?? "平衡推荐"}</dd></div>
+          <div><dt>口播频率</dt><dd>{density?.label ?? program.spec.hostDensity}</dd></div>
+        </dl>
         <div className="playlist-tracks">
           <div className="panel-kicker"><span><ListMusic size={14} />播放顺序</span><span>{tracks.length} 首</span></div>
           {tracks.length === 0
