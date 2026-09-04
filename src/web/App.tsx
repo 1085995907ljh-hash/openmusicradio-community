@@ -298,12 +298,12 @@ const SCENE_META: Record<ScenePreset, { label: string; hint: string; curve: stri
 };
 
 const HOST_PERSONALITY_COPY: Record<HostProfileId, string> = {
-  longhao: "耐心、细腻，擅长把复杂的话说得轻松自然。",
-  xiaocheng: "理性克制，喜欢用清楚的信息建立可靠感。",
-  longxin: "清爽、有活力，适合把节目讲得明亮又不油。",
-  anxuan: "爽朗直接，表达有力量，也很会照顾现场节奏。",
-  anya: "观察敏锐，措辞有分寸，偶尔带一点冷幽默。",
-  anran: "好奇外向，反应很快，很容易把气氛带热。",
+  longhao: "声音温暖柔和，情绪稳定，擅长把音乐故事讲得细腻深情。",
+  xiaocheng: "声线低稳清楚，理性克制，像一位做足功课的音乐编辑。",
+  longxin: "声音清亮年轻，清新有活力，像阳光自然的大学生音乐博主。",
+  anxuan: "声线明亮有劲，爽朗坚定，很会照顾现场节奏和情绪起伏。",
+  anya: "声音干净从容，观察敏锐，像审美准确的独立音乐专栏作者。",
+  anran: "声线明快灵动，好奇外向，善于自然地把节目气氛带热。",
 };
 
 const FALLBACK_SOURCES: SourceDiagnostic[] = [
