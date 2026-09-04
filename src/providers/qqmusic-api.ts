@@ -519,10 +519,11 @@ function normalizeQqCoverUrl(value: unknown): string | undefined {
 }
 function parsePlaylist(value: unknown): QqMusicPlaylist {
   const root = asRecord(value, "QQ playlist");
+  const dirId = optionalNumericId(root.dirId, "playlist dir id");
   return {
     id: requireNumericId(root.id, "playlist id"),
     ...(root.tid === undefined ? {} : { tid: requireNumericId(root.tid, "playlist tid") }),
-    ...(root.dirId === undefined ? {} : { dirId: requireNumericId(root.dirId, "playlist dir id") }),
+    ...(dirId === undefined ? {} : { dirId }),
     name: requireString(root.name, "playlist name"),
     description: root.description === null || root.description === undefined ? null : requireString(root.description, "playlist description"),
     trackCount: boundedNumber(root.trackCount, 0, Number.MAX_SAFE_INTEGER, "playlist track count"),
@@ -538,6 +539,7 @@ function boundedNumber(value: unknown, min: number, max: number, field: string):
 function boundedInteger(value: number | undefined, fallback: number, min: number, max: number, field: string): number { const result = value ?? fallback; if (!Number.isSafeInteger(result) || result < min || result > max) throw invalidInput(`${field} is invalid`); return result }
 function positiveInteger(value: number | undefined, fallback: number): number { return value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : fallback }
 function requireNumericId(value: unknown, field: string): string { if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return String(value); if (typeof value === "string" && /^[1-9]\d*$/.test(value.trim())) return value.trim(); throw invalidInput(`${field} is invalid`) }
+function optionalNumericId(value: unknown, field: string): string | undefined { return value === undefined || value === null || value === "" ? undefined : requireNumericId(value, field) }
 function requireAccountUid(value: unknown): string { if (typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value.trim())) return value.trim(); throw invalidInput("expected account uid is invalid") }
 function requireSongId(value: unknown): string { if (typeof value === "string" && /^[A-Za-z0-9_-]{2,128}$/.test(value.trim())) return value.trim(); if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return String(value); throw invalidInput("song id is invalid") }
 function requireOpaqueKey(value: unknown): string { if (typeof value !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(value)) throw invalidInput("QR login key is invalid"); return value }

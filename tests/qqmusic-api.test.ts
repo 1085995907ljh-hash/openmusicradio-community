@@ -166,7 +166,7 @@ test("QQ profile, history contract, recommendation, and playlist operations are 
     const url = new URL(String(input));
     paths.push(`${init?.method ?? "GET"} ${url.pathname}${url.search}`);
     if (url.pathname === "/search") return jsonResponse({ songs: [song], total: 1 });
-    if (url.pathname === "/search/playlists") return jsonResponse({ playlists: [{ id: "3", tid: "3", dirId: "30", name: "摇滚精选", description: null, trackCount: 1, ownerUid: "88" }], total: 1 });
+    if (url.pathname === "/search/playlists") return jsonResponse({ playlists: [{ id: "3", tid: "3", dirId: "", name: "摇滚精选", description: null, trackCount: 1, ownerUid: "88" }], total: 1 });
     if (url.pathname === "/playlists") return jsonResponse({ playlists: [{ id: "3", tid: "3", dirId: "30", name: "学习", description: null, trackCount: 1, ownerUid: "88" }], more: false });
     if (url.pathname === "/liked") return jsonResponse({ songs: [song] });
     if (url.pathname === "/recent") return jsonResponse({ records: [{ song, playedAt: 1234 }] });
@@ -202,7 +202,7 @@ test("QQ profile, history contract, recommendation, and playlist operations are 
   });
 
   assert.deepEqual((await target.search("中文 摇滚", { limit: 5, offset: 10 })).songs[0], song);
-  assert.deepEqual(await target.searchPlaylists("摇滚精选 歌单", { limit: 4, offset: 8 }), { playlists: [{ id: "3", tid: "3", dirId: "30", name: "摇滚精选", description: null, trackCount: 1, ownerUid: "88" }], total: 1 });
+  assert.deepEqual(await target.searchPlaylists("摇滚精选 歌单", { limit: 4, offset: 8 }), { playlists: [{ id: "3", tid: "3", name: "摇滚精选", description: null, trackCount: 1, ownerUid: "88" }], total: 1 });
   assert.deepEqual(await target.userPlaylists("88"), { playlists: [{ id: "3", tid: "3", dirId: "30", name: "学习", description: null, trackCount: 1, ownerUid: "88" }], more: false });
   assert.deepEqual(await target.likedSongIds("88"), ["42"]);
   assert.deepEqual(await target.likedSongs({ limit: 500 }), [song]);
