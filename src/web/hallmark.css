@@ -10471,3 +10471,142 @@ button:disabled,
 .broadcast-stage .track-art-circular.is-spinning {
   transform: none;
 }
+
+/* Confirmation workbench: fixed viewport with independently scrolling tools. */
+.topbar-actions {
+  min-width: 3rem;
+}
+
+.confirm-topbar {
+  align-items: center;
+}
+
+.confirm-topbar > .eyebrow {
+  margin: 0;
+}
+
+.ai-host-avatar .host-avatar-portrait {
+  transform: scale(1.7);
+  transform-origin: center 25%;
+}
+
+@media (min-width: 64rem) {
+  .view-confirm {
+    height: calc(100dvh - 4.5rem);
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .view-confirm .main-content {
+    height: 100%;
+    min-height: 0;
+    padding: .65rem var(--shell-gutter) .55rem;
+    overflow: hidden;
+  }
+
+  .view-confirm .feedback-region {
+    position: fixed;
+    z-index: 70;
+    top: 5rem;
+    right: var(--shell-gutter);
+    width: min(42rem, calc(100vw - var(--shell-gutter) * 2));
+  }
+
+  .view-confirm .confirm-view {
+    width: min(92rem, 100%);
+    height: 100%;
+    min-height: 0;
+    margin-inline: auto;
+    display: grid;
+    grid-template-rows: 2.7rem auto minmax(0, 1fr) 3.35rem;
+    gap: .55rem;
+    overflow: hidden;
+  }
+
+  .view-confirm .confirm-topbar,
+  .view-confirm .program-spec-summary,
+  .view-confirm .plan-editor-grid,
+  .view-confirm .confirm-actions {
+    order: initial;
+    min-height: 0;
+    margin: 0;
+  }
+
+  .view-confirm .confirm-topbar {
+    height: 2.7rem;
+    padding: 0;
+    border: 0;
+  }
+
+  .view-confirm .confirm-topbar > .secondary-button {
+    height: 2.45rem;
+    min-height: 2.45rem;
+    margin: 0;
+  }
+
+  .view-confirm .program-spec-summary {
+    min-height: 4rem;
+    padding-block: .35rem;
+  }
+
+  .view-confirm .plan-editor-grid {
+    height: 100%;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1.65fr) minmax(19rem, .55fr);
+    gap: .75rem;
+    align-items: stretch;
+  }
+
+  .view-confirm .plan-editor-grid .program-outline,
+  .view-confirm .plan-editor-grid .ai-chat-panel {
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .view-confirm .outline-heading {
+    min-height: 4.4rem;
+    padding: .75rem 1rem;
+  }
+
+  .view-confirm .program-outline ol,
+  .view-confirm .ai-chat-log {
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .view-confirm .ai-chat-panel {
+    grid-template-rows: 4.4rem minmax(0, 1fr) auto;
+  }
+
+  .view-confirm .ai-chat-identity {
+    min-height: 4.4rem;
+    padding: .45rem .8rem;
+  }
+
+  .view-confirm .ai-host-avatar {
+    width: 3.35rem;
+    height: 3.35rem;
+    flex-basis: 3.35rem;
+  }
+
+  .view-confirm .ai-chat-compose {
+    padding: .65rem;
+  }
+
+  .view-confirm .ai-chat-compose > small {
+    display: none;
+  }
+
+  .view-confirm .confirm-actions {
+    height: 3.35rem;
+    padding: .4rem 0 0;
+  }
+
+  .view-confirm .confirm-actions .primary-button {
+    min-height: 2.75rem;
+    height: 2.75rem;
+  }
+}

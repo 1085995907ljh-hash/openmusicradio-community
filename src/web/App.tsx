@@ -2884,11 +2884,6 @@ function App() {
             cancelVoicePreview();
             setView("settings");
           }}>{view === "settings" ? <X size={20} strokeWidth={1.8} /> : <Settings2 size={20} strokeWidth={1.8} />}</IconButton>
-          <IconButton label={broadcastNavigationLocked ? "播出中暂停刷新诊断" : "刷新诊断"} disabled={broadcastNavigationLocked} className="topbar-tool topbar-tool-refresh" onClick={() => {
-            if (broadcastNavigationLocked) return;
-            void refreshSources();
-            void refreshHealth();
-          }}><RefreshCw size={20} strokeWidth={1.8} /></IconButton>
         </div>
       </header>
 
@@ -3846,7 +3841,7 @@ function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, 
   };
   return (
     <div className="confirm-view">
-      <div className="confirm-topbar"><div className="section-intro section-intro-wide"><p className="eyebrow">确认计划</p><h2>检查歌曲与口播，然后开播。</h2></div><button className="secondary-button" type="button" onClick={onExit} disabled={exiting || confirming || updating}>{exiting ? <LoaderCircle size={15} className="spin" /> : <RotateCcw size={15} />}{exiting ? "退出中" : "退出节目"}</button></div>
+      <div className="confirm-topbar"><p className="eyebrow">确认计划</p><button className="secondary-button" type="button" onClick={onExit} disabled={exiting || confirming || updating}>{exiting ? <LoaderCircle size={15} className="spin" /> : <RotateCcw size={15} />}{exiting ? "退出中" : "退出节目"}</button></div>
       <section className="program-spec-summary" aria-labelledby="program-spec-summary-title">
         <div className="program-spec-summary-heading"><p className="eyebrow" id="program-spec-summary-title">本次电台参数</p><span>{rundown.length} 首歌曲 · {hostMoments.length} 段口播</span></div>
         <dl className="program-spec-list">
