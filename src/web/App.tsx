@@ -817,7 +817,7 @@ function App() {
   programRef.current = program;
 
   useEffect(() => {
-    window.localStorage.setItem(LOCAL_AUDIO_OUTPUT_KEY, audioOutputId);
+    if (localOnboardingComplete) window.localStorage.setItem(LOCAL_AUDIO_OUTPUT_KEY, audioOutputId);
     let disposed = false;
     const applyOutput = async () => {
       const elements = [musicAudioRef.current, audioRef.current, durationCueAudioRef.current].filter((item): item is HTMLAudioElement => Boolean(item));
@@ -835,9 +835,10 @@ function App() {
     };
     void applyOutput();
     return () => { disposed = true; };
-  }, [audioOutputId]);
+  }, [audioOutputId, localOnboardingComplete]);
 
   useEffect(() => {
+    if (!localOnboardingComplete) return;
     try {
       window.localStorage.setItem(LOCAL_PROGRAM_DEFAULTS_KEY, JSON.stringify({
         sourceId: selectedSource,
@@ -853,7 +854,7 @@ function App() {
     } catch {
       // The current session remains usable when browser storage is unavailable.
     }
-  }, [desktopPetEnabled, durationMinutes, familiarityRatio, hostDensity, hostProfile, musicGenres, recommendationMode, scenePreset, selectedSource]);
+  }, [desktopPetEnabled, durationMinutes, familiarityRatio, hostDensity, hostProfile, localOnboardingComplete, musicGenres, recommendationMode, scenePreset, selectedSource]);
 
   const selectedDiagnostic = sources.find((source) => source.sourceId === selectedSource)
     ?? FALLBACK_SOURCES.find((source) => source.sourceId === selectedSource)
@@ -3359,6 +3360,13 @@ function LocalSettingsView({
     onNotice("配置已导入，正在重新载入本机设置。");
     window.setTimeout(() => window.location.reload(), 350);
   };
+  const resetAllLocalData = async () => {
+    await fetchJson("/device/account/reset", { method: "POST", body: "{}" });
+    for (const key of Object.keys(window.localStorage)) {
+      if (key.startsWith("openmusicradio.")) window.localStorage.removeItem(key);
+    }
+    window.location.replace(`${window.location.origin}/?skipIntro=1`);
+  };
   const confirmButtons = (key: string, label: string, onConfirm: () => void) => confirmAction === key
     ? <span className="inline-confirm-actions"><button className="text-button" type="button" onClick={() => setConfirmAction(null)}>取消</button><button className="danger-button" type="button" disabled={maintenancePending !== null} onClick={onConfirm}>{maintenancePending === key ? <LoaderCircle size={13} className="spin" /> : <Trash2 size={13} />}{label}</button></span>
     : <button className="text-button danger-text-button" type="button" onClick={() => setConfirmAction(key)}><Trash2 size={13} />{label}</button>;
@@ -3411,6 +3419,7 @@ function LocalSettingsView({
             <div><span className="settings-data-icon"><Activity size={17} /></span><span><strong>听歌画像</strong><small>{deviceStatus ? `${deviceStatus.storage.profiles.files} 个账号画像 · ${formatBytes(deviceStatus.storage.profiles.bytes)}` : "正在读取"}</small></span>{confirmButtons("reset-profile", "重置画像", () => void runMaintenance("reset-profile", async () => { await fetchJson("/device/profile/reset", { method: "POST", body: "{}" }); await refreshDeviceStatus(); }, "听歌画像与节目历史已重置。"))}</div>
             <div><span className="settings-data-icon"><Download size={17} /></span><span><strong>配置备份</strong><small>只包含节目默认值和非敏感模型参数</small></span><span className="settings-row-actions"><button className="secondary-button" type="button" onClick={exportSettings}><Download size={14} />导出</button><button className="secondary-button" type="button" onClick={() => importInputRef.current?.click()}><Upload size={14} />导入</button><input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void runMaintenance("import", () => importSettings(file), "配置已导入。"); }} /></span></div>
             <div><span className="settings-data-icon"><Sparkles size={17} /></span><span><strong>团队服务凭证</strong><small>{invitationAccess?.connected ? `已绑定 ${invitationAccess.user?.displayName ?? "当前成员"}` : "尚未输入邀请码"}</small></span></div>
+            <div className="settings-account-reset"><span className="settings-data-icon"><Trash2 size={17} /></span><span><strong>清除全部账号与本机数据</strong><small>删除音乐授权、邀请码设备凭证、听歌画像、节目历史、缓存和本机设置。已使用的邀请码不能再次使用。</small></span>{confirmButtons("reset-all", "确认清除全部", () => void runMaintenance("reset-all", resetAllLocalData, "全部本机数据已清除。"))}</div>
           </div>
         </section>}
         {section === "local" && <section role="tabpanel" aria-labelledby="settings-local-title">

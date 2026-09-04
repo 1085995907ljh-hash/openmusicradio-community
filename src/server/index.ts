@@ -194,6 +194,7 @@ interface EngineLike {
   heartbeat(programId: string, generation: number): unknown;
   next(command: unknown): unknown;
   stop(command: unknown): unknown;
+  reset?(): void;
 }
 
 interface HostProviderLike {
@@ -776,6 +777,15 @@ async function writeDesktopPetPreferences(input: { scale?: "small" | "medium" | 
     }));
   }
   return readDesktopPetPreferences();
+}
+
+async function clearDesktopPetPreferences(): Promise<void> {
+  if (process.platform !== "darwin") return;
+  try {
+    await execFile("/usr/bin/defaults", ["delete", DESKTOP_PET_PREFERENCES_SUITE], { timeout: 3_000 });
+  } catch {
+    // A missing preference suite is already reset.
+  }
 }
 
 async function loadListeningProfileSnapshot(providerId: "netease" | "qq", uid: string): Promise<UnknownRecord | null> {
@@ -1597,6 +1607,55 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     for (const pending of pendingLockedHostPreviews.values()) pending.controller.abort();
     pendingLockedHostPreviews.clear();
     return removed;
+  };
+
+  const clearAllLocalAccountData = async (): Promise<{ removedProfiles: number; removedAudioEntries: number }> => {
+    const current = stateNow();
+    if (current && ["preparing", "on_air", "closing"].includes(current.status)) {
+      throw new ServiceError("PROGRAM_ACTIVE", 409, "节目正在播出，结束节目后才能清除全部本机数据。");
+    }
+    const logout = async (provider: NeteaseProviderLike | QqProviderLike | undefined, label: string) => {
+      if (!provider || typeof provider.logout !== "function") return;
+      try {
+        await Promise.resolve(provider.logout());
+      } catch {
+        throw new ServiceError("ACCOUNT_RESET_FAILED", 503, `${label}本机授权清除失败，请确认本地连接器运行后重试。`);
+      }
+    };
+    await logout(qqProvider, "QQ 音乐");
+    await logout(neteaseProvider, "网易云音乐");
+    if (current) await cleanupTemporaryAccountPlaylist(current).catch(() => undefined);
+    await aiConfigStore.reset();
+    await cloudAccessStore.disconnect();
+    const removedProfiles = await clearListeningProfiles();
+    const removedAudioEntries = clearAudioStorage();
+    await clearDesktopPetPreferences();
+    desktopPetController.hide?.();
+    for (const timer of programDeadlineTimers.values()) clearTimeout(timer);
+    for (const pending of pendingLockedHostPreviews.values()) pending.controller.abort();
+    operationResults.clear();
+    planOperationResults.clear();
+    createResults.clear();
+    createProgress.clear();
+    desktopSelections.clear();
+    accountRundowns.clear();
+    accountPlaylists.clear();
+    accountPlaylistNames.clear();
+    accountPlaylistKeepRequests.clear();
+    uncertainAccountPlaylistCreates.clear();
+    qqQrLoginTypes.clear();
+    pendingLockedHostPreviews.clear();
+    lockedHostPreviewResults.clear();
+    activeNeteaseAudioStreams.clear();
+    activeQqAudioStreams.clear();
+    terminalDesktopStops.clear();
+    pendingTerminalStops.clear();
+    programDeadlineTimers.clear();
+    programActionChains.clear();
+    desktopPetClientRevisions.clear();
+    diagnosticEvents.splice(0);
+    engine.reset?.();
+    return { removedProfiles, removedAudioEntries };
   };
 
   const readOperationResult = (key: string, action: "confirm" | "next" | "stop", generation?: number): ProgramState | null => {
@@ -4081,6 +4140,11 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       assertPlayerControlAuthorized(req);
       assertMaintenanceAllowed();
       writeJson(res, 200, { removedProfiles: await clearListeningProfiles(), profiles: await profileStorageStats() });
+      return;
+    }
+    if (pathname === "/api/device/account/reset") {
+      assertPlayerControlAuthorized(req);
+      writeJson(res, 200, { reset: true, ...(await clearAllLocalAccountData()) });
       return;
     }
     if (pathname === "/api/device/pet") {

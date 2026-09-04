@@ -227,6 +227,17 @@ export class ProgramEngine {
     return this.state ? cloneProgramState(this.state) : null;
   }
 
+  reset(): void {
+    this.state = null;
+    this.currentTrackEndsAtMs = null;
+    this.lastHeartbeatAtMs = null;
+    this.previousTrack = null;
+    this.playedTrackIds.clear();
+    this.playedArtistNames.clear();
+    this.operationResults.clear();
+    this.lastObservedNowMs = null;
+  }
+
   getProgramPlan(): ReturnType<typeof buildProgramPlan> | null {
     return this.state ? buildProgramPlan(this.state.spec) : null;
   }

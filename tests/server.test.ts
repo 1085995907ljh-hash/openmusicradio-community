@@ -9,6 +9,7 @@ import { createLocalService } from "../src/server/index.js";
 import { ProgramEngine } from "../src/core/program-engine.js";
 import { ProviderError } from "../src/providers/types.js";
 import { LocalAiConfigStore } from "../src/server/local-ai-config.js";
+import type { CloudAccessStore } from "../src/server/cloud-access.js";
 import type { DesktopPlayerControllerLike } from "../src/server/desktop-player.js";
 import type { DesktopProgramControllerLike } from "../src/server/desktop-program.js";
 
@@ -224,6 +225,56 @@ test("local maintenance routes report storage and perform explicit cleanup", asy
   assert.equal(diagnostics.service.host, "127.0.0.1");
   assert.ok(Array.isArray(diagnostics.recentRequests));
   assert.doesNotMatch(JSON.stringify(diagnostics), /maintenance-test-token/);
+});
+
+test("full account reset clears local authorization and returns to an empty session", async (context) => {
+  const token = "full-reset-token";
+  const engine = new ProgramEngine({ now: () => Date.now() });
+  const draft = engine.create({ sourceId: "fixture", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [] });
+  engine.confirm({ programId: draft.id, nowMs: Date.now() });
+  let qqLogoutCalls = 0;
+  let neteaseLogoutCalls = 0;
+  let accessDisconnectCalls = 0;
+  let petHideCalls = 0;
+  const cloudAccessStore = {
+    async disconnect() { accessDisconnectCalls += 1; },
+    async status() { return { configured: true, connected: false, state: "invitation_required" }; },
+  } as unknown as CloudAccessStore;
+  const aiConfigStore = new LocalAiConfigStore(join(SERVER_TEST_PROFILE_DIR, "reset-ai-config.json"), `dev.one-radio.reset.${Date.now()}`);
+  writeFileSync(join(SERVER_TEST_PROFILE_DIR, "netease-abcdefabcdefabcdefabcdef.json"), "{}\n", { mode: 0o600 });
+  const service = await createLocalService({
+    port: 0,
+    engine,
+    localControlToken: token,
+    aiConfigStore,
+    cloudAccessStore,
+    qqProvider: { configured: true, logout() { qqLogoutCalls += 1; return {}; } },
+    neteaseProvider: { configured: true, logout() { neteaseLogoutCalls += 1; return {}; } },
+    desktopPetController: { update() {}, hide() { petHideCalls += 1; }, stop() {} },
+  });
+  await service.start();
+  context.after(() => service.stop());
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+
+  assert.equal((await fetch(`${base}/device/account/reset`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status, 401);
+  const activeReset = await fetch(`${base}/device/account/reset`, { method: "POST", headers, body: "{}" });
+  assert.equal(activeReset.status, 409);
+  assert.equal((await json(activeReset)).code, "PROGRAM_ACTIVE");
+  assert.equal(qqLogoutCalls, 0);
+  engine.stop({ programId: draft.id, generation: engine.getState()?.generation, operationId: "finish-before-reset" });
+
+  const response = await fetch(`${base}/device/account/reset`, { method: "POST", headers, body: "{}" });
+  assert.equal(response.status, 200, await response.clone().text());
+  const result = await json(response);
+  assert.equal(result.reset, true);
+  assert.equal(result.removedProfiles, 1);
+  assert.equal(qqLogoutCalls, 1);
+  assert.equal(neteaseLogoutCalls, 1);
+  assert.equal(accessDisconnectCalls, 1);
+  assert.equal(petHideCalls, 1);
+  assert.equal((await json(await fetch(`${base}/program`, { headers }))).program, null);
+  assert.equal((await json(await fetch(`${base}/device/status`, { headers }))).storage.profiles.files, 0);
 });
 
 test("local service exposes protected desktop-player controls", async (context) => {

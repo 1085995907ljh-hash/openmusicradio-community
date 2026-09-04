@@ -10472,6 +10472,16 @@ button:disabled,
   transform: none;
 }
 
+.settings-data-list > .settings-account-reset {
+  border-color: color-mix(in oklch, var(--color-danger) 52%, var(--color-rule-2));
+  background: color-mix(in oklch, var(--color-danger) 5%, var(--color-paper-2));
+}
+
+.settings-account-reset .settings-data-icon,
+.settings-account-reset > span > strong {
+  color: var(--color-danger);
+}
+
 /* Confirmation workbench: fixed viewport with independently scrolling tools. */
 .topbar-actions {
   min-width: 3rem;

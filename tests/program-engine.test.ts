@@ -52,6 +52,16 @@ test("program creation accepts only integral durations from 30 through 120 minut
   }
 });
 
+test("reset removes the entire local program session", () => {
+  const engine = new ProgramEngine({ now: () => BASE_TIME });
+  const created = engine.create(spec());
+  assert.equal(engine.getState()?.id, created.id);
+  engine.reset();
+  assert.equal(engine.getState(), null);
+  const next = engine.create(spec({ scenePreset: "commute" }));
+  assert.equal(next.status, "awaiting_confirmation");
+});
+
 test("unknown scenes are rejected and an empty optional description uses the scene default", () => {
   const unknownScene = new ProgramEngine();
   assert.throws(
