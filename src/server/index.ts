@@ -665,6 +665,17 @@ function playlistHasStyleEvidence(value: unknown, genre: MusicGenreId): boolean 
   return STYLE_PLAYLIST_EVIDENCE[genre].test(text);
 }
 
+function playlistHasConflictingStyleEvidence(value: unknown, genre: MusicGenreId): boolean {
+  if (!isRecord(value)) return false;
+  const text = [value.name, value.description]
+    .filter((field): field is string => typeof field === "string" && field.trim().length > 0)
+    .join(" ")
+    .normalize("NFKC");
+  if (!text || STYLE_PLAYLIST_EVIDENCE[genre].test(text)) return false;
+  return (Object.entries(STYLE_PLAYLIST_EVIDENCE) as Array<[MusicGenreId, RegExp]>)
+    .some(([otherGenre, pattern]) => otherGenre !== genre && pattern.test(text));
+}
+
 function seededSampleScore(seed: string, ...parts: Array<string | number>): number {
   const digest = createHash("sha256").update([seed, ...parts].join(":"), "utf8").digest();
   return digest.readUInt32BE(0) / 0xffff_ffff;
@@ -2347,8 +2358,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       ? await Promise.allSettled(publicPlaylistQueries.map((query) => invoke(() => provider.searchPlaylists!(query, { limit: PUBLIC_PLAYLIST_SEARCH_LIMIT, offset: 0, signal }))))
       : [];
     if (playlistSearchResults.some((task) => task.status === "rejected")) failedSignals.push("publicPlaylistSearch:partial");
-    const publicPlaylistSeeds: Array<{ id: string; query: string; styleTags: MusicGenreId[] }> = [];
-    const seenPublicPlaylistIds = new Set<string>();
+    const publicPlaylistSeedById = new Map<string, { id: string; query: string; styleTags: MusicGenreId[]; styleVerified: boolean }>();
     const playlistSearchGroups = playlistSearchResults.flatMap((task, index) => {
       if (task.status !== "fulfilled" || !isRecord(task.value) || !Array.isArray(task.value.playlists)) return [];
       const query = publicPlaylistQueries[index] ?? "";
@@ -2360,22 +2370,28 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     for (let playlistIndex = 0; playlistIndex < maxPlaylistSearchLength; playlistIndex += 1) {
       for (const group of playlistSearchGroups) {
         const playlist = group.playlists[playlistIndex];
-        if (!isRecord(playlist) || typeof playlist.id !== "string" || seenPublicPlaylistIds.has(playlist.id)) continue;
+        if (!isRecord(playlist) || typeof playlist.id !== "string") continue;
         if (isDisallowedRecommendationCandidate(playlist)) continue;
-        if (recommendationMode === "genre" && (!group.queryGenre || !playlistHasStyleEvidence(playlist, group.queryGenre))) continue;
-        seenPublicPlaylistIds.add(playlist.id);
-        publicPlaylistSeeds.push({ id: playlist.id, query: group.query, styleTags: group.styleTags });
+        const styleVerified = group.queryGenre !== null && playlistHasStyleEvidence(playlist, group.queryGenre);
+        if (recommendationMode === "genre" && (!group.queryGenre || (!styleVerified && playlistHasConflictingStyleEvidence(playlist, group.queryGenre)))) continue;
+        const existing = publicPlaylistSeedById.get(playlist.id);
+        if (!existing || (!existing.styleVerified && styleVerified)) {
+          publicPlaylistSeedById.set(playlist.id, { id: playlist.id, query: group.query, styleTags: group.styleTags, styleVerified });
+        }
       }
     }
+    const publicPlaylistSeeds = [...publicPlaylistSeedById.values()]
+      .sort((left, right) => Number(right.styleVerified) - Number(left.styleVerified))
+      .slice(0, MAX_PUBLIC_PLAYLIST_DETAILS);
     const publicPlaylistDetailResults = await Promise.allSettled(
-      publicPlaylistSeeds.slice(0, MAX_PUBLIC_PLAYLIST_DETAILS).map((playlist) => invoke(() => provider.playlistDetail!(playlist.id, signal))),
+      publicPlaylistSeeds.map((playlist) => invoke(() => provider.playlistDetail!(playlist.id, signal))),
     );
     if (publicPlaylistDetailResults.some((task) => task.status === "rejected")) failedSignals.push("publicPlaylistDetails:partial");
     const publicPlaylistSongGroups = publicPlaylistDetailResults.map((task, index) => {
       if (task.status !== "fulfilled" || !isRecord(task.value) || !Array.isArray(task.value.tracks)) return [];
       const playlist = publicPlaylistSeeds[index];
       if (!playlist) return [];
-      if (recommendationMode === "genre" && (playlist.styleTags.length !== 1 || !playlistHasStyleEvidence(task.value, playlist.styleTags[0]!))) return [];
+      if (recommendationMode === "genre" && (playlist.styleTags.length !== 1 || playlistHasConflictingStyleEvidence(task.value, playlist.styleTags[0]!))) return [];
       return task.value.tracks
         .map((song, trackIndex) => isRecord(song) ? {
           ...song,
@@ -2715,7 +2731,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const familiarFitShare = familiar.length === 0 ? 0 : familiar.filter(fitsProgramStyle).length / familiar.length;
     const discoveryFitShare = discovery.length === 0 ? 0 : discovery.filter(fitsProgramStyle).length / discovery.length;
     const hasStyleFamiliarAnchors = familiar.some(fitsProgramStyle);
-    const targetRatio = explicitMusicStyles && !hasStyleFamiliarAnchors && discoveryFitShare >= 0.35
+    const stylePlayableDurationSeconds = playable.filter(fitsProgramStyle).reduce((total, track) => total + track.durationSeconds, 0);
+    const allowOffStyleFallback = explicitMusicStyles && stylePlayableDurationSeconds < minimumDurationSeconds;
+    const targetRatio = explicitMusicStyles && !hasStyleFamiliarAnchors
       ? 0
       : discoveryFitShare >= 0.35 && familiarFitShare < 0.2
       ? Math.min(requestedRatio, (spec.musicGenres?.length ?? 0) > 0 ? 35 : 45)
@@ -2741,8 +2759,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         const lowest = Math.min(...[...selectedStyleCounts.values()]);
         return (selectedStyleCounts.get(style) ?? 0) === lowest;
       };
-      const take = (pool: ProgramRundownItem[], uniqueArtist: boolean, allowExplorationFallback: boolean): ProgramRundownItem | null => {
-        const requireStyleMatch = explicitMusicStyles;
+      const take = (pool: ProgramRundownItem[], uniqueArtist: boolean, allowExplorationFallback: boolean, allowStyleFallback = false): ProgramRundownItem | null => {
         const canTake = (track: ProgramRundownItem): boolean =>
           !selectedIds.has(track.id)
           && (!uniqueArtist || !usedArtists.has(track.artist.toLocaleLowerCase()))
@@ -2757,7 +2774,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           );
         const item = pool.find((track) => sceneStyleSet.size > 1 && fitsProgramStyle(track) && fillsUnderusedStyle(track) && canTake(track))
           ?? pool.find((track) => fitsProgramStyle(track) && canTake(track))
-          ?? (requireStyleMatch ? null : pool.find(canTake));
+          ?? (explicitMusicStyles && !allowStyleFallback ? null : pool.find(canTake));
         if (!item) return null;
         selectedIds.add(item.id);
         usedArtists.add(item.artist.toLocaleLowerCase());
@@ -2777,7 +2794,11 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           ?? take(preferred, true, true)
           ?? take(alternate, true, true)
           ?? take(preferred, false, true)
-          ?? take(alternate, false, true);
+          ?? take(alternate, false, true)
+          ?? (allowOffStyleFallback ? take(preferred, true, true, true) : null)
+          ?? (allowOffStyleFallback ? take(alternate, true, true, true) : null)
+          ?? (allowOffStyleFallback ? take(preferred, false, true, true) : null)
+          ?? (allowOffStyleFallback ? take(alternate, false, true, true) : null);
         if (!item) break;
         selected.push(item);
       }
@@ -2828,6 +2849,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       }
       if (ratioDistance === 0) break;
     }
+    if (items.length === 0 && maximumTrackCount > 0) items = selectApproximate(maximumTrackCount);
     const rundown: ProgramRundownItem[] = items.map((item) => ({ ...item, heard: item.liked === true }));
     if (providerId === "netease" && "songCredits" in provider && typeof provider.songCredits === "function") {
       for (let offset = 0; offset < rundown.length; offset += 4) {
@@ -4394,12 +4416,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           if (typeof preferences.accountUid === "string") accountUid = preferences.accountUid;
           if (isRecord(preferences.listenerProfile)) listenerProfile = preferences.listenerProfile as unknown as ProgramListenerProfile;
           plannedAccountRundown = await prepareAccountRundown(providerId, spec, preferences, signal, (step) => updateCreateProgress(step));
-            const plannedSeconds = plannedAccountRundown.reduce((total, track) => total + track.durationSeconds, 0);
-            if (plannedAccountRundown.length === 0 || plannedSeconds < minimumProgramDurationSeconds(spec.durationMinutes)) {
+            if (plannedAccountRundown.length === 0) {
               const label = qqApiSource ? "QQ 音乐" : "网易云";
-            throw new ServiceError(qqApiSource ? "QQ_PROVIDER_ERROR" : "NETEASE_NO_PLAYABLE_TRACKS", 409, plannedAccountRundown.length === 0
-                ? `没有从你的听歌画像与当前场景中找到可播放的${label}歌曲。`
-                : `可播放歌曲只有约 ${Math.floor(plannedSeconds / 60)} 分钟，不足以生成 ${spec.durationMinutes} 分钟节目。`);
+              throw new ServiceError(qqApiSource ? "QQ_PROVIDER_ERROR" : "NETEASE_NO_PLAYABLE_TRACKS", 409, `当前${label}没有返回任何可播放歌曲，请稍后重试。`);
             }
           if (signal.aborted) throw new ServiceError("REQUEST_ABORTED", 499, "请求已取消。");
         }

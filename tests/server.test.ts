@@ -1276,6 +1276,86 @@ test("explicit genre recommendations reject unrelated fuzzy playlist results and
   assert.ok(program.rundown.every((track: { id: string; styleTags?: string[] }) => track.id.startsWith("verified-reggae-") && track.styleTags?.includes("reggae")));
 });
 
+test("QQ genre planning uses query-backed playlists when metadata is generic and selected styles have no familiar songs", async (context) => {
+  const likedSongs = Array.from({ length: 8 }, (_, index) => ({
+    id: `qq-liked-${index + 1}`,
+    title: `收藏流行 ${index + 1}`,
+    artists: [{ id: `qq-liked-artist-${index + 1}`, name: `收藏歌手 ${index + 1}` }],
+    durationMs: 180_000,
+    styleTags: ["pop"],
+  }));
+  const reggaeSongs = Array.from({ length: 12 }, (_, index) => ({
+    id: `qq-reggae-${index + 1}`,
+    title: `Island Session ${index + 1}`,
+    artists: [{ id: `qq-reggae-artist-${index + 1}`, name: `Island Artist ${index + 1}` }],
+    durationMs: 180_000,
+  }));
+  const baseProvider = planningProvider([...likedSongs, ...reggaeSongs], likedSongs.map((song) => song.id));
+  const token = "qq-generic-genre-playlist-token";
+  const service = await createLocalService({
+    port: 0,
+    localControlToken: token,
+    qqProvider: {
+      ...baseProvider,
+      getStatus() { return { configured: true, state: "ready", authenticated: true, persistentLogin: true }; },
+      searchPlaylists() {
+        return { total: 1, playlists: [{ id: "90001", name: "海岛宝藏收藏", description: null, trackCount: reggaeSongs.length }] };
+      },
+      playlistDetail(id: string) {
+        return { id, name: "海岛宝藏收藏", description: null, trackCount: reggaeSongs.length, tracks: reggaeSongs };
+      },
+      songUrl(id: string) { return { id, url: `https://isure.stream.qqmusic.qq.com/${id}.mp3` }; },
+    },
+    hostProvider: groundedHostProvider(),
+    ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+
+  const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-one-radio-control-token": token },
+    body: JSON.stringify({ spec: { sourceId: "qq_music", durationMinutes: 30, scenePreset: "party", sceneDescription: "", hostDensity: "low", energyCurve: "high", avoid: [], familiarityRatio: 80, recommendationMode: "genre", musicGenres: ["reggae"] } }),
+  });
+
+  assert.equal(response.status, 201, await response.clone().text());
+  const program = (await json(response)).program;
+  assert.equal(program.planSummary.targetFamiliarityRatio, 80);
+  assert.equal(program.planSummary.actualFamiliarityRatio, 0);
+  assert.ok(program.rundown.length >= 10);
+  assert.ok(program.rundown.every((track: { id: string; styleTags?: string[] }) => track.id.startsWith("qq-reggae-") && track.styleTags?.includes("reggae")));
+});
+
+test("explicit genre planning falls back to a short playable account list instead of failing the whole show", async (context) => {
+  const fallbackSong = {
+    id: "genre-last-resort-1",
+    title: "可播放保底歌曲",
+    artists: [{ id: "genre-last-resort-artist", name: "保底歌手" }],
+    durationMs: 180_000,
+  };
+  const token = "genre-last-resort-token";
+  const service = await createLocalService({
+    port: 0,
+    localControlToken: token,
+    neteaseProvider: planningProvider([fallbackSong], []),
+    hostProvider: groundedHostProvider(),
+    ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+
+  const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-one-radio-control-token": token },
+    body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 60, scenePreset: "party", sceneDescription: "", hostDensity: "low", energyCurve: "high", avoid: [], familiarityRatio: 80, recommendationMode: "genre", musicGenres: ["reggae", "latin", "post_rock"] } }),
+  });
+
+  assert.equal(response.status, 201, await response.clone().text());
+  const program = (await json(response)).program;
+  assert.deepEqual(program.rundown.map((track: { id: string }) => track.id), [fallbackSong.id]);
+  assert.equal(program.planSummary.actualFamiliarityRatio, 0);
+});
+
 test("NetEase atmosphere exploration searches party playlists and samples different style pools", async (context) => {
   const likedSongs = Array.from({ length: 8 }, (_, index) => ({
     id: String(18_000 + index),
