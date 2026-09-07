@@ -1047,7 +1047,7 @@ test("NetEase planning treats familiarity as a target when the liked pool is emp
   assert.equal(program.planSummary.targetFamiliarityRatio, 20);
   assert.equal(program.planSummary.actualFamiliarityRatio, 0);
   assert.equal(program.planSummary.familiarTracks, 0);
-  assert.equal(program.planSummary.unheardTracks, 19);
+  assert.equal(program.planSummary.unheardTracks, 20);
   assert.ok(program.rundown.reduce((total: number, track: { durationSeconds: number }) => total + track.durationSeconds, 0) >= 60 * 60 * 0.92);
 });
 
@@ -1712,6 +1712,46 @@ test("account planning treats requested duration as a soft target", async (conte
   assert.equal(response.status, 201);
   const program = (await json(response)).program;
   assert.equal(program.rundown.reduce((total: number, track: { durationSeconds: number }) => total + track.durationSeconds, 0), 28 * 60);
+});
+
+test("account planning does not extend a 45-minute show to chase an exact familiarity ratio", async (context) => {
+  const songs = Array.from({ length: 119 }, (_, index) => ({
+    id: String(17_350 + index),
+    title: `时长优先歌曲 ${index + 1}`,
+    artists: [{ id: String(17_550 + index), name: `时长优先艺人 ${index + 1}` }],
+    durationMs: 240_000,
+  }));
+  const token = "duration-before-ratio-token";
+  const service = await createLocalService({
+    port: 0,
+    localControlToken: token,
+    neteaseProvider: planningProvider(songs, [songs[0]!.id]),
+    hostProvider: groundedHostProvider(),
+    ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+
+  const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-one-radio-control-token": token },
+    body: JSON.stringify({
+      spec: {
+        sourceId: "netease_music",
+        durationMinutes: 45,
+        scenePreset: "commute",
+        sceneDescription: "",
+        hostDensity: "low",
+        energyCurve: "steady",
+        avoid: [],
+        familiarityRatio: 1,
+      },
+    }),
+  });
+  assert.equal(response.status, 201);
+  const program = (await json(response)).program;
+  assert.equal(program.rundown.length, 11);
+  assert.equal(program.rundown.reduce((total: number, track: { durationSeconds: number }) => total + track.durationSeconds, 0), 44 * 60);
 });
 
 test("delete and replace can use one short backup without rebuilding a full-duration pool", async (context) => {

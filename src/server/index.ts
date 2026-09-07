@@ -2869,8 +2869,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       return ordered;
     };
     let items: ProgramRundownItem[] = [];
+    const requestedDurationSeconds = spec.durationMinutes * 60;
+    let bestDurationDistanceSeconds = Number.POSITIVE_INFINITY;
     let bestRatioDistance = Number.POSITIVE_INFINITY;
-    let bestDurationSeconds = Number.POSITIVE_INFINITY;
     const maximumTrackCount = Math.min(MAX_NETEASE_RUNDOWN_TRACKS, playable.length);
     for (let trackCount = 1; trackCount <= maximumTrackCount; trackCount += 1) {
       const candidate = selectApproximate(trackCount);
@@ -2878,12 +2879,12 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       if (durationSeconds < minimumDurationSeconds || candidate.length < minimumTrackCount) continue;
       const actualRatio = candidate.filter((track) => track.liked === true).length * 100 / candidate.length;
       const ratioDistance = Math.abs(actualRatio - targetRatio);
-      if (ratioDistance < bestRatioDistance || (ratioDistance === bestRatioDistance && durationSeconds < bestDurationSeconds)) {
+      const durationDistanceSeconds = Math.abs(durationSeconds - requestedDurationSeconds);
+      if (durationDistanceSeconds < bestDurationDistanceSeconds || (durationDistanceSeconds === bestDurationDistanceSeconds && ratioDistance < bestRatioDistance)) {
         items = candidate;
+        bestDurationDistanceSeconds = durationDistanceSeconds;
         bestRatioDistance = ratioDistance;
-        bestDurationSeconds = durationSeconds;
       }
-      if (ratioDistance === 0) break;
     }
     if (items.length === 0 && maximumTrackCount > 0) items = selectApproximate(maximumTrackCount);
     const rundown: ProgramRundownItem[] = items.map((item) => ({ ...item, heard: item.liked === true }));
