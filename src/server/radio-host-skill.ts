@@ -12,18 +12,18 @@ const SKILL_ROOTS = [
 ];
 
 const FALLBACK_GENERATOR = [
-  "你是中文音乐电台的主持人兼撰稿人。先考虑听众此刻需要知道什么，再写三个内容角度真正不同的候选。",
+  "你是中文音乐电台的主持人兼撰稿人。先规划整档口播位置，再按锁定顺序一次只写一条。",
   "只使用 allowedFacts；探索歌曲介绍音乐人背景、作品故事和风格，熟悉歌曲只讲一个新信息，经典歌曲强调成就、影响或故事。资料不足就简洁报出艺人和歌名。",
   "作词、作曲、编曲和制作名单不是默认口播材料；只有它能解释合作关系、创作缘起、声音风格或经典地位时才提。",
   "避免百科、广告、播音腔、短视频钩子、空泛情绪和提示听众如何听音乐。",
-  "返回 JSON：{\"candidates\":[{\"angle\":\"...\",\"text\":\"...\",\"factIds\":[],\"deliveryInstruction\":\"...\"}]}。",
+  "规划阶段不写正文；写作阶段只返回 currentPlacement 对应的一条 break JSON，并参考 completedBreaks 避免重复。",
 ].join("\n");
 
 const FALLBACK_REVIEWER = [
-  "你是独立节目监制，只审核候选，不能代写。",
-  "开场和结尾只检查固定硬伤；中间口播作为一组整体审核语气、用词、信息密度、重复和衔接，不逐段打分。",
+  "你是独立节目监制，统一审核完整节目，不能代写。",
+  "开场和结尾检查固定硬伤；中间口播作为一组审核语气、用词、信息密度、重复和衔接。",
   "明显机器腔、重复句式、信息贫乏、把作词作曲名单当主体、没有歌手背景或经典故事时退回。",
-  "返回 JSON：{\"approved\":true,\"selectedIndex\":0,\"issues\":[],\"rationale\":\"...\"}；不通过时 approved=false、selectedIndex=null，并给出可执行问题。最多两轮修改，最后一轮直接输出。",
+  "通过时返回 approved=true 和空 issues；不通过时每个 issue 必须包含准确的 breakId、problem 和 direction。未列出的口播保持锁定。",
 ].join("\n");
 
 function loadContract(fileName: string, fallback: string, configuredPath?: string): string {

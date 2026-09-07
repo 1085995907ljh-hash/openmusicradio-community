@@ -2382,12 +2382,15 @@ test("program creation reports real completed stages before returning the previe
   assert.deepEqual(await readProgress(4), { completedSteps: 4, status: "completed", updatedAt: (await readProgress(4)).updatedAt });
 });
 
-test("producer failure still locks fact-safe host copy for the whole plan", async (context) => {
+test("producer failure locks varied fact-safe host copy for the whole plan", async (context) => {
   const songs = Array.from({ length: 8 }, (_, index) => ({
     id: String(9_900 + index),
     title: `备用歌曲 ${index + 1}`,
-    artists: [{ id: String(10_000 + index), name: "同一位艺术家" }],
+    artists: [{ id: String(10_000 + index), name: `艺术家 ${index + 1}` }],
+    album: { id: String(11_000 + index), name: `备用专辑 ${index + 1}` },
     durationMs: 225_000,
+    releaseYear: 2018 + index,
+    styleTags: index % 2 === 0 ? ["electronic"] : ["folk"],
   }));
   const token = "metadata-fallback-token";
   const service = await createLocalService({
@@ -2397,6 +2400,7 @@ test("producer failure still locks fact-safe host copy for the whole plan", asyn
     hostProvider: {
       configured: true,
       state: "ready",
+      generateShow() { return { provider: "openai-compatible", configured: true, success: false, status: "failed", breaks: [] }; },
       generate() { return { provider: "openai-compatible", configured: true, success: false, status: "failed", text: "", factIds: [] }; },
     },
     ttsProvider: readyTtsProvider,
@@ -2413,6 +2417,11 @@ test("producer failure still locks fact-safe host copy for the whole plan", asyn
   const hostScripts = payload.rundown.filter((item: { hostScript?: { text?: string } }) => Boolean(item.hostScript)).map((item: { hostScript: { text: string } }) => item.hostScript.text);
   assert.ok(hostScripts.length > 0);
   assert.ok(hostScripts.every((text: string) => text.length > 0));
+  assert.ok(new Set(hostScripts.map((text: string) => text.split("。")[0])).size >= 3);
+  assert.ok(hostScripts.every((text: string) => !/高赞评论|曲库标签/.test(text)));
+  assert.ok(hostScripts.some((text: string) => /备用专辑/.test(text)));
+  assert.ok(hostScripts.some((text: string) => /20\d{2}年/.test(text)));
+  assert.ok(hostScripts.some((text: string) => !/备用专辑/.test(text) || !/20\d{2}年/.test(text)));
   assert.ok((await json(await fetch(`http://127.0.0.1:${service.port}/api/program`, { headers: { "x-one-radio-control-token": token } }))).program);
 });
 

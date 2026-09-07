@@ -1,5 +1,5 @@
 import type { HostContextPack } from "../shared/contracts.js";
-import { hostCharacterBounds, normalizeSpokenEnglishCase, normalizeSpokenYearDigits, radioGreetingAt } from "../core/host-script-planning.js";
+import { hostCharacterBounds, middleHostBreakCountIsAcceptable, normalizeSpokenEnglishCase, normalizeSpokenYearDigits, radioGreetingAt } from "../core/host-script-planning.js";
 import { getSceneConfig } from "../core/scenes.js";
 import { DEFAULT_HOST_PROFILE, HOST_PROFILES, hostOpeningIdentity, type HostProfileId } from "../shared/program-options.js";
 import {
@@ -39,10 +39,24 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_TEXT_LENGTH = 600;
 const PROVIDER_NAME = "openai-compatible";
 const MUSIC_RESEARCH_TIMEOUT_MS = 20_000;
-const WHOLE_SHOW_BUDGET_MS = 185_000;
+const WHOLE_SHOW_BUDGET_MS = 300_000;
 const WHOLE_SHOW_REVIEW_TIMEOUT_MS = 45_000;
 const WHOLE_SHOW_REWRITE_TIMEOUT_MS = 45_000;
 const WHOLE_SHOW_MAX_REWRITES = 2;
+
+interface HostBreakPlacement {
+  id: string;
+  beforeTrackIndex: number;
+  type: HostShowBreak["type"];
+  targetSeconds: number;
+  reason: string;
+}
+
+interface HostShowReviewIssue {
+  breakId: string;
+  problem: string;
+  direction: string;
+}
 
 const GENERATOR_SYSTEM_PROMPT = [
   "你是本地音乐电台的中文主持人兼撰稿人。先考虑听众体验，再根据节目上下文和 allowedFacts 写候选口播。",
@@ -266,20 +280,44 @@ export class OpenAICompatibleHostProvider implements HostProvider {
         }
         throw firstError ?? new ProviderError(providerErrorInfo(PROVIDER_NAME, "network_error", "whole-show stage failed", { retryable: true }));
       };
-      let breaks = await runStage(async (timeoutMs) => {
-        const payload = await this.request(mode, buildHostShowPrompt(request), options.signal, false, 4_000, timeoutMs);
-        return parseHostShowPayload(payload, request, false);
-      });
-      for (let rewrite = 0; rewrite < WHOLE_SHOW_MAX_REWRITES; rewrite += 1) {
+      const placements = await runStage(async (timeoutMs) => {
+        const payload = await this.request(mode, buildHostShowPlacementPrompt(request), options.signal, false, 2_400, timeoutMs);
+        return parseHostShowPlacementPayload(payload, request);
+      }, WHOLE_SHOW_REVIEW_TIMEOUT_MS);
+      let breaks: HostShowBreak[] = [];
+      for (const placement of placements) {
+        const payload = await runStage(async (timeoutMs) => this.request(
+          mode,
+          buildHostShowBreakPrompt(request, placements, placement, breaks),
+          options.signal,
+          false,
+          1_600,
+          timeoutMs,
+        ));
+        breaks.push(parseHostShowSingleBreakPayload(payload, request, placement));
+      }
+      for (let reviewRound = 0; reviewRound <= WHOLE_SHOW_MAX_REWRITES; reviewRound += 1) {
         const review = await runStage(async (timeoutMs) => {
           const payload = await this.request(mode, buildHostShowReviewPrompt(request, breaks), options.signal, false, 2_400, timeoutMs, this.reviewModel);
-          return parseHostShowReviewPayload(payload);
+          return parseHostShowReviewPayload(payload, breaks);
         }, WHOLE_SHOW_REVIEW_TIMEOUT_MS);
         if (review.approved) break;
-        breaks = await runStage(async (timeoutMs) => {
-          const payload = await this.request(mode, buildHostShowPrompt(request, review.feedback, rewrite + 1), options.signal, false, 4_000, timeoutMs);
-          return parseHostShowPayload(payload, request, false);
-        }, WHOLE_SHOW_REWRITE_TIMEOUT_MS);
+        if (reviewRound >= WHOLE_SHOW_MAX_REWRITES) break;
+        for (const issue of review.issues) {
+          const breakIndex = breaks.findIndex((item) => item.id === issue.breakId);
+          const current = breaks[breakIndex];
+          const placement = placements.find((item) => item.id === issue.breakId);
+          if (!current || !placement) continue;
+          const payload = await runStage(async (timeoutMs) => this.request(
+            mode,
+            buildHostShowBreakRewritePrompt(request, placements, current, breaks, issue, reviewRound + 1),
+            options.signal,
+            false,
+            1_600,
+            timeoutMs,
+          ), WHOLE_SHOW_REWRITE_TIMEOUT_MS);
+          breaks[breakIndex] = parseHostShowSingleBreakPayload(payload, request, placement);
+        }
       }
       this.runtimeState = "ready";
       return { success: true, provider: PROVIDER_NAME, status: "ready", model: this.model, reviewModel: this.reviewModel, apiMode: mode, breaks, generatedAt };
@@ -561,27 +599,82 @@ function safeHostShowRequest(request: HostShowGenerationRequest): Record<string,
   };
 }
 
-function buildHostShowPrompt(request: HostShowGenerationRequest, reviewFeedback = "", rewriteAttempt = 0): HostPrompt {
-  const user = safeHostShowRequest(request);
-  if (reviewFeedback) {
-    user.rewrite = {
-      required: true,
-      attempt: rewriteAttempt,
-      maxAttempts: WHOLE_SHOW_MAX_REWRITES,
-      finalRound: rewriteAttempt >= WHOLE_SHOW_MAX_REWRITES,
-      producerFeedback: reviewFeedback.slice(0, 2_000),
-      instruction: rewriteAttempt >= WHOLE_SHOW_MAX_REWRITES
-        ? "这是最后一次整档修改。修正监制意见后直接返回完整 breaks，本轮不会再因中段整体审查退回。"
-        : "这是第一次整档修改。优先解决中间口播组的重复、语气和信息密度问题，重新返回完整 breaks，不得只返回局部。",
-    };
-  }
+function buildHostShowPlacementPrompt(request: HostShowGenerationRequest): HostPrompt {
   return {
     system: [
       request.skillInstruction.slice(0, 48_000),
-      "开场 opening 口播必须按顺序包含：时间问好、openingIdentity、第一首歌曲介绍。收尾 closing 必须在第一句自然说明这是最后一首。中段和收尾不得再次介绍电台或主持人身份。",
-      "所有口播里的年份统一写阿拉伯数字，例如 2017年；禁止二〇一七年、二零一七年等中文数字年份。",
+      "本轮只规划口播位置，不写任何口播正文。先通读歌单和事实，按频率、资料价值、曲风变化及前后关系决定位置。",
+      "只返回 JSON：{\"frequency\":\"low | medium | high\",\"placements\":[{\"id\":\"break-01\",\"beforeTrackIndex\":1,\"type\":\"opening | middle | closing\",\"targetSeconds\":20,\"reason\":\"布点理由\"}]}。",
     ].join("\n\n"),
-    user: JSON.stringify(user),
+    user: JSON.stringify(safeHostShowRequest(request)),
+  };
+}
+
+function safeHostShowWritingContext(
+  request: HostShowGenerationRequest,
+  placements: HostBreakPlacement[],
+  placement: HostBreakPlacement,
+  breaks: HostShowBreak[],
+): Record<string, unknown> {
+  const safeRequest = safeHostShowRequest(request);
+  const safeTracks = Array.isArray(safeRequest.tracks) ? safeRequest.tracks : [];
+  return {
+    show: {
+      ...safeRequest,
+      tracks: safeTracks.map((value) => {
+        if (!isPlainRecord(value)) return value;
+        const { allowedFacts: _allowedFacts, ...track } = value;
+        return track;
+      }),
+    },
+    placements,
+    currentPlacement: placement,
+    currentTrack: safeTracks[placement.beforeTrackIndex - 1],
+    completedBreaks: breaks.map(({ id, beforeTrackIndex, type, text }) => ({ id, beforeTrackIndex, type, text })),
+  };
+}
+
+function buildHostShowBreakPrompt(
+  request: HostShowGenerationRequest,
+  placements: HostBreakPlacement[],
+  placement: HostBreakPlacement,
+  breaks: HostShowBreak[],
+): HostPrompt {
+  return {
+    system: [
+      request.skillInstruction.slice(0, 48_000),
+      "本轮只写 currentPlacement 指定的一条口播。先在内部判断这一条最值得讲的主线，再结合 completedBreaks 避免重复角度、开头、句式和收尾。不要输出思考过程。",
+      "不得改变 id、beforeTrackIndex、type 或 targetSeconds。只返回 JSON：{\"break\":{\"id\":\"break-01\",\"beforeTrackIndex\":1,\"type\":\"opening | middle | closing\",\"targetSeconds\":20,\"text\":\"可直接播出的口播\",\"sourceIds\":[\"事实ID\"],\"deliveryInstruction\":\"TTS演绎指令\"}}。",
+    ].join("\n\n"),
+    user: JSON.stringify(safeHostShowWritingContext(request, placements, placement, breaks)),
+  };
+}
+
+function buildHostShowBreakRewritePrompt(
+  request: HostShowGenerationRequest,
+  placements: HostBreakPlacement[],
+  current: HostShowBreak,
+  breaks: HostShowBreak[],
+  issue: HostShowReviewIssue,
+  rewriteAttempt: number,
+): HostPrompt {
+  const placement = placements.find((item) => item.id === current.id)!;
+  return {
+    system: [
+      request.skillInstruction.slice(0, 48_000),
+      "本轮只修改监制退回的这一条口播。已经通过的其他口播只用于检查整档重复，不得重写或返回。",
+      "保持 currentBreak 的 id、beforeTrackIndex、type 和 targetSeconds 不变。只返回与单条初稿相同的 break JSON。",
+    ].join("\n\n"),
+    user: JSON.stringify({
+      ...safeHostShowWritingContext(request, placements, placement, breaks.filter((item) => item.id !== current.id)),
+      currentBreak: current,
+      rewrite: {
+        required: true,
+        attempt: rewriteAttempt,
+        maxAttempts: WHOLE_SHOW_MAX_REWRITES,
+        producerIssue: issue,
+      },
+    }),
   };
 }
 
@@ -590,7 +683,7 @@ function buildHostShowReviewPrompt(request: HostShowGenerationRequest, breaks: H
     system: request.reviewInstruction.slice(0, 48_000),
     user: JSON.stringify({
       context: safeHostShowRequest(request),
-      reviewScope: "opening 和 closing 只检查固定硬伤；middle 作为一组整体审核语气、用词、信息密度、重复和衔接，不逐段打分。",
+      reviewScope: "统一审核完整节目。检查整档重复和衔接，同时只列出确实不合格的具体 breakId；未列出的口播视为通过并锁定。",
       completeShowDraft: { frequency: request.frequency, breaks },
     }),
   };
@@ -614,14 +707,61 @@ function withOpeningGreetingAndIdentity(
   return rest ? `${greeting}，${identity}${rest}` : `${greeting}，${identity}`;
 }
 
-function parseHostShowPayload(payload: unknown, request: HostShowGenerationRequest, enforceDuration: boolean): HostShowBreak[] {
+function parseHostShowPlacementPayload(payload: unknown, request: HostShowGenerationRequest): HostBreakPlacement[] {
   for (const candidate of collectResponseCandidates(payload)) {
     const object = extractJsonObject(candidate);
-    if (!object || !Array.isArray(object.breaks)) continue;
-    const breaks = object.breaks.map((entry, index) => parseHostShowBreak(entry, request, index, enforceDuration));
-    return breaks.sort((left, right) => left.beforeTrackIndex - right.beforeTrackIndex);
+    if (!object || !Array.isArray(object.placements)) continue;
+    const placements = object.placements.map((value, index): HostBreakPlacement => {
+      if (!isPlainRecord(value)) throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", `show placement ${index + 1} is invalid`, { retryable: false }));
+      const beforeTrackIndex = Number(value.beforeTrackIndex);
+      const expectedType = request.tracks.length === 1 || beforeTrackIndex === 1
+        ? "opening"
+        : beforeTrackIndex === request.tracks.length
+          ? "closing"
+          : "middle";
+      const type = value.type === "opening" || value.type === "middle" || value.type === "closing" ? value.type : null;
+      const targetSeconds = Number.isFinite(Number(value.targetSeconds)) && Number(value.targetSeconds) >= 5 && Number(value.targetSeconds) <= 35
+        ? Math.round(Number(value.targetSeconds))
+        : null;
+      const id = typeof value.id === "string" ? value.id.trim().slice(0, 80) : "";
+      const reason = typeof value.reason === "string" ? value.reason.trim().slice(0, 300) : "";
+      if (!Number.isInteger(beforeTrackIndex) || beforeTrackIndex < 1 || beforeTrackIndex > request.tracks.length || !id || type !== expectedType || !targetSeconds || !reason) {
+        throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", `show placement ${index + 1} is incomplete or inconsistent`, { retryable: false }));
+      }
+      return { id, beforeTrackIndex, type, targetSeconds, reason };
+    }).sort((left, right) => left.beforeTrackIndex - right.beforeTrackIndex);
+    if (new Set(placements.map((item) => item.id)).size !== placements.length || new Set(placements.map((item) => item.beforeTrackIndex)).size !== placements.length) {
+      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "show placements contain duplicate ids or positions", { retryable: false }));
+    }
+    const requiredPositions = request.tracks.length === 1 ? [1] : [1, request.tracks.length];
+    if (requiredPositions.some((position) => !placements.some((item) => item.beforeTrackIndex === position))) {
+      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "show placements omitted the opening or closing", { retryable: false }));
+    }
+    const middleCount = placements.filter((item) => item.type === "middle").length;
+    if (!middleHostBreakCountIsAcceptable(request.tracks.length, request.frequency, middleCount)) {
+      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "show placement count does not match the requested frequency", { retryable: false }));
+    }
+    return placements;
   }
-  throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "provider response did not contain a complete show draft", { retryable: false }));
+  throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "provider response did not contain a host placement plan", { retryable: false }));
+}
+
+function parseHostShowSingleBreakPayload(payload: unknown, request: HostShowGenerationRequest, placement: HostBreakPlacement): HostShowBreak {
+  for (const candidate of collectResponseCandidates(payload)) {
+    const object = extractJsonObject(candidate);
+    if (!object) continue;
+    const value = isPlainRecord(object.break) ? object.break : object;
+    if (typeof value.text !== "string") continue;
+    const parsed = parseHostShowBreak(value, request, placement.beforeTrackIndex - 1, false);
+    if (parsed.id !== placement.id
+      || parsed.beforeTrackIndex !== placement.beforeTrackIndex
+      || parsed.type !== placement.type
+      || parsed.targetSeconds !== placement.targetSeconds) {
+      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", `show break ${placement.id} changed its locked placement`, { retryable: false }));
+    }
+    return parsed;
+  }
+  throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", `provider response did not contain ${placement.id}`, { retryable: false }));
 }
 
 function parseHostShowBreak(value: unknown, request: HostShowGenerationRequest, index: number, enforceDuration: boolean): HostShowBreak {
@@ -666,16 +806,25 @@ function normalizeHostProfile(profileId: HostProfileId | undefined): HostProfile
   return profileId && HOST_PROFILES[profileId] ? profileId : DEFAULT_HOST_PROFILE;
 }
 
-function parseHostShowReviewPayload(payload: unknown): { approved: boolean; feedback: string } {
+function parseHostShowReviewPayload(payload: unknown, breaks: HostShowBreak[]): { approved: boolean; issues: HostShowReviewIssue[] } {
   for (const candidate of collectResponseCandidates(payload)) {
     const object = extractJsonObject(candidate);
     if (!object || typeof object.approved !== "boolean") continue;
-    if (object.approved) return { approved: true, feedback: "" };
-    const issues = Array.isArray(object.issues)
-      ? object.issues.map((issue) => isPlainRecord(issue) ? `${String(issue.breakId ?? "整档")}: ${String(issue.problem ?? "")}；${String(issue.direction ?? "")}` : String(issue)).filter(Boolean)
-      : [];
+    const allowedIds = new Set(breaks.map((item) => item.id));
+    const issues = Array.isArray(object.issues) ? object.issues.map((issue): HostShowReviewIssue | null => {
+      if (!isPlainRecord(issue)) return null;
+      const breakId = typeof issue.breakId === "string" ? issue.breakId.trim() : "";
+      const problem = typeof issue.problem === "string" ? issue.problem.trim().slice(0, 300) : "";
+      const direction = typeof issue.direction === "string" ? issue.direction.trim().slice(0, 300) : "";
+      return allowedIds.has(breakId) && problem && direction ? { breakId, problem, direction } : null;
+    }).filter((issue): issue is HostShowReviewIssue => issue !== null) : [];
+    if (object.approved && issues.length === 0) return { approved: true, issues: [] };
+    if (object.approved) throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "producer approval included rejected breaks", { retryable: false }));
     if (issues.length === 0) throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "producer rejection did not include actionable issues", { retryable: false }));
-    return { approved: false, feedback: issues.join("\n").slice(0, 2_000) };
+    if (new Set(issues.map((issue) => issue.breakId)).size !== issues.length) {
+      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "producer returned duplicate issues for one break", { retryable: false }));
+    }
+    return { approved: false, issues };
   }
   throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "provider response did not contain a whole-show review", { retryable: false }));
 }
@@ -712,7 +861,7 @@ export function extractJsonObject(value: unknown): Record<string, unknown> | und
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const record = value as Record<string, unknown>;
     const isContentPart = typeof record.type === "string" || typeof record.role === "string";
-    if (!isContentPart && (typeof record.text === "string" || typeof record.approved === "boolean" || Array.isArray(record.candidates) || Array.isArray(record.breaks) || Array.isArray(record.factIds) || Array.isArray(record.fact_ids) || Array.isArray(record.facts))) return record;
+    if (!isContentPart && (typeof record.text === "string" || typeof record.approved === "boolean" || isPlainRecord(record.break) || Array.isArray(record.candidates) || Array.isArray(record.breaks) || Array.isArray(record.placements) || Array.isArray(record.factIds) || Array.isArray(record.fact_ids) || Array.isArray(record.facts))) return record;
   }
   if (typeof value !== "string") return undefined;
   const source = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
@@ -780,16 +929,44 @@ export function createGuaranteedHostFallback(context: HostContextPack): ParsedHo
   const isExploration = context.isExploration === true;
   const factIds = metadataFact ? [metadataFact.id] : [];
   const backgroundFacts = context.allowedFacts.filter((fact) => fact.id !== metadataFact?.id && !fact.id.startsWith("profile:") && fact.value.length >= 12);
+  const variant = Array.from(`${context.currentTrack?.id ?? title}:${context.recentHostLines.length}`)
+    .reduce((total, character) => total + character.codePointAt(0)!, 0) % 5;
   let text: string;
   if (context.programPhase === "opening") {
     text = `${radioGreetingAt(new Date())}，${hostOpeningIdentity(normalizeHostProfile(context.hostProfile))}今天的第一首是${artist}的《${title}》。`;
   } else if (context.programPhase === "closing") {
     text = `接下来是今天的最后一首，${artist}的《${title}》。`;
   } else {
-    text = `接下来听${artist}的《${title}》。`;
+    const leads = [
+      `接下来听${artist}的《${title}》。`,
+      `下一首来自${artist}，歌名是《${title}》。`,
+      `继续听${artist}，这首是《${title}》。`,
+      `下面这首《${title}》，由${artist}演唱。`,
+      `${artist}带来的下一首歌是《${title}》。`,
+    ];
+    text = leads[variant]!;
   }
   const factLimit = isExploration ? (targetSeconds >= 30 ? 3 : 2) : (targetSeconds >= 20 ? 1 : 0);
-  for (const fact of backgroundFacts.slice(0, factLimit)) {
+  const preferredKinds = ["artist", "award", "story", "style", "album", "release", "other"];
+  const category = (value: string): string => /奖|获奖|提名|榜单|冠军|金曲|格莱美/.test(value)
+    ? "award"
+    : /风格|曲风|爵士|摇滚|民谣|流行|电子|说唱|灵魂乐|R&B/i.test(value)
+      ? "style"
+      : /出生|出道|歌手|音乐人|乐队|组合|职业生涯/.test(value)
+        ? "artist"
+        : /专辑|收录/.test(value)
+          ? "album"
+          : /发行于|发行时间|首发/.test(value)
+            ? "release"
+            : /创作|制作|灵感|采样|写给|巡演|故事/.test(value)
+              ? "story"
+              : "other";
+  const orderedFacts = [...backgroundFacts].sort((left, right) => {
+    const leftRank = (preferredKinds.indexOf(category(left.value)) - variant + preferredKinds.length) % preferredKinds.length;
+    const rightRank = (preferredKinds.indexOf(category(right.value)) - variant + preferredKinds.length) % preferredKinds.length;
+    return leftRank - rightRank;
+  });
+  for (const fact of orderedFacts.slice(0, factLimit)) {
     const sentence = `${fact.value.replace(/[。！？]+$/, "")}。`;
     if (Array.from(`${text}${sentence}`).length > bounds.max) continue;
     text += sentence;
@@ -985,7 +1162,7 @@ function collectResponseCandidates(payload: unknown): unknown[] {
     }
     if (typeof value !== "object") return;
     const record = value as Record<string, unknown>;
-    if (typeof record.text === "string" || Array.isArray(record.factIds) || Array.isArray(record.fact_ids) || Array.isArray(record.facts)) result.push(record);
+    if (typeof record.text === "string" || typeof record.approved === "boolean" || isPlainRecord(record.break) || Array.isArray(record.placements) || Array.isArray(record.breaks) || Array.isArray(record.factIds) || Array.isArray(record.fact_ids) || Array.isArray(record.facts)) result.push(record);
     for (const [key, child] of Object.entries(record)) {
       if (["output", "output_text", "choices", "message", "content", "data", "result", "response", "text", "factIds", "fact_ids", "facts"].includes(key)) visit(child, depth + 1);
     }

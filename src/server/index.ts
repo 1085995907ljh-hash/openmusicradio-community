@@ -2933,40 +2933,85 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     return { items, replacedIndexes: invalidIndexes };
   };
 
-  const createFinalHostScriptVersion = (spec: ProgramSpec, sourceItems: ProgramRundownItem[]): ProgramRundownItem[] => {
+  const createFinalHostScriptVersion = async (
+    spec: ProgramSpec,
+    sourceItems: ProgramRundownItem[],
+    supplementalFacts: Array<{ id: string; value: string; sourceUrl?: string }> = [],
+    signal?: AbortSignal,
+  ): Promise<ProgramRundownItem[]> => {
     const positions = new Set(evenlySpacedHostBreakIndices(sourceItems.length, spec.hostDensity));
     const profileId = spec.hostProfile ?? DEFAULT_HOST_PROFILE;
     const greeting = radioGreetingAt(new Date());
-    const detailFor = (item: ProgramRundownItem): string => {
-      const title = normalizeSpokenEnglishCase(item.title);
-      const details: string[] = [];
-      if (item.releaseYear) details.push(`发行于${item.releaseYear}年`);
-      if (item.album && !releaseTitlesMatch(item.title, item.album)) details.push(`收在《${normalizeSpokenEnglishCase(item.album)}》里`);
-      if (details.length === 0) return "";
-      return `这首歌${details.join("，")}`;
-    };
+    const middleLeads = [
+      (artist: string, title: string) => `接下来听${artist}的${title}。`,
+      (artist: string, title: string) => `下一首来自${artist}，歌名是${title}。`,
+      (artist: string, title: string) => `继续听${artist}，这首是${title}。`,
+      (artist: string, title: string) => `下面这首${title}，由${artist}演唱。`,
+      (artist: string, title: string) => `${artist}带来的下一首歌是${title}。`,
+    ];
     return sourceItems.map(({ hostMoment: _hostMoment, hostScript: _hostScript, ...item }, index) => {
       if (!positions.has(index)) return item;
       const artist = normalizeSpokenEnglishCase(spokenArtistName(item.artist));
       const title = `《${normalizeSpokenEnglishCase(item.title)}》`;
-      const detail = detailFor(item);
       const isOpening = index === 0;
       const isClosing = index === sourceItems.length - 1;
       const hostMoment: NonNullable<ProgramRundownItem["hostMoment"]> = isOpening ? "opening" : isClosing ? "song_note" : "next_preview";
-      const text = isOpening
-        ? `${greeting}，${hostOpeningIdentity(profileId)}今天先从${artist}的${title}开始。${detail ? `${detail}。` : ""}`
+      const lead = isOpening
+        ? `${greeting}，${hostOpeningIdentity(profileId)}今天先从${artist}的${title}开始。`
         : isClosing
-          ? `这是本档节目的最后一首，${artist}的${title}。${detail ? `${detail}。` : ""}`
-          : `${index % 2 === 0 ? "下一首换到" : "接下来听"}${artist}的${title}。${detail ? `${detail}。` : ""}`;
+          ? `今天的最后一首，留给${artist}的${title}。`
+          : middleLeads[index % middleLeads.length]!(artist, title);
+      const dimensions: Array<{ kind: string; text: string; factIds: string[] }> = [];
+      const album = item.album && !releaseTitlesMatch(item.title, item.album) ? normalizeSpokenEnglishCase(item.album) : "";
+      if (album && item.releaseYear && index % 3 === 0) {
+        dimensions.push({ kind: "release", text: `它来自${item.releaseYear}年的专辑《${album}》。`, factIds: [`track:${item.id}:album`, `track:${item.id}:year`] });
+      } else {
+        if (album) dimensions.push({ kind: "album", text: `${title}收录在专辑《${album}》中。`, factIds: [`track:${item.id}:album`] });
+        if (item.releaseYear) dimensions.push({ kind: "release", text: `这首作品发行于${item.releaseYear}年。`, factIds: [`track:${item.id}:year`] });
+      }
+      const relevantFacts = supplementalFacts
+        .filter((fact) => musicFactMatchesTrack(fact.value, item, sourceItems))
+        .filter((fact) => /[\u3400-\u9fff]/.test(fact.value))
+        .map((fact) => {
+          const sentence = fact.value.replace(/^《[^》]+》\s*\/\s*[^：:]+[：:]\s*/, "").split(/(?<=[。！？])/)[0]?.trim() ?? "";
+          const kind = /奖|获奖|提名|榜单|冠军|金曲|格莱美/.test(sentence)
+            ? "award"
+            : /风格|音乐类型|曲风|爵士|摇滚|民谣|流行|电子|说唱|灵魂乐|R&B/i.test(sentence)
+              ? "style"
+              : /出生|出道|歌手|音乐人|乐队|组合|职业生涯/.test(sentence)
+                ? "artist"
+                : "story";
+          return { kind, text: sentence.replace(/[。！？]+$/, "") + "。", factIds: [fact.id] };
+        })
+        .filter((fact) => fact.text.length >= 12 && fact.text.length <= 120);
+      dimensions.push(...relevantFacts.slice(0, 2));
+      const preferredKinds = [
+        ["artist", "style", "album", "award", "story", "release"],
+        ["story", "artist", "style", "album", "release", "award"],
+        ["album", "style", "artist", "award", "story", "release"],
+        ["award", "release", "story", "artist", "style", "album"],
+      ][index % 4]!;
+      const selected: typeof dimensions = [];
+      const plannedDurationSeconds = item.liked !== true ? 24 : 18;
+      const maxCharacters = hostCharacterBounds(plannedDurationSeconds).max;
+      const targetDimensionCount = item.liked === true || !dimensions.some((entry) => ["artist", "award", "story", "style"].includes(entry.kind)) ? 1 : 2;
+      for (const kind of preferredKinds) {
+        const dimension = dimensions.find((entry) => entry.kind === kind && !selected.includes(entry));
+        if (dimension && Array.from(`${lead}${selected.map((entry) => entry.text).join("")}${dimension.text}`).length <= maxCharacters) {
+          selected.push(dimension);
+        }
+        if (selected.length >= targetDimensionCount) break;
+      }
+      const text = `${lead}${selected.map((entry) => entry.text).join("")}`;
       const hostScript: ProgramHostScript = {
         id: randomUUID(),
         text: normalizeSpokenEnglishCase(text).slice(0, 600),
-        factIds: [`track:${item.id}:metadata`],
+        factIds: [`track:${item.id}:metadata`, ...new Set(selected.flatMap((entry) => entry.factIds))],
         instruction: "final playable host version after producer rewrite limit",
         deliveryInstruction: "自然口语，歌名和音乐人说清楚，句尾收稳。",
         hostMoment,
         generatedAt: nowIso(),
-        plannedDurationSeconds: item.liked !== true ? 24 : 18,
+        plannedDurationSeconds,
         musicBedDelaySeconds: HOST_MUSIC_START_DELAY_SECONDS,
       };
       return { ...item, hostMoment, hostScript };
@@ -3070,7 +3115,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           const beforeTrackIndex = Number(hostBreak.beforeTrackIndex);
           if (Number.isInteger(beforeTrackIndex) && beforeTrackIndex >= 1 && beforeTrackIndex <= items.length) byTrack.set(beforeTrackIndex - 1, hostBreak);
         }
-        const fallbackItems = createFinalHostScriptVersion(spec, items);
+        const fallbackItems = await createFinalHostScriptVersion(spec, items, webFacts, signal);
         return items.map((item, index) => {
           const hostBreak = byTrack.get(index);
           const fallbackItem = fallbackItems[index];
@@ -3102,7 +3147,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           return { ...item, hostMoment, hostScript };
         });
       }
-      throw new ServiceError("HOST_PROVIDER_ERROR", 502, "整档口播未通过节目监制审核，未展示半成品。");
+      return createFinalHostScriptVersion(spec, items, webFacts, signal);
     }
     const legacyMoments = new Set(evenlySpacedHostBreakIndices(items.length, spec.hostDensity));
     items = items.map((item, index) => ({
@@ -3149,6 +3194,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           source: "user",
         },
         ...(groundedTrack.album && !releaseTitlesMatch(groundedTrack.title, groundedTrack.album) ? [{ id: `track:${groundedTrack.id}:album`, value: `《${groundedTrack.title}》所属专辑是《${groundedTrack.album}》。`, source: "user" as const }] : []),
+        ...(groundedTrack.releaseYear ? [{ id: `track:${groundedTrack.id}:year`, value: `《${groundedTrack.title}》发行于${groundedTrack.releaseYear}年。`, source: "user" as const }] : []),
         ...(previous && previous.id !== groundedTrack.id ? [{ id: `track:${previous.id}:previous`, value: `刚刚播完的是${spokenArtistName(previous.artist)}的《${previous.title}》。`, source: "user" as const }] : []),
         ...(profileForPrompt?.favoriteArtists.length ? [{ id: "profile:artists", value: `听众长期偏好的艺术家包括：${profileForPrompt.favoriteArtists.join("、")}。`, source: "user" as const }] : []),
         ...(profileForPrompt?.inferredThemes.length ? [{ id: "profile:themes", value: `听众画像中反复出现的音乐主题包括：${profileForPrompt.inferredThemes.join("、")}。`, source: "user" as const }] : []),
@@ -4454,7 +4500,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             }
           } catch (error) {
             if (isHostScriptQualityFailure(error)) {
-              const locked = createFinalHostScriptVersion(spec, plannedAccountRundown);
+              const locked = await createFinalHostScriptVersion(spec, plannedAccountRundown, [], createController!.signal);
               const artifact = accountRundowns.get(state.id);
               if (artifact) {
                 artifact.items = locked;
@@ -4820,7 +4866,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               locked = await lockNeteaseHostScripts(lockedState.spec, artifact.items, artifact.listenerProfile, controller.signal, "上一轮口播未通过节目监制审核。请只重写主持口播，保留本次歌单和歌曲顺序。中间口播作为一组整体优化：减少重复句式，提升语气、用词和音乐信息密度。开场和结尾只修正固定硬伤。");
             } catch (error) {
               if (!(error instanceof ServiceError) || error.code !== "HOST_PROVIDER_ERROR") throw error;
-              locked = createFinalHostScriptVersion(lockedState.spec, artifact.items);
+              locked = await createFinalHostScriptVersion(lockedState.spec, artifact.items, [], controller.signal);
             }
             artifact.items = locked;
             artifact.hostAudio.clear();
