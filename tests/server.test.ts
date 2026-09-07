@@ -1990,7 +1990,8 @@ test("NetEase planning filters DJ and low-quality Chinese remix songs from the f
   });
   assert.equal(response.status, 201);
   const program = (await json(response)).program;
-  assert.match(program.plannedPlaylistName, /^OMR电台-电子说唱[\p{Script=Han}]{2}$/u);
+  assert.match(program.plannedPlaylistName, /^OMR电台-[\p{Script=Han}]{4}$/u);
+  assert.doesNotMatch(program.plannedPlaylistName, /电子|说唱/);
   assert.ok([...program.plannedPlaylistName].length <= 20);
   assert.deepEqual(program.rundown.map((track: { id: string }) => track.id).sort(), allowedSongs.map((song) => song.id).sort());
   assert.equal(program.rundown.some((track: { title: string }) => /DJ|抖音|Remix|车载/.test(track.title)), false);
@@ -2714,7 +2715,8 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   assert.equal((await fetch(`${base}/programs/${first.id}`)).status, 401);
   assert.equal(accountCalls, 2);
   assert.equal(first.status, "awaiting_confirmation");
-  assert.match(first.plannedPlaylistName, /^OMR电台-放松[\p{Script=Han}]{2}$/u);
+  assert.match(first.plannedPlaylistName, /^OMR电台-[\p{Script=Han}]{4}$/u);
+  assert.doesNotMatch(first.plannedPlaylistName, /放松/);
   assert.ok([...first.plannedPlaylistName].length <= 20);
   assert.ok(first.planSummary.totalTracks > 0);
   assert.equal(first.planSummary.targetFamiliarityRatio, 20);
@@ -2826,7 +2828,7 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   assert.equal(playlistCreates.length, 1);
   assert.equal(playlistAdds.length, 1);
   assert.equal(playlistNamingCalls, 0);
-  assert.match(playlistCreates[0] ?? "", /^OMR电台-放松[\p{Script=Han}]{2}$/u);
+  assert.match(playlistCreates[0] ?? "", /^OMR电台-[\p{Script=Han}]{4}$/u);
 
   const advanced = (await json(await post(`/programs/${first.id}/next`, { generation: confirmed.generation, operationId: "netease-next-1" }))).program;
   assert.notEqual(advanced.currentTrack.id, confirmed.currentTrack.id);
@@ -3310,7 +3312,7 @@ test("QQ API programs read the private profile, lock the rundown, and play witho
   assert.equal(createdResponse.status, 201, await createdResponse.clone().text());
   const created = (await json(createdResponse)).program;
   assert.equal(created.status, "awaiting_confirmation");
-  assert.match(created.plannedPlaylistName, /^OMR电台-放松[\p{Script=Han}]{2}$/u);
+  assert.match(created.plannedPlaylistName, /^OMR电台-[\p{Script=Han}]{4}$/u);
   assert.equal(created.planSummary.targetFamiliarityRatio, 60);
   assert.equal(created.rundown.length, 5);
   assert.ok(created.listenerProfile.favoriteArtists.length > 0);
@@ -3640,7 +3642,7 @@ test("QQ ambiguous playlist creation recovers the exact deterministic name inste
   assert.equal(confirmed.playlist.id, "qq-recovered-playlist");
   assert.equal(createCalls, 1);
   assert.ok(playlistOffsets.includes(100));
-  assert.match(remotePlaylists[0]?.name ?? "", /^OMR电台-放松[\p{Script=Han}]{2}$/u);
+  assert.match(remotePlaylists[0]?.name ?? "", /^OMR电台-[\p{Script=Han}]{4}$/u);
 });
 
 test("QQ confirmation fails before account writes when playlist inventory exceeds the recovery bound", async (context) => {

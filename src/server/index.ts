@@ -205,60 +205,63 @@ const SCENE_PLAYLIST_QUERY_TERMS: Record<ScenePreset, readonly string[]> = {
   commute: ["通勤 开车 律动 歌单", "上班路上 轻快 歌单", "城市通勤 音乐 歌单", "Drive Commute 歌单"],
   party: ["派对 聚会 热场 歌单", "朋友聚会 氛围 歌单", "周末派对 律动 歌单", "Party Hits 歌单", "House Party 歌单"],
 };
-const QQ_PLAYLIST_NAME_ALPHABET = "月光夜星河风声海岸城市微远方来信清醒书页思绪回响安静向前晨读余音热力节拍律动能量汗水燃点动力沿途轻响路上微风转角旋律清晨穿行晚归节奏闪耀拍点欢聚声浪今夜升温快乐回环霓虹";
 const PLAYLIST_NAME_PREFIX = "OMR电台-";
-const PLAYLIST_SCENE_LABELS: Record<ScenePreset, string> = {
-  late_night: "放松",
-  study: "专注",
-  workout: "运动",
-  commute: "律动",
-  party: "派对",
+const PLAYLIST_SCENE_CONCEPTS: Readonly<Record<ScenePreset, readonly string[]>> = {
+  late_night: ["午夜", "微光", "夜色", "静海", "月下", "深蓝", "晚风", "星河"],
+  study: ["书页", "清晨", "白昼", "窗边", "静室", "纸间", "长桌", "晴窗"],
+  workout: ["热浪", "燃点", "心跳", "疾风", "高能", "向前", "曙光", "峰顶"],
+  commute: ["公路", "街灯", "城市", "沿途", "转角", "车窗", "天际", "远方"],
+  party: ["霓虹", "闪光", "舞池", "今夜", "热场", "烟火", "人群", "声浪"],
 };
-const PLAYLIST_GENRE_LABELS: Readonly<Record<MusicGenreId, string>> = {
-  pop: "流行",
-  rock: "摇滚",
-  folk: "民谣",
-  electronic: "电子",
-  dance: "舞曲",
-  hiphop: "说唱",
-  easy_listening: "轻音乐",
-  jazz: "爵士",
-  country: "乡村",
-  rnb_soul: "节奏蓝调",
-  classical: "古典",
-  ethnic: "民族",
-  britpop: "英伦",
-  metal: "金属",
-  punk: "朋克",
-  blues: "蓝调",
-  reggae: "雷鬼",
-  world: "世界音乐",
-  latin: "拉丁",
-  new_age: "新世纪",
-  gufeng: "古风",
-  post_rock: "后摇",
-  bossa_nova: "巴萨诺瓦",
+const PLAYLIST_GENRE_CONCEPTS: Readonly<Record<MusicGenreId, readonly string[]>> = {
+  pop: ["晴空", "霓虹", "城市", "心动"],
+  rock: ["荒野", "公路", "风暴", "山谷"],
+  folk: ["原野", "木窗", "远山", "晚风"],
+  electronic: ["脉冲", "电波", "像素", "星轨"],
+  dance: ["舞池", "闪光", "热浪", "拍点"],
+  hiphop: ["街区", "夜色", "重力", "棱角"],
+  easy_listening: ["微风", "云端", "留白", "暖光"],
+  jazz: ["夜灯", "蓝夜", "烟雨", "长街"],
+  country: ["牧野", "旷野", "南风", "长路"],
+  rnb_soul: ["丝绒", "深蓝", "月色", "暖夜"],
+  classical: ["穹顶", "序章", "长廊", "晨光"],
+  ethnic: ["山河", "古道", "故土", "远方"],
+  britpop: ["雨城", "灰墙", "北岸", "长街"],
+  metal: ["熔炉", "雷鸣", "钢铁", "暗潮"],
+  punk: ["疾走", "街角", "锋芒", "破晓"],
+  blues: ["蓝夜", "旧城", "烟雨", "长街"],
+  reggae: ["海岛", "阳光", "潮汐", "夏风"],
+  world: ["远境", "群岛", "天涯", "旅途"],
+  latin: ["热浪", "日光", "海岸", "夏夜"],
+  new_age: ["云海", "星尘", "静空", "远境"],
+  gufeng: ["山月", "竹影", "长亭", "云水"],
+  post_rock: ["旷野", "星海", "回声", "远山"],
+  bossa_nova: ["海岸", "午后", "椰风", "晴窗"],
 };
 const PLAYLIST_NAME_ENDINGS = ["回响", "漫游", "声场", "夜行", "私藏", "余韵", "流光", "拾音", "微澜", "晴波", "随行", "漂流", "轻航", "听风", "星轨", "此刻"] as const;
 
-function playlistNameSubject(spec: ProgramSpec): string {
+function playlistNameConcepts(spec: ProgramSpec): readonly string[] {
   if (recommendationModeForSpec(spec) === "genre" && spec.musicGenres?.length) {
-    const availableCharacters = PLAYLIST_NAME_MAX_CHARACTERS - [...PLAYLIST_NAME_PREFIX].length - [...PLAYLIST_NAME_ENDINGS[0]].length;
-    return [...spec.musicGenres.map((genre) => PLAYLIST_GENRE_LABELS[genre]).join("")].slice(0, availableCharacters).join("");
+    return [...new Set(spec.musicGenres.flatMap((genre) => PLAYLIST_GENRE_CONCEPTS[genre]))];
   }
-  return PLAYLIST_SCENE_LABELS[spec.scenePreset];
+  return PLAYLIST_SCENE_CONCEPTS[spec.scenePreset];
 }
 
 function programPlaylistName(programId: string, spec: ProgramSpec, provider: "netease" | "qq", existingNames: Set<string>): string {
-  const subject = playlistNameSubject(spec);
-  const start = createHash("sha256").update(programId).digest()[0]! % PLAYLIST_NAME_ENDINGS.length;
-  for (let attempt = 0; attempt < 128; attempt += 1) {
-    const digest = createHash("sha256").update(`program-playlist:${programId}:${attempt}`).digest();
-    const ending = attempt < PLAYLIST_NAME_ENDINGS.length
-      ? PLAYLIST_NAME_ENDINGS[(start + attempt) % PLAYLIST_NAME_ENDINGS.length]
-      : Array.from({ length: 2 }, (_, index) => QQ_PLAYLIST_NAME_ALPHABET[digest.readUInt16BE(index * 2) % QQ_PLAYLIST_NAME_ALPHABET.length]).join("");
-    const candidate = `${PLAYLIST_NAME_PREFIX}${subject}${ending}`;
+  const concepts = playlistNameConcepts(spec);
+  const combinationCount = concepts.length * PLAYLIST_NAME_ENDINGS.length;
+  const start = createHash("sha256").update(`program-playlist:${programId}`).digest().readUInt16BE(0) % combinationCount;
+  for (let offset = 0; offset < combinationCount; offset += 1) {
+    const index = (start + offset) % combinationCount;
+    const concept = concepts[Math.floor(index / PLAYLIST_NAME_ENDINGS.length)]!;
+    const ending = PLAYLIST_NAME_ENDINGS[index % PLAYLIST_NAME_ENDINGS.length]!;
+    const candidate = `${PLAYLIST_NAME_PREFIX}${concept}${ending}`;
     if (!existingNames.has(candidate)) return candidate;
+  }
+  const fallbackConcept = concepts[start % concepts.length]!;
+  for (let sequence = 1; sequence <= 999_999; sequence += 1) {
+    const candidate = `${PLAYLIST_NAME_PREFIX}${fallbackConcept}${String(sequence).padStart(6, "0")}`;
+    if ([...candidate].length <= PLAYLIST_NAME_MAX_CHARACTERS && !existingNames.has(candidate)) return candidate;
   }
   const label = provider === "qq" ? "QQ" : "网易云";
   throw new ServiceError(provider === "qq" ? "QQ_PROVIDER_ERROR" : "NETEASE_PROVIDER_ERROR", 502, `无法为本次${label}节目生成唯一歌单名。`);
