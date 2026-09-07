@@ -10441,13 +10441,17 @@ button:disabled,
 }
 
 /* Keep the host module stable while long scripts remain fully readable. */
-.host-panel-content {
+.host-panel-content,
+.view-on_air .host-panel-content,
+.view-ended .host-panel-content {
+  grid-template-columns: 3rem minmax(0, 1fr);
+  gap: 0.7rem 0.75rem;
   min-height: 0;
 }
 
 .on-air-host-avatar {
-  width: 5rem;
-  height: 5rem;
+  width: 3rem;
+  height: 3rem;
   overflow: hidden;
   border: var(--rule-hair) solid color-mix(in oklch, var(--color-accent) 55%, var(--color-rule-2));
   border-radius: 50%;
@@ -10462,7 +10466,7 @@ button:disabled,
   object-fit: cover;
   object-position: center;
   border-radius: 0;
-  transform: scale(1.65);
+  transform: scale(1.5);
   transform-origin: center 24%;
 }
 
