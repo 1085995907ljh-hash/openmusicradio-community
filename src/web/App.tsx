@@ -4039,6 +4039,7 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
     let cancelled = false;
     let source: AudioNode | null = null;
     let meydaAnalyzer: MeydaAnalyzerInstance | null = null;
+    let frequencyAnalyzer: AnalyserNode | null = null;
     let features: VisualizerFeatures | null = null;
     let drawCount = 0;
     if (audio && active) try {
@@ -4049,6 +4050,10 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
         source.connect(visualizerContext.destination);
         visualizerSources.set(audio, source);
       }
+      frequencyAnalyzer = visualizerContext.createAnalyser();
+      frequencyAnalyzer.fftSize = 256;
+      frequencyAnalyzer.smoothingTimeConstant = .68;
+      source.connect(frequencyAnalyzer);
       features = visualizerFeatures.get(audio) ?? { amplitudeSpectrum: new Float32Array(512), frames: 0, loudness: 0, rms: 0 };
       visualizerFeatures.set(audio, features);
       meydaAnalyzer = visualizerAnalyzers.get(audio) ?? null;
@@ -4079,6 +4084,7 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
       canvas.dataset.analyserMode = "fallback";
     }
     const context = canvas.getContext("2d");
+    const frequencyValues = new Uint8Array(frequencyAnalyzer?.frequencyBinCount ?? 0);
     let lastDraw = 0;
     let displayedBeat = 0;
     let rmsFloor = .012;
@@ -4098,7 +4104,8 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
       }
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       context.clearRect(0, 0, width, height);
-      const values = features?.amplitudeSpectrum ?? new Float32Array(64);
+      if (frequencyAnalyzer) frequencyAnalyzer.getByteFrequencyData(frequencyValues);
+      const values = frequencyValues.length > 0 ? frequencyValues : features?.amplitudeSpectrum ?? new Float32Array(64);
       const rawRms = active ? features?.rms ?? 0 : 0;
       if (active && rawRms > 0) {
         rmsFloor += (rawRms - rmsFloor) * (rawRms < rmsFloor ? .14 : .003);
@@ -4115,8 +4122,7 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
       const targetBeat = active ? Math.min(1, .06 + rmsLevel * .94) : 0;
       displayedBeat += (targetBeat - displayedBeat) * (targetBeat > displayedBeat ? .78 : .2);
       const beatLevel = active ? displayedBeat : 0;
-      let spectrumPeak = 0;
-      for (const value of values) spectrumPeak = Math.max(spectrumPeak, value);
+      const spectrumScale = frequencyValues.length > 0 ? 255 : Math.max(1, ...values);
       canvas.dataset.signalLevel = signalLevel.toFixed(3);
       canvas.dataset.beatLevel = beatLevel.toFixed(3);
       canvas.dataset.featureFrames = String(features?.frames ?? 0);
@@ -4158,10 +4164,16 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
         context.stroke();
       }
       const count = 72;
+      let weakestBar = 1;
+      let strongestBar = 0;
       for (let index = 0; index < count; index += 1) {
         const sample = values[Math.floor(index / count * values.length)] ?? 0;
-        const normalizedSpectrum = spectrumPeak > 0 ? Math.min(1, sample / spectrumPeak) : 0;
-        const strength = features ? Math.min(1.12, Math.max(.04, Math.pow(normalizedSpectrum, .52) * (.42 + signalLevel * .86))) : .2 * idlePulse;
+        const normalizedSpectrum = Math.min(1, sample / spectrumScale);
+        const strength = active && (frequencyAnalyzer || features)
+          ? Math.min(1, .035 + Math.pow(normalizedSpectrum, .78) * (.68 + signalLevel * .48))
+          : .2 * idlePulse;
+        weakestBar = Math.min(weakestBar, strength);
+        strongestBar = Math.max(strongestBar, strength);
         const angle = index / count * Math.PI * 2 - Math.PI / 2;
         const inner = baseRadius;
         const outer = Math.min(safeRadius, inner + 5 + strength * availableBarLength * .92);
@@ -4175,6 +4187,7 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
         context.beginPath(); context.moveTo(x1, y1); context.lineTo(x2, y2); context.stroke();
       }
       canvas.dataset.spectrumSpan = (renderedOuterRadius - baseRadius).toFixed(2);
+      canvas.dataset.spectrumRange = ((strongestBar - weakestBar) * availableBarLength * .92).toFixed(2);
     };
     frame = window.requestAnimationFrame(draw);
     return () => {
@@ -4182,6 +4195,8 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
       window.cancelAnimationFrame(frame);
       canvas.closest<HTMLElement>(".broadcast-stage")?.style.setProperty("--audio-beat", "0");
       meydaAnalyzer?.stop();
+      if (source && frequencyAnalyzer) source.disconnect(frequencyAnalyzer);
+      frequencyAnalyzer?.disconnect();
       if (features) {
         features.frames = 0;
         features.rms = 0;
