@@ -1,5 +1,6 @@
 import { fetchWithTimeout, httpError, providerErrorInfo, readResponseBody, safeUpstreamMessage } from "./http.js";
 import { ProviderError } from "./types.js";
+import { PLAYLIST_NAME_MAX_CHARACTERS } from "../shared/program-options.js";
 import { isIP } from "node:net";
 
 const PROVIDER_NAME = "qqmusic-api";
@@ -598,7 +599,7 @@ function isPrivateHostname(hostname: string): boolean {
   }
   return false;
 }
-function requirePlaylistName(value: unknown): string { if (typeof value !== "string" || !value.trim() || value.trim().length > 100) throw invalidInput("playlist name is invalid"); return value.trim() }
+function requirePlaylistName(value: unknown): string { const name = typeof value === "string" ? value.trim() : ""; if (!name || [...name].length > PLAYLIST_NAME_MAX_CHARACTERS) throw invalidInput("playlist name is invalid"); return name }
 function normalizeBaseUrl(value: string): string { let url: URL; try { url = new URL(value) } catch { throw invalidInput("QQMUSIC_API_BASE_URL must be a valid URL") } if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || url.search || url.hash) throw invalidInput("QQMUSIC_API_BASE_URL must be an HTTP(S) origin without credentials, query, or fragment"); const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, ""); if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1") throw invalidInput("QQMUSIC_API_BASE_URL must point to the local sidecar"); return url.toString().replace(/\/$/, "") }
 function invalidInput(message: string): ProviderError { return new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_input", message, { retryable: false })) }
 function invalidResponse(message: string): ProviderError { return new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", message, { retryable: false })) }

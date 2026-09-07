@@ -80,6 +80,7 @@ export const MUSIC_GENRE_IDS = [
 ] as const;
 
 export const MAX_MUSIC_GENRES = 3;
+export const PLAYLIST_NAME_MAX_CHARACTERS = 20;
 export type MusicGenreId = (typeof MUSIC_GENRE_IDS)[number];
 
 export interface MusicGenreOption {

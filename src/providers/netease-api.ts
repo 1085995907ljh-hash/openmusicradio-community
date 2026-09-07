@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 
 import { fetchWithTimeout, httpError, providerErrorInfo, readResponseBody } from "./http.js";
 import { ProviderError } from "./types.js";
+import { PLAYLIST_NAME_MAX_CHARACTERS } from "../shared/program-options.js";
 
 const PROVIDER_NAME = "netease-api";
 const DEFAULT_BASE_URL = "http://127.0.0.1:3000";
@@ -798,7 +799,7 @@ function requireInputId(value: unknown, field: string): string {
 function requirePlaylistName(value: unknown): string {
   if (typeof value !== "string") throw invalidInput("playlist name is invalid");
   const name = value.trim();
-  if (!name) throw invalidInput("playlist name is invalid");
+  if (!name || [...name].length > PLAYLIST_NAME_MAX_CHARACTERS) throw invalidInput("playlist name is invalid");
   return name;
 }
 

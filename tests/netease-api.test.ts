@@ -596,6 +596,7 @@ test("playlist mutations reject invalid and duplicate IDs before fetching, and s
 
   await assert.rejects(provider.createPlaylist("   "), (error: unknown) => error instanceof ProviderError && error.code === "invalid_input");
   await assert.rejects(provider.createPlaylist(42 as unknown as string), (error: unknown) => error instanceof ProviderError && error.code === "invalid_input");
+  await assert.rejects(provider.createPlaylist("甲".repeat(21)), (error: unknown) => error instanceof ProviderError && error.code === "invalid_input");
   await assert.rejects(provider.addSongsToPlaylist(0, [1]), (error: unknown) => error instanceof ProviderError && error.code === "invalid_input");
   await assert.rejects(provider.addSongsToPlaylist(1, []), (error: unknown) => error instanceof ProviderError && error.code === "invalid_input");
   await assert.rejects(provider.addSongsToPlaylist(1, [1, "1"]), (error: unknown) => error instanceof ProviderError && error.code === "invalid_input");

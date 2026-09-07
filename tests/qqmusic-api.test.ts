@@ -216,6 +216,7 @@ test("QQ profile, history contract, recommendation, and playlist operations are 
   assert.deepEqual(await target.playlistDetail(3), { id: "3", dirId: "3", name: "学习", description: null, trackCount: 1, tracks: [song] });
   assert.deepEqual(await target.createPlaylist("ai电台-深夜-夜航", undefined, { expectedUid: "88" }), { id: "78", name: "ai电台-深夜-夜航", dirId: "77" });
   assert.deepEqual(playlistCreateBody, { name: "ai电台-深夜-夜航", expectedUid: "88" });
+  await assert.rejects(target.createPlaylist("甲".repeat(21), undefined, { expectedUid: "88" }), (error: unknown) => error instanceof ProviderError && error.code === "invalid_input");
   assert.deepEqual(await target.addSongsToPlaylist(78, [42], undefined, { dirId: 77, expectedUid: "88" }), { playlistId: "78", trackIds: ["42"] });
   assert.deepEqual(playlistMutationBody, { trackIds: ["42"], dirId: "77", expectedUid: "88" });
   assert.deepEqual(await target.replacePlaylistTracks(78, [42, 43], undefined, { dirId: 77, expectedUid: "88" }), { playlistId: "78", trackIds: ["43", "42"] });

@@ -29,6 +29,7 @@ import {
   MAX_MUSIC_GENRES,
   MUSIC_GENRE_IDS,
   MUSIC_GENRES,
+  PLAYLIST_NAME_MAX_CHARACTERS,
   type HostProfileId,
   type MusicGenreId,
 } from "../shared/program-options.js";
@@ -204,9 +205,8 @@ const SCENE_PLAYLIST_QUERY_TERMS: Record<ScenePreset, readonly string[]> = {
   commute: ["通勤 开车 律动 歌单", "上班路上 轻快 歌单", "城市通勤 音乐 歌单", "Drive Commute 歌单"],
   party: ["派对 聚会 热场 歌单", "朋友聚会 氛围 歌单", "周末派对 律动 歌单", "Party Hits 歌单", "House Party 歌单"],
 };
-// Six deterministic Han characters keep the user-facing name readable while
-// retaining substantially more entropy than the old sixteen-name fallback.
 const QQ_PLAYLIST_NAME_ALPHABET = "月光夜星河风声海岸城市微远方来信清醒书页思绪回响安静向前晨读余音热力节拍律动能量汗水燃点动力沿途轻响路上微风转角旋律清晨穿行晚归节奏闪耀拍点欢聚声浪今夜升温快乐回环霓虹";
+const PLAYLIST_NAME_PREFIX = "OMR电台-";
 const PLAYLIST_SCENE_LABELS: Record<ScenePreset, string> = {
   late_night: "放松",
   study: "专注",
@@ -214,30 +214,54 @@ const PLAYLIST_SCENE_LABELS: Record<ScenePreset, string> = {
   commute: "律动",
   party: "派对",
 };
-const NETEASE_PLAYLIST_SUFFIXES: Record<ScenePreset, readonly string[]> = {
-  late_night: ["微光慢行", "舒展回声", "松弛漫游", "清风低语", "轻柔潮汐", "慢拍来信"],
-  study: ["清醒书页", "专注留白", "思绪微光", "安静向前", "纸上清风", "晨读余音"],
-  workout: ["热力节拍", "向前律动", "能量上扬", "汗水回声", "燃点时刻", "动力续航"],
-  commute: ["律动轻响", "明亮慢拍", "节拍微风", "转角旋律", "流动脉冲", "轻快节奏"],
-  party: ["闪耀拍点", "欢聚声浪", "今夜升温", "快乐回环", "热场律动", "霓虹节拍"],
+const PLAYLIST_GENRE_LABELS: Readonly<Record<MusicGenreId, string>> = {
+  pop: "流行",
+  rock: "摇滚",
+  folk: "民谣",
+  electronic: "电子",
+  dance: "舞曲",
+  hiphop: "说唱",
+  easy_listening: "轻音乐",
+  jazz: "爵士",
+  country: "乡村",
+  rnb_soul: "节奏蓝调",
+  classical: "古典",
+  ethnic: "民族",
+  britpop: "英伦",
+  metal: "金属",
+  punk: "朋克",
+  blues: "蓝调",
+  reggae: "雷鬼",
+  world: "世界音乐",
+  latin: "拉丁",
+  new_age: "新世纪",
+  gufeng: "古风",
+  post_rock: "后摇",
+  bossa_nova: "巴萨诺瓦",
 };
+const PLAYLIST_NAME_ENDINGS = ["回响", "漫游", "声场", "夜行", "私藏", "余韵", "流光", "拾音", "微澜", "晴波", "随行", "漂流", "轻航", "听风", "星轨", "此刻"] as const;
+
+function playlistNameSubject(spec: ProgramSpec): string {
+  if (recommendationModeForSpec(spec) === "genre" && spec.musicGenres?.length) {
+    const availableCharacters = PLAYLIST_NAME_MAX_CHARACTERS - [...PLAYLIST_NAME_PREFIX].length - [...PLAYLIST_NAME_ENDINGS[0]].length;
+    return [...spec.musicGenres.map((genre) => PLAYLIST_GENRE_LABELS[genre]).join("")].slice(0, availableCharacters).join("");
+  }
+  return PLAYLIST_SCENE_LABELS[spec.scenePreset];
+}
 
 function programPlaylistName(programId: string, spec: ProgramSpec, provider: "netease" | "qq", existingNames: Set<string>): string {
-  const prefix = `AI电台-${PLAYLIST_SCENE_LABELS[spec.scenePreset]}-`;
-  if (provider === "netease") {
-    const candidates = NETEASE_PLAYLIST_SUFFIXES[spec.scenePreset];
-    const start = createHash("sha256").update(programId).digest()[0]! % candidates.length;
-    return Array.from({ length: candidates.length }, (_, offset) => `${prefix}${candidates[(start + offset) % candidates.length]}`)
-      .find((candidate) => !existingNames.has(candidate))
-      ?? `${prefix}${candidates[start]}`;
-  }
+  const subject = playlistNameSubject(spec);
+  const start = createHash("sha256").update(programId).digest()[0]! % PLAYLIST_NAME_ENDINGS.length;
   for (let attempt = 0; attempt < 128; attempt += 1) {
-    const digest = createHash("sha256").update(`qq-program-playlist:${programId}:${attempt}`).digest();
-    const suffix = Array.from({ length: 6 }, (_, index) => QQ_PLAYLIST_NAME_ALPHABET[digest.readUInt16BE(index * 2) % QQ_PLAYLIST_NAME_ALPHABET.length]).join("");
-    const candidate = `${prefix}${suffix}`;
+    const digest = createHash("sha256").update(`program-playlist:${programId}:${attempt}`).digest();
+    const ending = attempt < PLAYLIST_NAME_ENDINGS.length
+      ? PLAYLIST_NAME_ENDINGS[(start + attempt) % PLAYLIST_NAME_ENDINGS.length]
+      : Array.from({ length: 2 }, (_, index) => QQ_PLAYLIST_NAME_ALPHABET[digest.readUInt16BE(index * 2) % QQ_PLAYLIST_NAME_ALPHABET.length]).join("");
+    const candidate = `${PLAYLIST_NAME_PREFIX}${subject}${ending}`;
     if (!existingNames.has(candidate)) return candidate;
   }
-  throw new ServiceError("QQ_PROVIDER_ERROR", 502, "无法为本次 QQ 节目生成唯一歌单名。");
+  const label = provider === "qq" ? "QQ" : "网易云";
+  throw new ServiceError(provider === "qq" ? "QQ_PROVIDER_ERROR" : "NETEASE_PROVIDER_ERROR", 502, `无法为本次${label}节目生成唯一歌单名。`);
 }
 
 const ACTIVE_STATUSES = new Set<ProgramState["status"]>([
