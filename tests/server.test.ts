@@ -1815,12 +1815,12 @@ test("account planning does not extend a 45-minute show to chase an exact famili
   assert.equal(program.rundown.reduce((total: number, track: { durationSeconds: number }) => total + track.durationSeconds, 0), 44 * 60);
 });
 
-test("delete and replace can use one short backup without rebuilding a full-duration pool", async (context) => {
-  const songs = Array.from({ length: 6 }, (_, index) => ({
+test("delete and replace remembers removed tracks while using short backups", async (context) => {
+  const songs = Array.from({ length: 7 }, (_, index) => ({
     id: String(17_500 + index),
     title: `原位替换候选 ${index + 1}`,
     artists: [{ id: String(17_600 + index), name: `原位替换艺人 ${index + 1}` }],
-    durationMs: index === 5 ? 180_000 : 360_000,
+    durationMs: index >= 5 ? 180_000 : 360_000,
   }));
   const token = "single-replacement-backup-token";
   const service = await createLocalService({
@@ -1854,9 +1854,19 @@ test("delete and replace can use one short backup without rebuilding a full-dura
   assert.equal(replaced.rundown.length, 5);
   assert.notEqual(replaced.rundown[replaceIndex].id, originalIds[replaceIndex]);
   assert.deepEqual(replaced.rundown.filter((_: unknown, index: number) => index !== replaceIndex).map((track: { id: string }) => track.id), originalIds.filter((_: string, index: number) => index !== replaceIndex));
+
+  const secondReplaceIndex = 1;
+  const secondReplaceResponse = await fetch(`${base}/programs/${draft.id}/replace`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ generation: draft.generation, planRevision: 1, operationId: "second-backup-replace", trackId: replaced.rundown[secondReplaceIndex].id }),
+  });
+  assert.equal(secondReplaceResponse.status, 200, await secondReplaceResponse.clone().text());
+  const replacedAgain = (await json(secondReplaceResponse)).program;
+  assert.notEqual(replacedAgain.rundown[secondReplaceIndex].id, originalIds[replaceIndex], "a previously deleted track must not return");
 });
 
-test("genre replacement rejects a track whose own metadata conflicts with the selected styles", async (context) => {
+test("genre replacement stays within the selected styles", async (context) => {
   const selectedStyles = ["jazz", "new_age", "blues"];
   const songs = [
     ...Array.from({ length: 5 }, (_, index) => ({
@@ -1868,12 +1878,12 @@ test("genre replacement rejects a track whose own metadata conflicts with the se
       styleTags: ["jazz"],
     })),
     {
-      id: "genre-conflict-gufeng",
+      id: "genre-mismatch-gufeng",
       title: "山水行",
       artists: [{ id: "gufeng-artist", name: "空雨" }],
       album: { name: "箫雨" },
       durationMs: 180_000,
-      styleTags: ["new_age"],
+      styleTags: ["gufeng"],
     },
     {
       id: "genre-backup-new-age",
@@ -1918,7 +1928,7 @@ test("genre replacement rejects a track whose own metadata conflicts with the se
   assert.equal(createdResponse.status, 201, await createdResponse.clone().text());
   const draft = (await json(createdResponse)).program;
   assert.equal(draft.rundown.length, 5);
-  assert.ok(draft.rundown.every((track: { id: string }) => track.id !== "genre-conflict-gufeng"));
+  assert.ok(draft.rundown.every((track: { id: string }) => track.id !== "genre-mismatch-gufeng"));
 
   const replaceIndex = 2;
   const replaceResponse = await fetch(`${base}/programs/${draft.id}/replace`, {
@@ -1929,8 +1939,58 @@ test("genre replacement rejects a track whose own metadata conflicts with the se
   assert.equal(replaceResponse.status, 200, await replaceResponse.clone().text());
   const replaced = (await json(replaceResponse)).program;
   assert.notEqual(replaced.rundown[replaceIndex].id, draft.rundown[replaceIndex].id);
-  assert.notEqual(replaced.rundown[replaceIndex].id, "genre-conflict-gufeng");
+  assert.notEqual(replaced.rundown[replaceIndex].id, "genre-mismatch-gufeng");
   assert.ok(replaced.rundown.every((track: { styleTags?: string[] }) => track.styleTags?.some((tag) => selectedStyles.includes(tag))));
+});
+
+test("atmosphere replacement fails instead of inserting an off-atmosphere backup", async (context) => {
+  const songs = [
+    ...Array.from({ length: 5 }, (_, index) => ({
+      id: String(17_850 + index),
+      title: `Focus Track ${index + 1}`,
+      artists: [{ id: String(17_950 + index), name: `Focus Artist ${index + 1}` }],
+      durationMs: 360_000,
+      styleTags: ["easy_listening"],
+    })),
+    {
+      id: "atmosphere-mismatch-metal",
+      title: "Heavy Metal Backup",
+      artists: [{ id: "metal-backup-artist", name: "Metal Backup Artist" }],
+      durationMs: 180_000,
+      styleTags: ["metal"],
+    },
+  ];
+  const token = "atmosphere-replacement-style-token";
+  const service = await createLocalService({
+    port: 0,
+    localControlToken: token,
+    neteaseProvider: planningProvider(songs, []),
+    hostProvider: groundedHostProvider(),
+    ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+  const createdResponse = await fetch(`${base}/programs`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      operationId: "atmosphere-replacement-create",
+      spec: { sourceId: "netease_music", durationMinutes: 30, recommendationMode: "atmosphere", scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 },
+    }),
+  });
+  assert.equal(createdResponse.status, 201, await createdResponse.clone().text());
+  const draft = (await json(createdResponse)).program;
+  const replaceResponse = await fetch(`${base}/programs/${draft.id}/replace`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ generation: draft.generation, planRevision: 0, operationId: "atmosphere-replacement-replace", trackId: draft.rundown[2].id }),
+  });
+  assert.equal(replaceResponse.status, 409);
+  assert.equal((await json(replaceResponse)).error, "没有找到符合所选氛围的可播放替补歌曲，请重新生成节目单。");
+  const unchanged = (await json(await fetch(`${base}/program`, { headers }))).program;
+  assert.deepEqual(unchanged.rundown.map((track: { id: string }) => track.id), draft.rundown.map((track: { id: string }) => track.id));
 });
 
 test("planner chat finds requested music and returns useful success or failure messages", async (context) => {
@@ -2938,10 +2998,9 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   assert.notEqual(replaced.rundown[replacedIndex].id, replacedId);
   assert.deepEqual(replaced.rundown.filter((_: unknown, index: number) => index !== replacedIndex).map((track: { id: string }) => track.id), adjustmentReplay.rundown.filter((_: unknown, index: number) => index !== replacedIndex).map((track: { id: string }) => track.id));
   assert.match(replaced.rundown.at(-1).hostScript.text, /最后一首|最后一曲|收官曲|收尾曲/);
-  const replacedIds = new Set(replaced.rundown.map((track: { id: string }) => track.id));
   const regenerated = (await json(await post(`/programs/${first.id}/regenerate`, { generation: first.generation, planRevision: 3, operationId: "plan-regenerate" }))).program;
   assert.equal(regenerated.rundown.length, replaced.rundown.length);
-  assert.ok(regenerated.rundown.every((track: { id: string }) => !replacedIds.has(track.id)), "recommendation refresh must replace the whole visible rundown when enough fresh tracks exist");
+  assert.ok(regenerated.rundown.every((track: { id: string }) => track.id !== replacedId), "recommendation refresh must not restore a track the listener deleted");
   const staleConfirm = await post(`/programs/${first.id}/confirm`, { generation: first.generation, planRevision: 1, operationId: "stale-plan-confirm" });
   assert.equal(staleConfirm.status, 409);
   assert.equal((await json(staleConfirm)).code, "GENERATION_MISMATCH");

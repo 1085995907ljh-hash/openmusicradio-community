@@ -167,7 +167,7 @@ const STYLE_PLAYLIST_EVIDENCE: Readonly<Record<MusicGenreId, RegExp>> = {
   world: /世界音乐|world music|global folk|环球声音/i,
   latin: /拉丁|latin|salsa|bachata|reggaeton/i,
   new_age: /new age|新世纪|冥想|疗愈|ambient/i,
-  gufeng: /古风|国风|中国风|古琴|古筝|琵琶|二胡|笛箫|箫|山水/i,
+  gufeng: /古风|国风|中国风|古琴|笛箫/i,
   post_rock: /后摇|post.?rock|器乐摇滚|instrumental rock/i,
   bossa_nova: /bossa nova|巴萨诺瓦|samba bossa|里约/i,
 };
@@ -422,6 +422,7 @@ interface AccountRundown {
   items: ProgramRundownItem[];
   index: number;
   revision: number;
+  excludedTrackIds: Set<string>;
   listenerProfile?: ProgramListenerProfile;
   accountUid?: string;
   hostAudio: Map<string, LockedHostAudio>;
@@ -620,6 +621,14 @@ function programStyleTags(scenePreset: ScenePreset, musicGenres: readonly MusicG
   return [...new Set(musicGenres.length > 0 ? musicGenres : SCENE_STYLE_TAGS[scenePreset])];
 }
 
+function trackMatchesProgramIntent(spec: ProgramSpec, track: ProgramRundownItem): boolean {
+  const selectedStyles = new Set(programStyleTags(spec.scenePreset, spec.musicGenres ?? []));
+  const tags = track.styleTags ?? [];
+  if (tags.length > 0) return tags.some((tag) => selectedStyles.has(tag as MusicGenreId));
+  return recommendationModeForSpec(spec) === "atmosphere"
+    && track.reasons.some((reason) => /scene (?:style|query style|search) reward|场景|氛围/.test(reason));
+}
+
 function recommendationModeForSpec(spec: Pick<ProgramSpec, "recommendationMode" | "musicGenres">): NonNullable<ProgramSpec["recommendationMode"]> {
   return spec.recommendationMode === "genre" || ((spec.musicGenres?.length ?? 0) > 0 && spec.recommendationMode !== "atmosphere") ? "genre" : "atmosphere";
 }
@@ -779,36 +788,6 @@ function candidateSearchText(candidate: Pick<PersonalizationCandidate, "title" |
     }
   }
   return fields.filter((value): value is string => typeof value === "string" && value.trim().length > 0).join(" ").normalize("NFKC");
-}
-
-function intrinsicCandidateStyleTags(value: unknown): MusicGenreId[] {
-  const record = isRecord(value) && isRecord(value.song) ? value.song : value;
-  if (!isRecord(record)) return [];
-  const fields: string[] = [];
-  for (const key of ["title", "name", "artist", "genre"] as const) {
-    if (typeof record[key] === "string") fields.push(record[key]);
-  }
-  if (typeof record.album === "string") fields.push(record.album);
-  else if (isRecord(record.album) && typeof record.album.name === "string") fields.push(record.album.name);
-  if (Array.isArray(record.artists)) {
-    for (const artist of record.artists) {
-      if (typeof artist === "string") fields.push(artist);
-      else if (isRecord(artist) && typeof artist.name === "string") fields.push(artist.name);
-    }
-  }
-  if (Array.isArray(record.mood)) fields.push(...record.mood.filter((item): item is string => typeof item === "string"));
-  const text = fields.join(" ").normalize("NFKC");
-  if (!text) return [];
-  return (Object.entries(STYLE_PLAYLIST_EVIDENCE) as Array<[MusicGenreId, RegExp]>)
-    .filter(([, pattern]) => pattern.test(text))
-    .map(([genre]) => genre);
-}
-
-function hasConflictingIntrinsicStyleEvidence(value: unknown, selectedStyles: readonly MusicGenreId[]): boolean {
-  const intrinsicTags = intrinsicCandidateStyleTags(value).filter((tag) => tag !== "easy_listening");
-  if (intrinsicTags.length === 0) return false;
-  const selected = new Set(selectedStyles);
-  return !intrinsicTags.some((tag) => selected.has(tag));
 }
 
 function withSearchContext(song: unknown, searchQuery: string, styleTags: readonly MusicGenreId[]): unknown {
@@ -2511,7 +2490,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       const record = isRecord(value) && isRecord(value.song) ? value.song : value;
       if (!isRecord(record) || typeof record.id !== "string" || typeof record.title !== "string" || !Array.isArray(record.artists)) return null;
       if (isDisallowedRecommendationCandidate(record)) return null;
-      if (recommendationMode === "genre" && hasConflictingIntrinsicStyleEvidence(record, sceneStyleTags)) return null;
       const styleTags = inferStyleTags(record);
       return {
         id: record.id,
@@ -2738,7 +2716,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       if (!isRecord(value) || typeof value.id !== "string" || typeof value.title !== "string") return null;
       if (isDisallowedRecommendationCandidate(value)) return null;
       if (value.liked !== true && isExplorationVersionCandidate(value)) return null;
-      if (recommendationModeForSpec(spec) === "genre" && hasConflictingIntrinsicStyleEvidence(value, programStyleTags(spec.scenePreset, spec.musicGenres ?? []))) return null;
       const artists = Array.isArray(value.artists) ? value.artists.map((artist) => {
         if (typeof artist === "string") return artist.trim();
         return isRecord(artist) && typeof artist.name === "string" ? artist.name.trim() : "";
@@ -2808,12 +2785,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const mode = recommendationModeForSpec(spec);
     const atmosphereExploration = isAtmosphereExploration(mode, requestedRatio);
     const explicitMusicStyles = mode === "genre";
-    const fitsProgramStyle = (track: ProgramRundownItem): boolean => {
-      const tags = track.styleTags ?? [];
-      if (tags.length > 0) return tags.some((tag) => sceneStyleSet.has(tag as MusicGenreId));
-      if (explicitMusicStyles) return false;
-      return track.reasons.some((reason) => /scene (?:style|query style|search) reward|场景|氛围/.test(reason));
-    };
+    const fitsProgramStyle = (track: ProgramRundownItem): boolean => trackMatchesProgramIntent(spec, track);
     const familiarFitShare = familiar.length === 0 ? 0 : familiar.filter(fitsProgramStyle).length / familiar.length;
     const discoveryFitShare = discovery.length === 0 ? 0 : discovery.filter(fitsProgramStyle).length / discovery.length;
     const hasStyleFamiliarAnchors = familiar.some(fitsProgramStyle);
@@ -2990,10 +2962,10 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const currentIds = new Set(artifact.items.map((item) => item.id));
     const replacementPreferences = {
       ...artifact.preferences,
-      programPlan: artifact.preferences.programPlan.filter((value) => !isRecord(value) || !currentIds.has(String(value.id))),
+      programPlan: artifact.preferences.programPlan.filter((value) => !isRecord(value) || (!currentIds.has(String(value.id)) && !artifact.excludedTrackIds.has(String(value.id)))),
     };
     const replacements = (await prepareAccountRundown(providerId, spec, replacementPreferences, signal, undefined, 1, invalidIndexes.length))
-      .filter((item) => !currentIds.has(item.id));
+      .filter((item) => !currentIds.has(item.id) && !artifact.excludedTrackIds.has(item.id) && trackMatchesProgramIntent(spec, item));
     if (replacements.length < invalidIndexes.length) {
       throw new ServiceError("PLAYBACK_PERMISSION_CHANGED", 409, "当前账号可完整播放的歌曲不足，请重新生成本次节目。");
     }
@@ -4500,7 +4472,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           for (const previousId of accountRundowns.keys()) {
             if (previousId !== state.id) accountRundowns.delete(previousId);
           }
-          accountRundowns.set(state.id, { items: plannedAccountRundown, index: 0, revision: 0, hostAudio: new Map(), hostScriptsPending: true, hostScriptsFinalized: false, ...(accountPreferences ? { preferences: accountPreferences } : {}), ...(listenerProfile ? { listenerProfile } : {}), ...(accountUid ? { accountUid } : {}) });
+          accountRundowns.set(state.id, { items: plannedAccountRundown, index: 0, revision: 0, excludedTrackIds: new Set(), hostAudio: new Map(), hostScriptsPending: true, hostScriptsFinalized: false, ...(accountPreferences ? { preferences: accountPreferences } : {}), ...(listenerProfile ? { listenerProfile } : {}), ...(accountUid ? { accountUid } : {}) });
           try {
             const locked = await lockNeteaseHostScripts(spec, plannedAccountRundown, listenerProfile, createController!.signal);
             const artifact = accountRundowns.get(state.id);
@@ -4718,17 +4690,19 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             if (artifact.revision !== baseRevision) throw new ServiceError("GENERATION_MISMATCH", 409, "节目单已经变化，请刷新后再调整。");
             let actionMessage: string | null = null;
             let ordered: ProgramRundownItem[];
+            let excludedTrackId: string | null = null;
             if (typedAction === "regenerate") {
               if (!artifact.preferences) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "选歌画像已丢失，请重新创建。");
               const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
               const currentIds = new Set(artifact.items.map((track) => track.id));
               const programPlan = Array.isArray(artifact.preferences.programPlan) ? artifact.preferences.programPlan : [];
-              const freshPreferences = { ...artifact.preferences, programPlan: programPlan.filter((track) => !isRecord(track) || !currentIds.has(String(track.id))) };
+              const retainedPlan = programPlan.filter((track) => !isRecord(track) || !artifact.excludedTrackIds.has(String(track.id)));
+              const freshPreferences = { ...artifact.preferences, programPlan: retainedPlan.filter((track) => !isRecord(track) || !currentIds.has(String(track.id))) };
               const fresh = await prepareAccountRundown(providerId, lockedState.spec, freshPreferences, controller.signal);
               const freshSeconds = fresh.reduce((total, track) => total + track.durationSeconds, 0);
               ordered = freshSeconds >= minimumProgramDurationSeconds(lockedState.spec.durationMinutes)
                 ? fresh
-                : await prepareAccountRundown(providerId, lockedState.spec, artifact.preferences, controller.signal);
+                : await prepareAccountRundown(providerId, lockedState.spec, { ...artifact.preferences, programPlan: retainedPlan }, controller.signal);
             } else if (typedAction === "replace") {
               if (!artifact.preferences) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "选歌画像已丢失，请重新创建。");
               const trackId = nonEmptyString(body.trackId, "trackId", 200);
@@ -4736,14 +4710,18 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               if (replaceIndex < 0) throw new ServiceError("INVALID_INPUT", 400, "要删除的歌曲不在当前节目单中。");
               const programPlan = Array.isArray(artifact.preferences.programPlan) ? artifact.preferences.programPlan : [];
               const currentIds = new Set(artifact.items.map((track) => track.id));
-              const replacementPreferences = { ...artifact.preferences, programPlan: programPlan.filter((track) => !isRecord(track) || !currentIds.has(String(track.id))) };
+              const excludedIds = new Set([...artifact.excludedTrackIds, trackId]);
+              const replacementPreferences = { ...artifact.preferences, programPlan: programPlan.filter((track) => !isRecord(track) || (!currentIds.has(String(track.id)) && !excludedIds.has(String(track.id)))) };
               const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
               const candidates = await prepareAccountRundown(providerId, lockedState.spec, replacementPreferences, controller.signal, undefined, 1, 1);
-              const replacement = candidates.find((track) => !currentIds.has(track.id));
-              if (!replacement) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "没有找到可播放的替补歌曲，请重新生成节目单。");
+              const replacement = candidates.find((track) => !currentIds.has(track.id) && !excludedIds.has(track.id) && trackMatchesProgramIntent(lockedState.spec, track));
+              if (!replacement) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, recommendationModeForSpec(lockedState.spec) === "genre"
+                ? "没有找到符合所选风格的可播放替补歌曲，请重新生成节目单。"
+                : "没有找到符合所选氛围的可播放替补歌曲，请重新生成节目单。");
               ordered = artifact.items.map(({ hostScript: _hostScript, ...track }, index) => index === replaceIndex
                 ? { ...replacement, hostMoment: track.hostMoment }
                 : track);
+              excludedTrackId = trackId;
             } else {
               const instruction = typedAction === "adjust" ? nonEmptyString(body.message, "message", 600) : "";
               const searchAdjustment = typedAction === "adjust" ? parseMusicSearchAdjustment(instruction) : null;
@@ -4824,6 +4802,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             }
             const locked = await lockNeteaseHostScripts(lockedState.spec, ordered, artifact.listenerProfile, controller.signal);
             artifact.items = locked;
+            if (excludedTrackId) artifact.excludedTrackIds.add(excludedTrackId);
             artifact.hostAudio.clear();
             artifact.revision += 1;
             planOperationResults.set(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision });
