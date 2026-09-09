@@ -800,7 +800,7 @@ function App() {
   const hostPlaybackWatchdogRef = useRef<number | null>(null);
   const heartbeatRequestRef = useRef<AbortController | null>(null);
   const programPollRequestRef = useRef<AbortController | null>(null);
-  const hostScriptRetryControllerRef = useRef<AbortController | null>(null);
+  const hostScriptRetryAttemptRef = useRef(0);
   const hostKeyRef = useRef<string | null>(null);
   const remainingSecondsRef = useRef(0);
   const activeDuckRef = useRef<{ sourceId: DesktopPlayerSource; operationId: string } | null>(null);
@@ -1679,6 +1679,13 @@ function App() {
         if (disposed || !remote || programRef.current || createOperationRef.current) return;
         if (landingEnteredRef.current && ["completed", "stopped", "failed", "control_lost", "stop_unconfirmed"].includes(remote.status)) return;
         setProgram({ ...remote, report: [] });
+        if (isApiMusicSource(remote.spec.sourceId) && !hasLockedMusicArtifacts(remote) && ["draft", "awaiting_confirmation"].includes(remote.status)) {
+          setProcessCompletedSteps(3);
+          setProcessComplete(false);
+          setHostScriptRetryMessage("口播生成尚未完成，歌曲和顺序已经保留。");
+          setView("generating");
+          return;
+        }
         setView(viewForProgramStatus(remote.status));
       } catch {
         // A missing service is represented by the explicit fixture path in the setup form.
@@ -2158,6 +2165,7 @@ function App() {
     setPlaylistSavePromptOpen(false);
     setProcessComplete(false);
     setProcessCompletedSteps(0);
+    hostScriptRetryAttemptRef.current = 0;
     setHostScriptRetryMessage(null);
     setView("generating");
     setMusicPreferencesState(isApiMusicSource(selectedSource) ? "loading" : "idle");
@@ -2238,13 +2246,8 @@ function App() {
   };
 
   const regenerateHostScripts = async () => {
-    if (!program) return;
-    if (hostScriptRetryPending) {
-      hostScriptRetryControllerRef.current?.abort();
-      return;
-    }
-    const controller = new AbortController();
-    hostScriptRetryControllerRef.current = controller;
+    if (!program || hostScriptRetryPending) return;
+    hostScriptRetryAttemptRef.current += 1;
     const baseRevision = program.planRevision ?? 0;
     setHostScriptRetryPending(true);
     setLastError(null);
@@ -2255,7 +2258,6 @@ function App() {
     try {
       const payload = await fetchJson<unknown>(`/programs/${program.id}/regenerate-host`, {
         method: "POST",
-        signal: controller.signal,
         body: JSON.stringify({
           generation: program.generation,
           planRevision: baseRevision,
@@ -2274,6 +2276,7 @@ function App() {
       programRef.current = nextProgram;
       setProgram(nextProgram);
       createOperationRef.current = null;
+      hostScriptRetryAttemptRef.current = 0;
       setHostScriptRetryMessage(null);
       setProcessCompletedSteps(4);
       setProcessComplete(true);
@@ -2282,17 +2285,21 @@ function App() {
     } catch (error) {
       setProcessCompletedSteps(3);
       setProcessComplete(false);
-      setHostScriptRetryMessage(controller.signal.aborted
-        ? "本次口播重试已取消，歌曲和顺序已经保留。"
-        : error instanceof Error
-          ? `${error.message} 请稍后再试；歌曲和顺序已经保留。`
-          : "口播生成没有完成，请稍后再试；歌曲和顺序已经保留。");
+      setHostScriptRetryMessage(error instanceof Error
+        ? `${error.message} 歌曲和顺序已经保留。`
+        : "口播生成没有完成，歌曲和顺序已经保留。");
       setView("generating");
     } finally {
-      if (hostScriptRetryControllerRef.current === controller) hostScriptRetryControllerRef.current = null;
       setHostScriptRetryPending(false);
     }
   };
+
+  useEffect(() => {
+    if (view !== "generating" || !program || !hostScriptRetryMessage || hostScriptRetryPending) return;
+    const retryDelayMs = Math.min(1_000 * (2 ** Math.min(hostScriptRetryAttemptRef.current, 3)), 8_000);
+    const timer = window.setTimeout(() => void regenerateHostScripts(), retryDelayMs);
+    return () => window.clearTimeout(timer);
+  }, [hostScriptRetryMessage, hostScriptRetryPending, program?.id, program?.planRevision, view]);
 
   const handleConfirm = async (keepPlaylistForRun = keepPlaylist) => {
     if (!program || isConfirming || planUpdating) return;
@@ -2737,7 +2744,7 @@ function App() {
       onNotice={setNotice}
       onError={setLastError}
     />;
-    if (view === "generating") return <ProcessView mode="generating" complete={processComplete} completedSteps={processCompletedSteps} hostRetryMessage={hostScriptRetryMessage} hostRetryPending={hostScriptRetryPending} onRetryHostScripts={() => void regenerateHostScripts()} />;
+    if (view === "generating") return <ProcessView mode="generating" complete={processComplete} completedSteps={processCompletedSteps} hostRetryMessage={hostScriptRetryMessage} hostRetryPending={hostScriptRetryPending} />;
     if (view === "preparing") return <ProcessView mode="preparing" complete={processComplete} />;
     if (view === "confirm" && program) {
       const diagnostic = sources.find((source) => source.sourceId === program.spec.sourceId);
@@ -3456,14 +3463,12 @@ function ProcessView({
   completedSteps = 0,
   hostRetryMessage = null,
   hostRetryPending = false,
-  onRetryHostScripts,
 }: {
   mode: "generating" | "preparing";
   complete?: boolean;
   completedSteps?: number;
   hostRetryMessage?: string | null;
   hostRetryPending?: boolean;
-  onRetryHostScripts?: () => void;
 }) {
   const steps = mode === "generating"
     ? ["读取账号听歌画像", "筛选可播放候选", "排定熟悉与探索比例", "生成、审核并锁定主持词"]
@@ -3472,7 +3477,7 @@ function ProcessView({
   const confirmedSteps = complete ? steps.length : Math.max(0, Math.min(steps.length, completedSteps));
   const progress = Math.round(confirmedSteps / steps.length * 100);
   const activeStep = confirmedSteps < steps.length ? steps[confirmedSteps] : null;
-  const currentStatus = hostRetryMessage ? (hostRetryPending ? "正在重新生成口播" : "口播服务需要重试") : complete ? "完整结果已返回" : activeStep ? `正在${activeStep}` : "正在启动任务";
+  const currentStatus = hostRetryMessage ? (hostRetryPending ? "正在自动重试口播" : "正在准备自动重试") : complete ? "完整结果已返回" : activeStep ? `正在${activeStep}` : "正在启动任务";
   return <section className="process-view" role="status" aria-live="polite">
     <div className="process-signal">
       <div className={`process-orbit${complete ? " is-complete" : ""}`} style={{ "--process-progress": `${progress}%` } as CSSProperties} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} aria-label={`处理进度 ${progress}%`}>
@@ -3488,11 +3493,7 @@ function ProcessView({
       <p>{mode === "generating" ? "这里只生成节目单和主持文案，不会改动你的音乐平台。" : "全部语音、播放队列和首曲信号就绪后，节目会自动开始播放。"}</p>
       <div className="process-current"><Activity size={16} aria-hidden="true" /><span><strong>{currentStatus}</strong><small>{hostRetryMessage ? "歌单和顺序已经保留，只会重新生成主持人口播。" : complete ? "本次任务已校验。" : "每个阶段完成后会立即更新，达到 100% 后进入节目计划。"}</small></span></div>
       {hostRetryMessage && <div className="process-retry-compact">
-        <span>{hostRetryPending ? "模型正在逐条生成并审核口播；取消不会改动歌单。" : hostRetryMessage}</span>
-        <button className="primary-button" type="button" onClick={onRetryHostScripts} disabled={!onRetryHostScripts}>
-          {hostRetryPending ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}
-          {hostRetryPending ? "取消重试" : "重试口播"}
-        </button>
+        <span>{hostRetryPending ? "模型正在逐条生成并审核口播。" : `${hostRetryMessage} 系统将自动继续。`}</span>
       </div>}
       <div className="process-meter process-meter-live" aria-hidden="true"><span style={{ width: `${progress}%` }} /></div>
       <div className="process-queue-heading"><span>PROCESS QUEUE</span><small>{steps.length} ITEMS</small></div>
