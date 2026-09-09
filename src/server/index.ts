@@ -167,7 +167,7 @@ const STYLE_PLAYLIST_EVIDENCE: Readonly<Record<MusicGenreId, RegExp>> = {
   world: /世界音乐|world music|global folk|环球声音/i,
   latin: /拉丁|latin|salsa|bachata|reggaeton/i,
   new_age: /new age|新世纪|冥想|疗愈|ambient/i,
-  gufeng: /古风|国风|中国风|古琴|笛箫/i,
+  gufeng: /古风|国风|中国风|古琴|古筝|琵琶|二胡|笛箫|箫|山水/i,
   post_rock: /后摇|post.?rock|器乐摇滚|instrumental rock/i,
   bossa_nova: /bossa nova|巴萨诺瓦|samba bossa|里约/i,
 };
@@ -779,6 +779,36 @@ function candidateSearchText(candidate: Pick<PersonalizationCandidate, "title" |
     }
   }
   return fields.filter((value): value is string => typeof value === "string" && value.trim().length > 0).join(" ").normalize("NFKC");
+}
+
+function intrinsicCandidateStyleTags(value: unknown): MusicGenreId[] {
+  const record = isRecord(value) && isRecord(value.song) ? value.song : value;
+  if (!isRecord(record)) return [];
+  const fields: string[] = [];
+  for (const key of ["title", "name", "artist", "genre"] as const) {
+    if (typeof record[key] === "string") fields.push(record[key]);
+  }
+  if (typeof record.album === "string") fields.push(record.album);
+  else if (isRecord(record.album) && typeof record.album.name === "string") fields.push(record.album.name);
+  if (Array.isArray(record.artists)) {
+    for (const artist of record.artists) {
+      if (typeof artist === "string") fields.push(artist);
+      else if (isRecord(artist) && typeof artist.name === "string") fields.push(artist.name);
+    }
+  }
+  if (Array.isArray(record.mood)) fields.push(...record.mood.filter((item): item is string => typeof item === "string"));
+  const text = fields.join(" ").normalize("NFKC");
+  if (!text) return [];
+  return (Object.entries(STYLE_PLAYLIST_EVIDENCE) as Array<[MusicGenreId, RegExp]>)
+    .filter(([, pattern]) => pattern.test(text))
+    .map(([genre]) => genre);
+}
+
+function hasConflictingIntrinsicStyleEvidence(value: unknown, selectedStyles: readonly MusicGenreId[]): boolean {
+  const intrinsicTags = intrinsicCandidateStyleTags(value).filter((tag) => tag !== "easy_listening");
+  if (intrinsicTags.length === 0) return false;
+  const selected = new Set(selectedStyles);
+  return !intrinsicTags.some((tag) => selected.has(tag));
 }
 
 function withSearchContext(song: unknown, searchQuery: string, styleTags: readonly MusicGenreId[]): unknown {
@@ -2481,6 +2511,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       const record = isRecord(value) && isRecord(value.song) ? value.song : value;
       if (!isRecord(record) || typeof record.id !== "string" || typeof record.title !== "string" || !Array.isArray(record.artists)) return null;
       if (isDisallowedRecommendationCandidate(record)) return null;
+      if (recommendationMode === "genre" && hasConflictingIntrinsicStyleEvidence(record, sceneStyleTags)) return null;
       const styleTags = inferStyleTags(record);
       return {
         id: record.id,
@@ -2707,6 +2738,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       if (!isRecord(value) || typeof value.id !== "string" || typeof value.title !== "string") return null;
       if (isDisallowedRecommendationCandidate(value)) return null;
       if (value.liked !== true && isExplorationVersionCandidate(value)) return null;
+      if (recommendationModeForSpec(spec) === "genre" && hasConflictingIntrinsicStyleEvidence(value, programStyleTags(spec.scenePreset, spec.musicGenres ?? []))) return null;
       const artists = Array.isArray(value.artists) ? value.artists.map((artist) => {
         if (typeof artist === "string") return artist.trim();
         return isRecord(artist) && typeof artist.name === "string" ? artist.name.trim() : "";

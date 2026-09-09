@@ -1856,6 +1856,83 @@ test("delete and replace can use one short backup without rebuilding a full-dura
   assert.deepEqual(replaced.rundown.filter((_: unknown, index: number) => index !== replaceIndex).map((track: { id: string }) => track.id), originalIds.filter((_: string, index: number) => index !== replaceIndex));
 });
 
+test("genre replacement rejects a track whose own metadata conflicts with the selected styles", async (context) => {
+  const selectedStyles = ["jazz", "new_age", "blues"];
+  const songs = [
+    ...Array.from({ length: 5 }, (_, index) => ({
+      id: String(17_650 + index),
+      title: `Jazz Session ${index + 1}`,
+      artists: [{ id: String(17_750 + index), name: `Jazz Artist ${index + 1}` }],
+      album: { name: "Jazz Essentials" },
+      durationMs: 450_000,
+      styleTags: ["jazz"],
+    })),
+    {
+      id: "genre-conflict-gufeng",
+      title: "山水行",
+      artists: [{ id: "gufeng-artist", name: "空雨" }],
+      album: { name: "箫雨" },
+      durationMs: 180_000,
+      styleTags: ["new_age"],
+    },
+    {
+      id: "genre-backup-new-age",
+      title: "Ambient Meditation",
+      artists: [{ id: "new-age-artist", name: "New Age Artist" }],
+      album: { name: "New Age Collection" },
+      durationMs: 180_000,
+      styleTags: ["new_age"],
+    },
+  ];
+  const token = "genre-replacement-style-token";
+  const service = await createLocalService({
+    port: 0,
+    localControlToken: token,
+    neteaseProvider: planningProvider(songs, []),
+    hostProvider: groundedHostProvider(),
+    ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+  const createdResponse = await fetch(`${base}/programs`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      operationId: "genre-replacement-create",
+      spec: {
+        sourceId: "netease_music",
+        durationMinutes: 30,
+        recommendationMode: "genre",
+        scenePreset: "commute",
+        sceneDescription: "",
+        hostDensity: "low",
+        energyCurve: "steady",
+        avoid: [],
+        familiarityRatio: 0,
+        musicGenres: selectedStyles,
+      },
+    }),
+  });
+  assert.equal(createdResponse.status, 201, await createdResponse.clone().text());
+  const draft = (await json(createdResponse)).program;
+  assert.equal(draft.rundown.length, 5);
+  assert.ok(draft.rundown.every((track: { id: string }) => track.id !== "genre-conflict-gufeng"));
+
+  const replaceIndex = 2;
+  const replaceResponse = await fetch(`${base}/programs/${draft.id}/replace`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ generation: draft.generation, planRevision: 0, operationId: "genre-replacement-replace", trackId: draft.rundown[replaceIndex].id }),
+  });
+  assert.equal(replaceResponse.status, 200, await replaceResponse.clone().text());
+  const replaced = (await json(replaceResponse)).program;
+  assert.notEqual(replaced.rundown[replaceIndex].id, draft.rundown[replaceIndex].id);
+  assert.notEqual(replaced.rundown[replaceIndex].id, "genre-conflict-gufeng");
+  assert.ok(replaced.rundown.every((track: { styleTags?: string[] }) => track.styleTags?.some((tag) => selectedStyles.includes(tag))));
+});
+
 test("planner chat finds requested music and returns useful success or failure messages", async (context) => {
   const baseSongs = Array.from({ length: 6 }, (_, index) => ({
     id: String(17_700 + index), title: `基础歌曲 ${index + 1}`, artists: [{ id: String(17_800 + index), name: `基础艺人 ${index + 1}` }], durationMs: 360_000,
