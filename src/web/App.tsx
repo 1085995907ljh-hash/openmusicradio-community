@@ -800,6 +800,7 @@ function App() {
   const hostPlaybackWatchdogRef = useRef<number | null>(null);
   const heartbeatRequestRef = useRef<AbortController | null>(null);
   const programPollRequestRef = useRef<AbortController | null>(null);
+  const hostScriptRetryControllerRef = useRef<AbortController | null>(null);
   const hostKeyRef = useRef<string | null>(null);
   const remainingSecondsRef = useRef(0);
   const activeDuckRef = useRef<{ sourceId: DesktopPlayerSource; operationId: string } | null>(null);
@@ -2237,7 +2238,13 @@ function App() {
   };
 
   const regenerateHostScripts = async () => {
-    if (!program || hostScriptRetryPending) return;
+    if (!program) return;
+    if (hostScriptRetryPending) {
+      hostScriptRetryControllerRef.current?.abort();
+      return;
+    }
+    const controller = new AbortController();
+    hostScriptRetryControllerRef.current = controller;
     const baseRevision = program.planRevision ?? 0;
     setHostScriptRetryPending(true);
     setLastError(null);
@@ -2248,6 +2255,7 @@ function App() {
     try {
       const payload = await fetchJson<unknown>(`/programs/${program.id}/regenerate-host`, {
         method: "POST",
+        signal: controller.signal,
         body: JSON.stringify({
           generation: program.generation,
           planRevision: baseRevision,
@@ -2274,11 +2282,14 @@ function App() {
     } catch (error) {
       setProcessCompletedSteps(3);
       setProcessComplete(false);
-      setHostScriptRetryMessage(error instanceof Error
-        ? `${error.message} 请稍后再试；歌曲和顺序已经保留。`
-        : "口播生成没有完成，请稍后再试；歌曲和顺序已经保留。");
+      setHostScriptRetryMessage(controller.signal.aborted
+        ? "本次口播重试已取消，歌曲和顺序已经保留。"
+        : error instanceof Error
+          ? `${error.message} 请稍后再试；歌曲和顺序已经保留。`
+          : "口播生成没有完成，请稍后再试；歌曲和顺序已经保留。");
       setView("generating");
     } finally {
+      if (hostScriptRetryControllerRef.current === controller) hostScriptRetryControllerRef.current = null;
       setHostScriptRetryPending(false);
     }
   };
@@ -3477,10 +3488,10 @@ function ProcessView({
       <p>{mode === "generating" ? "这里只生成节目单和主持文案，不会改动你的音乐平台。" : "全部语音、播放队列和首曲信号就绪后，节目会自动开始播放。"}</p>
       <div className="process-current"><Activity size={16} aria-hidden="true" /><span><strong>{currentStatus}</strong><small>{hostRetryMessage ? "歌单和顺序已经保留，只会重新生成主持人口播。" : complete ? "本次任务已校验。" : "每个阶段完成后会立即更新，达到 100% 后进入节目计划。"}</small></span></div>
       {hostRetryMessage && <div className="process-retry-compact">
-        <span>{hostRetryPending ? "正在处理，请稍等。" : "模型服务刚才没有返回稳定结果，可以只重试口播。"}</span>
-        <button className="primary-button" type="button" onClick={onRetryHostScripts} disabled={!onRetryHostScripts || hostRetryPending}>
+        <span>{hostRetryPending ? "模型正在逐条生成并审核口播；取消不会改动歌单。" : hostRetryMessage}</span>
+        <button className="primary-button" type="button" onClick={onRetryHostScripts} disabled={!onRetryHostScripts}>
           {hostRetryPending ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}
-          {hostRetryPending ? "正在重试" : "重试口播"}
+          {hostRetryPending ? "取消重试" : "重试口播"}
         </button>
       </div>}
       <div className="process-meter process-meter-live" aria-hidden="true"><span style={{ width: `${progress}%` }} /></div>

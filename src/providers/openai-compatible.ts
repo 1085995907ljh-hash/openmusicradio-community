@@ -1,5 +1,5 @@
 import type { HostContextPack } from "../shared/contracts.js";
-import { hostCharacterBounds, middleHostBreakCountIsAcceptable, normalizeSpokenEnglishCase, normalizeSpokenYearDigits } from "../core/host-script-planning.js";
+import { hostCharacterBounds, middleHostBreakCount, normalizeSpokenEnglishCase, normalizeSpokenYearDigits } from "../core/host-script-planning.js";
 import { getSceneConfig } from "../core/scenes.js";
 import { DEFAULT_HOST_PROFILE, HOST_PROFILES, hostOpeningIdentity, type HostProfileId } from "../shared/program-options.js";
 import {
@@ -628,10 +628,13 @@ function safeHostShowRequest(request: HostShowGenerationRequest): Record<string,
 }
 
 function buildHostShowPlacementPrompt(request: HostShowGenerationRequest): HostPrompt {
+  const middleCount = middleHostBreakCount(request.tracks.length, request.frequency);
+  const totalCount = request.tracks.length === 1 ? 1 : middleCount + 2;
   return {
     system: [
       request.skillInstruction.slice(0, 48_000),
       "本轮只规划口播位置，不写任何口播正文。先通读歌单和事实，按频率、资料价值、曲风变化及前后关系决定位置。",
+      `本档共有 ${request.tracks.length} 首歌，必须返回 ${totalCount} 个互不重复的口播位置：开场 1 个、中间 ${middleCount} 个、最后一首前的 closing 1 个。`,
       "只返回 JSON：{\"frequency\":\"low | medium | high\",\"placements\":[{\"id\":\"break-01\",\"beforeTrackIndex\":1,\"type\":\"opening | middle | closing\",\"targetSeconds\":20,\"reason\":\"布点理由\"}]}。",
     ].join("\n\n"),
     user: JSON.stringify(safeHostShowRequest(request)),
@@ -770,8 +773,8 @@ function parseHostShowPlacementPayload(payload: unknown, request: HostShowGenera
       throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "show placements omitted the opening or closing", { retryable: false }));
     }
     const middleCount = placements.filter((item) => item.type === "middle").length;
-    if (!middleHostBreakCountIsAcceptable(request.tracks.length, request.frequency, middleCount)) {
-      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "show placement count does not match the requested frequency", { retryable: false }));
+    if (middleCount !== middleHostBreakCount(request.tracks.length, request.frequency)) {
+      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "show placement count does not match the exact requested frequency target", { retryable: false }));
     }
     return placements;
   }

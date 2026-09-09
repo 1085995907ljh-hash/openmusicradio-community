@@ -2516,7 +2516,7 @@ test("producer failure preserves the plan without synthesizing template host cop
     hostProvider: {
       configured: true,
       state: "ready",
-      generateShow() { return { provider: "openai-compatible", configured: true, success: false, status: "failed", breaks: [] }; },
+      generateShow() { return { provider: "openai-compatible", configured: true, success: false, status: "failed", breaks: [], error: { code: "invalid_response", message: "口播 break-04 撰稿: upstream detail must stay private" } }; },
       generate() { return { provider: "openai-compatible", configured: true, success: false, status: "failed", text: "", factIds: [] }; },
     },
     ttsProvider: readyTtsProvider,
@@ -2531,6 +2531,8 @@ test("producer failure preserves the plan without synthesizing template host cop
   assert.equal(response.status, 202);
   const responsePayload = await json(response);
   assert.equal(responsePayload.hostRetryRequired, true);
+  assert.match(responsePayload.message, /口播 break-04 撰稿没有返回有效结果/);
+  assert.doesNotMatch(responsePayload.message, /upstream detail/);
   const program = responsePayload.program;
   assert.equal(program.rundown.length, songs.length);
   assert.ok(program.rundown.every((item: { hostScript?: unknown }) => !item.hostScript));

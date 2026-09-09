@@ -3065,7 +3065,10 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       const result = isRecord(raw) ? raw : {};
       const breaks = Array.isArray(result.breaks) ? result.breaks.filter(isRecord) : [];
       if (result.success !== true || breaks.length === 0) {
-        throw new ServiceError("HOST_PROVIDER_ERROR", 502, "整档主持文案生成失败：模型没有返回可用的最终稿。");
+        const providerMessage = isRecord(result.error) && typeof result.error.message === "string" ? result.error.message : "";
+        const failedStage = providerMessage.match(/^(口播布点|口播 break-\d+ (?:撰稿|第 \d+ 轮返修)|整档口播(?:第 \d+ 轮复审|审核))(?=:)/)?.[1];
+        const detail = failedStage ? `${failedStage}没有返回有效结果` : "模型没有返回可用的最终稿";
+        throw new ServiceError("HOST_PROVIDER_ERROR", 502, `整档主持文案生成失败：${detail}。`);
       }
       const byTrack = new Map<number, UnknownRecord>();
       for (const hostBreak of breaks) {

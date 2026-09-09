@@ -224,6 +224,7 @@ test("whole-show generation and review use gpt-5.5 with high reasoning without a
   assert.ok(bodies.every((body) => body.model === "gpt-5.5"));
   assert.ok(bodies.every((body) => (body.reasoning as { effort?: string }).effort === "high"));
   assert.match(JSON.stringify(bodies[0]), /只规划口播位置/);
+  assert.match(JSON.stringify(bodies[0]), /必须返回 3 个互不重复的口播位置：开场 1 个、中间 1 个/);
   assert.match(JSON.stringify(bodies[1]), /一次只写一条|只写 currentPlacement/);
   assert.match(JSON.stringify(bodies[4]), /整档监制契约/);
   assert.ok(bodies.every((body) => /musicAtmosphere.*专注/.test(JSON.stringify(body))));
@@ -386,7 +387,7 @@ test("whole-show quality floor rejects repeated album and release templates even
   assert.match(JSON.stringify(bodies[6]), /超过两条/);
 });
 
-test("whole-show generation retries one malformed stage before returning the reviewed copy", async () => {
+test("whole-show generation retries an incorrect placement count before returning the reviewed copy", async () => {
   let calls = 0;
   const placements = {
     frequency: "low",
@@ -401,7 +402,7 @@ test("whole-show generation retries one malformed stage before returning the rev
       { id: "break-02", beforeTrackIndex: 2, type: "middle", targetSeconds: 22, text: "接下来听音乐人二的《歌曲二》，这首作品把他的创作方向交代得很清楚。", sourceIds: ["track:2:metadata"], deliveryInstruction: "自然，中速。" },
       { id: "break-03", beforeTrackIndex: 3, type: "closing", targetSeconds: 24, text: "这是今天的最后一首，音乐人三的《歌曲三》，最后把时间留给音乐本身。", sourceIds: ["track:3:metadata"], deliveryInstruction: "自然，中速。" },
   ];
-  const responses = [{ unexpected: true }, placements, ...breaks.map((item) => ({ break: item })), { approved: true, issues: [], rationale: "可播。" }];
+  const responses = [{ frequency: "low", placements: [placements.placements[0], placements.placements[2]] }, placements, ...breaks.map((item) => ({ break: item })), { approved: true, issues: [], rationale: "可播。" }];
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "unit-test-key",
     mode: "responses",
