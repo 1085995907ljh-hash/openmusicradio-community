@@ -119,6 +119,7 @@ export interface HostShowTrackContext {
   title: string;
   artist: string;
   album?: string;
+  releaseYear?: number;
   exploration: boolean;
   allowedFacts: HostContextPack["allowedFacts"];
 }

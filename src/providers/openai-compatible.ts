@@ -39,10 +39,6 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_TEXT_LENGTH = 600;
 const PROVIDER_NAME = "openai-compatible";
 const MUSIC_RESEARCH_TIMEOUT_MS = 20_000;
-const WHOLE_SHOW_BUDGET_MS = 300_000;
-const WHOLE_SHOW_REVIEW_TIMEOUT_MS = 45_000;
-const WHOLE_SHOW_REWRITE_TIMEOUT_MS = 45_000;
-const WHOLE_SHOW_MAX_REWRITES = 2;
 const WHOLE_SHOW_STAGE_ATTEMPTS = 3;
 
 interface HostBreakPlacement {
@@ -254,20 +250,11 @@ export class OpenAICompatibleHostProvider implements HostProvider {
         throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_input", "whole-show host request is not configured", { retryable: false }));
       }
       const mode = this.mode === "chat_completions" ? "chat_completions" : "responses";
-      const deadlineAt = this.timeoutMs === 0 ? Number.POSITIVE_INFINITY : Date.now() + WHOLE_SHOW_BUDGET_MS;
-      const timeoutFor = (capMs: number): number => {
-        if (this.timeoutMs === 0) return 0;
-        const remainingMs = deadlineAt - Date.now();
-        if (remainingMs <= 0) {
-          throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "timeout", "whole-show generation exceeded its time budget", { retryable: false }));
-        }
-        return Math.max(1, Math.min(capMs, remainingMs));
-      };
-      const runStage = async <T>(stage: string, operation: (timeoutMs: number, attempt: number) => Promise<T>, capMs = this.timeoutMs): Promise<T> => {
+      const runStage = async <T>(stage: string, operation: (attempt: number) => Promise<T>): Promise<T> => {
         let lastError: ProviderError | undefined;
         for (let attempt = 0; attempt < WHOLE_SHOW_STAGE_ATTEMPTS; attempt += 1) {
           try {
-            return await operation(timeoutFor(capMs), attempt);
+            return await operation(attempt);
           } catch (error) {
             const providerError = asProviderError(error);
             lastError = providerError;
@@ -285,53 +272,49 @@ export class OpenAICompatibleHostProvider implements HostProvider {
         }
         throw lastError ?? new ProviderError(providerErrorInfo(PROVIDER_NAME, "network_error", `${stage}: whole-show stage failed`, { retryable: true }));
       };
-      const placements = await runStage("口播布点", async (timeoutMs, attempt) => {
-        const payload = await this.request(mode, withStructuredOutputRetry(buildHostShowPlacementPrompt(request), attempt), options.signal, false, 2_400, timeoutMs);
+      const placements = await runStage("口播布点", async (attempt) => {
+        const payload = await this.request(mode, withStructuredOutputRetry(buildHostShowPlacementPrompt(request), attempt), options.signal, false, 2_400, 0);
         return parseHostShowPlacementPayload(payload, request);
-      }, WHOLE_SHOW_REVIEW_TIMEOUT_MS);
-      let breaks: HostShowBreak[] = [];
+      });
+      const breaks: HostShowBreak[] = [];
       for (const placement of placements) {
-        const hostBreak = await runStage(`口播 ${placement.id} 撰稿`, async (timeoutMs, attempt) => {
+        let hostBreak = await runStage(`口播 ${placement.id} 撰稿`, async (attempt) => {
           const payload = await this.request(
             mode,
             withStructuredOutputRetry(buildHostShowBreakPrompt(request, placements, placement, breaks), attempt),
             options.signal,
             false,
             1_600,
-            timeoutMs,
+            0,
           );
           return parseHostShowSingleBreakPayload(payload, request, placement);
         });
-        breaks.push(hostBreak);
-      }
-      let review = await runStage("整档口播审核", async (timeoutMs, attempt) => {
-        const payload = await this.request(mode, withStructuredOutputRetry(buildHostShowReviewPrompt(request, breaks), attempt), options.signal, false, 2_400, timeoutMs, this.reviewModel);
-        return applyHostShowQualityFloor(request, breaks, parseHostShowReviewPayload(payload, breaks));
-      }, WHOLE_SHOW_REVIEW_TIMEOUT_MS);
-      for (let rewriteRound = 1; !review.approved && rewriteRound <= WHOLE_SHOW_MAX_REWRITES; rewriteRound += 1) {
-        for (const issue of review.issues) {
-          const breakIndex = breaks.findIndex((item) => item.id === issue.breakId);
-          const current = breaks[breakIndex];
-          const placement = placements.find((item) => item.id === issue.breakId);
-          if (!current || !placement) continue;
-          breaks[breakIndex] = await runStage(`口播 ${issue.breakId} 第 ${rewriteRound} 轮返修`, async (timeoutMs, attempt) => {
+        let review = await runStage(`口播 ${placement.id} 审核`, async (attempt) => {
+          const payload = await this.request(mode, withStructuredOutputRetry(buildHostShowBreakReviewPrompt(request, hostBreak, breaks, 1), attempt), options.signal, false, 1_200, 0, this.reviewModel);
+          return applyHostBreakQualityFloor(request, breaks, hostBreak, parseHostShowReviewPayload(payload, [hostBreak]));
+        });
+        if (!review.approved) {
+          const issue = review.issues[0]!;
+          hostBreak = await runStage(`口播 ${placement.id} 返修`, async (attempt) => {
             const payload = await this.request(
               mode,
-              withStructuredOutputRetry(buildHostShowBreakRewritePrompt(request, placements, current, breaks, issue, rewriteRound), attempt),
+              withStructuredOutputRetry(buildHostShowBreakRewritePrompt(request, placements, hostBreak, breaks, issue), attempt),
               options.signal,
               false,
               1_600,
-              timeoutMs,
+              0,
             );
             return parseHostShowSingleBreakPayload(payload, request, placement);
-          }, WHOLE_SHOW_REWRITE_TIMEOUT_MS);
+          });
+          review = await runStage(`口播 ${placement.id} 复审`, async (attempt) => {
+            const payload = await this.request(mode, withStructuredOutputRetry(buildHostShowBreakReviewPrompt(request, hostBreak, breaks, 2), attempt), options.signal, false, 1_200, 0, this.reviewModel);
+            return applyHostBreakQualityFloor(request, breaks, hostBreak, parseHostShowReviewPayload(payload, [hostBreak]));
+          });
+          if (!review.approved) {
+            hostBreak = fallbackHostShowBreak(request, placement);
+          }
         }
-        if (rewriteRound < WHOLE_SHOW_MAX_REWRITES) {
-          review = await runStage(`整档口播第 ${rewriteRound} 轮复审`, async (timeoutMs, attempt) => {
-            const payload = await this.request(mode, withStructuredOutputRetry(buildHostShowReviewPrompt(request, breaks), attempt), options.signal, false, 2_400, timeoutMs, this.reviewModel);
-            return applyHostShowQualityFloor(request, breaks, parseHostShowReviewPayload(payload, breaks));
-          }, WHOLE_SHOW_REVIEW_TIMEOUT_MS);
-        }
+        breaks.push(hostBreak);
       }
       this.runtimeState = "ready";
       return { success: true, provider: PROVIDER_NAME, status: "ready", model: this.model, reviewModel: this.reviewModel, apiMode: mode, breaks, generatedAt };
@@ -613,6 +596,7 @@ function safeHostShowRequest(request: HostShowGenerationRequest): Record<string,
       title: track.title,
       artist: track.artist,
       ...(track.album ? { album: track.album } : {}),
+      ...(track.releaseYear ? { releaseYear: track.releaseYear } : {}),
       familiarity: track.exploration ? "exploration" : "familiar",
       listenerRelationship: track.exploration ? "not_yet_familiar" : "liked_by_listener",
       allowedFacts: track.allowedFacts.slice(0, 8).map(({ id, value, source }) => ({ id, value: value.slice(0, 360), source })),
@@ -687,7 +671,6 @@ function buildHostShowBreakRewritePrompt(
   current: HostShowBreak,
   breaks: HostShowBreak[],
   issue: HostShowReviewIssue,
-  rewriteAttempt: number,
 ): HostPrompt {
   const placement = placements.find((item) => item.id === current.id)!;
   return {
@@ -701,21 +684,28 @@ function buildHostShowBreakRewritePrompt(
       currentBreak: current,
       rewrite: {
         required: true,
-        attempt: rewriteAttempt,
-        maxAttempts: WHOLE_SHOW_MAX_REWRITES,
+        attempt: 1,
+        maxAttempts: 1,
         producerIssue: issue,
       },
     }),
   };
 }
 
-function buildHostShowReviewPrompt(request: HostShowGenerationRequest, breaks: HostShowBreak[]): HostPrompt {
+function buildHostShowBreakReviewPrompt(
+  request: HostShowGenerationRequest,
+  currentBreak: HostShowBreak,
+  lockedBreaks: HostShowBreak[],
+  reviewRound: 1 | 2,
+): HostPrompt {
   return {
     system: request.reviewInstruction.slice(0, 48_000),
     user: JSON.stringify({
       context: safeHostShowRequest(request),
-      reviewScope: "统一阅读完整节目并给出修改建议。检查整档重复和衔接；只靠专辑或发行年份补充信息的口播最多两条，且专辑和年份各最多一条，未知专辑必须删除。只列出确实需要修改的具体 breakId；未列出的口播直接展示并锁定。approved 只表示本轮是否仍有修改建议，不是展示门槛。",
-      completeShowDraft: { frequency: request.frequency, breaks },
+      reviewScope: "只审核 currentBreak 这一条。结合 lockedBreaks 检查与已通过前文的重复，但不得退回或改写 lockedBreaks。合格返回 approved=true；不合格返回 approved=false，并且只为 currentBreak 给出一条具体问题和可执行修改方向。",
+      reviewRound,
+      lockedBreaks: lockedBreaks.map(({ id, beforeTrackIndex, type, text }) => ({ id, beforeTrackIndex, type, text })),
+      currentBreak,
     }),
   };
 }
@@ -861,7 +851,7 @@ function parseHostShowReviewPayload(payload: unknown, breaks: HostShowBreak[]): 
     }
     return { approved: false, issues };
   }
-  throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "provider response did not contain a whole-show review", { retryable: false }));
+  throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "provider response did not contain a host-break review", { retryable: false }));
 }
 
 function metadataTemplateIssues(request: HostShowGenerationRequest, breaks: HostShowBreak[]): HostShowReviewIssue[] {
@@ -924,6 +914,54 @@ function applyHostShowQualityFloor(
   }
   const issues = [...byBreakId.values()];
   return { approved: review.approved && issues.length === 0, issues };
+}
+
+function applyHostBreakQualityFloor(
+  request: HostShowGenerationRequest,
+  lockedBreaks: HostShowBreak[],
+  currentBreak: HostShowBreak,
+  review: { approved: boolean; issues: HostShowReviewIssue[] },
+): { approved: boolean; issues: HostShowReviewIssue[] } {
+  const checked = applyHostShowQualityFloor(request, [...lockedBreaks, currentBreak], review);
+  const issues = checked.issues.filter((issue) => issue.breakId === currentBreak.id);
+  return { approved: review.approved && issues.length === 0, issues };
+}
+
+function fallbackHostShowBreak(request: HostShowGenerationRequest, placement: HostBreakPlacement): HostShowBreak {
+  const track = request.tracks[placement.beforeTrackIndex - 1]!;
+  const album = track.album?.trim() && !/^(?:未知(?:专辑)?|unknown album)$/i.test(track.album.trim()) ? track.album.trim() : "";
+  const explicitReleaseYear = Number.isInteger(track.releaseYear) && track.releaseYear! >= 1800 && track.releaseYear! <= 2099
+    ? track.releaseYear
+    : undefined;
+  const releaseYear = explicitReleaseYear ?? track.allowedFacts.flatMap((fact) => fact.value.match(/(?:18|19|20)\d{2}(?=年)/g) ?? [])
+    .map(Number)
+    .find((year) => year >= 1800 && year <= 2099);
+  const details = [
+    releaseYear ? `发行于${releaseYear}年` : "",
+    album ? `收录在专辑《${album}》中` : "",
+  ].filter(Boolean);
+  const suffix = details.length > 0 ? `，${details.join("，")}` : "";
+  const body = placement.type === "closing"
+    ? `今天的最后一首是${track.artist}的《${track.title}》${suffix}。`
+    : `接下来听${track.artist}的《${track.title}》${suffix}。`;
+  const text = placement.type === "opening" && request.openingGreeting
+    ? withOpeningGreetingAndIdentity(body, request.openingGreeting, request.hostProfile)
+    : body;
+  const sourceIds = track.allowedFacts
+    .filter((fact) => fact.id.includes(":metadata")
+      || (releaseYear !== undefined && (fact.id.includes(":year") || fact.value.includes(`${releaseYear}年`)))
+      || (album && (fact.id.includes(":album") || fact.value.includes(album))))
+    .map((fact) => fact.id);
+  if (sourceIds.length === 0 && track.allowedFacts[0]) sourceIds.push(track.allowedFacts[0].id);
+  return {
+    id: placement.id,
+    beforeTrackIndex: placement.beforeTrackIndex,
+    type: placement.type,
+    targetSeconds: placement.targetSeconds,
+    text: normalizeSpokenYearDigits(normalizeSpokenEnglishCase(text)),
+    sourceIds: [...new Set(sourceIds)],
+    deliveryInstruction: "自然、简洁，音乐人、年份和专辑名说清楚。",
+  };
 }
 
 function buildHostFinalRewritePrompt(context: HostContextPack, reviewFeedback: string): HostPrompt {

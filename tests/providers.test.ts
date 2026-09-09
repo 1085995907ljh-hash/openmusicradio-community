@@ -43,6 +43,12 @@ function jsonResponse(payload: unknown, status = 200): Response {
   });
 }
 
+const approvedBreakReview = { approved: true, issues: [], rationale: "当前口播可播。" };
+
+function approvedShowResponses(placements: unknown, breaks: unknown[]): unknown[] {
+  return [placements, ...breaks.flatMap((hostBreak) => [{ break: hostBreak }, approvedBreakReview])];
+}
+
 test("host writer prompt prioritizes artist background and classic stories over routine credits", () => {
   const prompt = buildHostPrompt(context());
 
@@ -174,7 +180,7 @@ test("producer rejection is returned to the writer for one final rewrite without
   assert.match(bodies[2]?.messages?.[1]?.content ?? "", /finalRound/);
 });
 
-test("whole-show generation and review use gpt-5.5 with high reasoning without an internal timeout", async () => {
+test("whole-show generation drafts and reviews each break sequentially without an internal timeout", async () => {
   const bodies: Array<Record<string, unknown>> = [];
   const requestSignals: Array<AbortSignal | null | undefined> = [];
   const longText = (label: string) => `${label}这首作品把音乐人的创作背景和声音方向放在一起讲清楚，也把作品来路交代完整，接下来听音乐本身怎样展开。`;
@@ -191,14 +197,13 @@ test("whole-show generation and review use gpt-5.5 with high reasoning without a
       { id: "break-02", beforeTrackIndex: 2, type: "middle", targetSeconds: 25, text: longText("中段"), sourceIds: ["track:2:metadata"], deliveryInstruction: "自然，中速。" },
       { id: "break-03", beforeTrackIndex: 3, type: "closing", targetSeconds: 30, text: `这是今天的最后一首。${longText("收尾")}`, sourceIds: ["track:3:metadata"], deliveryInstruction: "自然，中速。" },
   ];
-  const responses = [placements, ...breaks.map((item) => ({ break: item })), { approved: true, issues: [], rationale: "整档可播。" }];
+  const responses = approvedShowResponses(placements, breaks);
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "unit-test-key",
     model: "gpt-5.5",
     reviewModel: "gpt-5.5",
     reasoningEffort: "high",
     mode: "responses",
-    timeoutMs: 0,
     fetchImpl: async (_input, init) => {
       bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       requestSignals.push(init?.signal);
@@ -217,16 +222,18 @@ test("whole-show generation and review use gpt-5.5 with high reasoning without a
   const result = await provider.generateShow({ scenePreset: "study", frequency: "low", tracks, skillInstruction: "整档撰稿契约", reviewInstruction: "整档监制契约" }, { signal: controller.signal });
 
   assert.equal(result.success, true);
-  assert.equal(provider.getStatus().timeoutMs, 0);
+  assert.equal(provider.getStatus().timeoutMs, 20_000);
   assert.equal(result.breaks.length, 3);
-  assert.equal(bodies.length, 5);
+  assert.equal(bodies.length, 7);
   assert.ok(requestSignals.every((signal) => signal === controller.signal));
   assert.ok(bodies.every((body) => body.model === "gpt-5.5"));
   assert.ok(bodies.every((body) => (body.reasoning as { effort?: string }).effort === "high"));
   assert.match(JSON.stringify(bodies[0]), /只规划口播位置/);
   assert.match(JSON.stringify(bodies[0]), /必须返回 3 个互不重复的口播位置：开场 1 个、中间 1 个/);
   assert.match(JSON.stringify(bodies[1]), /一次只写一条|只写 currentPlacement/);
-  assert.match(JSON.stringify(bodies[4]), /整档监制契约/);
+  assert.match(JSON.stringify(bodies[2]), /整档监制契约/);
+  assert.match(JSON.stringify(bodies[2]), /只审核 currentBreak 这一条/);
+  assert.match(JSON.stringify(bodies[3]), /completedBreaks.*break-01/);
   assert.ok(bodies.every((body) => /musicAtmosphere.*专注/.test(JSON.stringify(body))));
   assert.ok(bodies.every((body) => /hostLanguageDirection/.test(JSON.stringify(body))));
   assert.ok(bodies.every((body) => /ttsDirection/.test(JSON.stringify(body))));
@@ -246,7 +253,7 @@ test("whole-show copy accepts natural duration estimates and repairs unknown sou
       { id: "break-02", beforeTrackIndex: 2, type: "middle", targetSeconds: 18, text: "接下来是音乐人二的《歌曲二》，这首歌发行于二〇一七年，换了一种更松弛的声音。", sourceIds: ["mistyped:web-source"], deliveryInstruction: "自然。" },
       { id: "break-03", beforeTrackIndex: 3, type: "closing", targetSeconds: 27, text: "今天的最后一首留给音乐人三的《歌曲三》。", sourceIds: [], deliveryInstruction: "自然。" },
   ];
-  const responses = [placements, ...breaks.map((item) => ({ break: item })), { approved: true, issues: [], rationale: "整档可播。" }];
+  const responses = approvedShowResponses(placements, breaks);
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "unit-test-key",
     model: "gpt-5.5",
@@ -274,7 +281,7 @@ test("whole-show copy accepts natural duration estimates and repairs unknown sou
   assert.deepEqual(result.breaks[2]?.sourceIds, ["track:3:metadata"]);
 });
 
-test("whole-show review rewrites only rejected ids and uses the second revision without another approval gate", async () => {
+test("each host break is reviewed immediately and a rejected draft is rewritten then reviewed again", async () => {
   const placements = {
     frequency: "low",
     placements: [
@@ -290,12 +297,13 @@ test("whole-show review rewrites only rejected ids and uses the second revision 
   const responses = [
     placements,
     { break: opening },
+    approvedBreakReview,
     { break: middle("初稿") },
-    { break: closing },
     { approved: false, issues: [{ breakId: "break-02", problem: "中段句式重复", direction: "减少模板开头，增加音乐人背景。" }], rationale: "中段不够自然。" },
     { break: middle("第一次修改") },
-    { approved: false, issues: [{ breakId: "break-02", problem: "中段信息仍少", direction: "保留一条清楚的音乐信息主线。" }], rationale: "还需要修改。" },
-    { break: middle("第二次最终修改") },
+    approvedBreakReview,
+    { break: closing },
+    approvedBreakReview,
   ];
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "unit-test-key",
@@ -318,16 +326,17 @@ test("whole-show review rewrites only rejected ids and uses the second revision 
   assert.equal(result.success, true);
   assert.equal(result.breaks.length, 3);
   assert.equal(result.breaks[0]?.text, "下午好，欢迎收听 Open Music Radio 电台，我是主持人龙浩。先从音乐人一的《歌曲一》开始。");
-  assert.match(result.breaks[1]?.text ?? "", /第二次最终修改/);
+  assert.match(result.breaks[1]?.text ?? "", /第一次修改/);
   assert.equal(result.breaks[2]?.text, closing.text);
-  assert.equal(bodies.length, 8);
+  assert.equal(bodies.length, 9);
+  assert.match(JSON.stringify(bodies[2]), /reviewScope/);
   assert.match(JSON.stringify(bodies[4]), /reviewScope/);
   const rewriteInput = bodies[5]?.input as Array<{ role: string; content: Array<{ text: string }> }>;
   const rewritePayload = JSON.parse(rewriteInput[1]!.content[0]!.text) as { currentBreak: { id: string }; completedBreaks: Array<{ id: string }> };
   assert.equal(rewritePayload.currentBreak.id, "break-02");
-  assert.deepEqual(rewritePayload.completedBreaks.map((item) => item.id), ["break-01", "break-03"]);
-  assert.match(JSON.stringify(bodies[7]), /attempt.*2/);
-  assert.doesNotMatch(JSON.stringify(bodies[7]), /reviewScope/);
+  assert.deepEqual(rewritePayload.completedBreaks.map((item) => item.id), ["break-01"]);
+  assert.match(JSON.stringify(bodies[6]), /reviewRound.*2/);
+  assert.match(JSON.stringify(bodies[7]), /currentPlacement.*break-03/);
 });
 
 test("whole-show quality floor rejects repeated album and release templates even when the model reviewer approves", async () => {
@@ -345,15 +354,21 @@ test("whole-show quality floor rejects repeated album and release templates even
     { id: "break-03", beforeTrackIndex: 3, type: "closing", targetSeconds: 18, text: "今天的最后一首是音乐人三的《歌曲三》，发行于2020年。", sourceIds: ["track:3:metadata", "track:3:year"], deliveryInstruction: "自然。" },
   ];
   const rewritten = [
-    { ...initialBreaks[1], text: "接下来是音乐人二的《歌曲二》。", sourceIds: ["track:2:metadata"] },
+    { ...initialBreaks[1], text: "接下来是音乐人二的《歌曲二》，发行于2019年。", sourceIds: ["track:2:metadata", "track:2:year"] },
     { ...initialBreaks[2], text: "今天的最后一首，音乐人三的《歌曲三》。", sourceIds: ["track:3:metadata"] },
   ];
   const responses = [
     placements,
-    ...initialBreaks.map((item) => ({ break: item })),
-    { approved: true, issues: [], rationale: "整档可播。" },
-    ...rewritten.map((item) => ({ break: item })),
-    { approved: true, issues: [], rationale: "整档可播。" },
+    { break: initialBreaks[0] },
+    approvedBreakReview,
+    { break: initialBreaks[1] },
+    approvedBreakReview,
+    { break: rewritten[0] },
+    approvedBreakReview,
+    { break: initialBreaks[2] },
+    approvedBreakReview,
+    { break: rewritten[1] },
+    approvedBreakReview,
   ];
   const bodies: Array<Record<string, unknown>> = [];
   const provider = new OpenAICompatibleHostProvider({
@@ -382,9 +397,56 @@ test("whole-show quality floor rejects repeated album and release templates even
   assert.equal(result.breaks[0]?.text.includes("专辑一"), true);
   assert.equal(result.breaks[1]?.text, rewritten[0]!.text);
   assert.equal(result.breaks[2]?.text, rewritten[1]!.text);
-  assert.equal(bodies.length, 8);
+  assert.equal(bodies.length, 11);
   assert.match(JSON.stringify(bodies[5]), /重复用专辑名/);
-  assert.match(JSON.stringify(bodies[6]), /超过两条/);
+  assert.match(JSON.stringify(bodies[9]), /重复用发行年份/);
+});
+
+test("a host break rejected twice uses the factual metadata fallback and stops retrying", async () => {
+  const placements = {
+    frequency: "low",
+    placements: [{ id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 18, reason: "开场" }],
+  };
+  const draft = { id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 18, text: "晚上好，先听一段声音。", sourceIds: ["track:1:metadata"], deliveryInstruction: "自然。" };
+  const rewrite = { ...draft, text: "晚上好，接下来还是先听音乐。" };
+  const rejection = { approved: false, issues: [{ breakId: "break-01", problem: "缺少有效音乐信息", direction: "说清歌手、歌曲和可靠背景。" }], rationale: "不能播。" };
+  const responses = [placements, { break: draft }, rejection, { break: rewrite }, rejection];
+  let calls = 0;
+  const provider = new OpenAICompatibleHostProvider({
+    apiKey: "unit-test-key",
+    mode: "responses",
+    timeoutMs: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      return jsonResponse({ output_text: JSON.stringify(responses.shift()) });
+    },
+  });
+
+  const result = await provider.generateShow({
+    scenePreset: "study",
+    frequency: "low",
+    openingGreeting: "下午好",
+    tracks: [{
+      trackIndex: 1,
+      title: "歌曲一",
+      artist: "音乐人一",
+      album: "专辑一",
+      releaseYear: 2021,
+      exploration: false,
+      allowedFacts: [
+        { id: "track:1:metadata", value: "歌曲《歌曲一》，艺术家是音乐人一。", source: "user" },
+        { id: "track:1:year", value: "《歌曲一》发行于2021年。", source: "user" },
+        { id: "track:1:album", value: "《歌曲一》收录在专辑《专辑一》中。", source: "user" },
+      ],
+    }],
+    skillInstruction: "整档撰稿契约",
+    reviewInstruction: "整档监制契约",
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(calls, 5);
+  assert.equal(result.breaks[0]?.text, "下午好，欢迎收听 Open Music Radio 电台，我是主持人龙浩。接下来听音乐人一的《歌曲一》，发行于2021年，收录在专辑《专辑一》中。");
+  assert.deepEqual(result.breaks[0]?.sourceIds, ["track:1:metadata", "track:1:year", "track:1:album"]);
 });
 
 test("whole-show generation retries an incorrect placement count before returning the reviewed copy", async () => {
@@ -402,7 +464,7 @@ test("whole-show generation retries an incorrect placement count before returnin
       { id: "break-02", beforeTrackIndex: 2, type: "middle", targetSeconds: 22, text: "接下来听音乐人二的《歌曲二》，这首作品把他的创作方向交代得很清楚。", sourceIds: ["track:2:metadata"], deliveryInstruction: "自然，中速。" },
       { id: "break-03", beforeTrackIndex: 3, type: "closing", targetSeconds: 24, text: "这是今天的最后一首，音乐人三的《歌曲三》，最后把时间留给音乐本身。", sourceIds: ["track:3:metadata"], deliveryInstruction: "自然，中速。" },
   ];
-  const responses = [{ frequency: "low", placements: [placements.placements[0], placements.placements[2]] }, placements, ...breaks.map((item) => ({ break: item })), { approved: true, issues: [], rationale: "可播。" }];
+  const responses = [{ frequency: "low", placements: [placements.placements[0], placements.placements[2]] }, ...approvedShowResponses(placements, breaks)];
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "unit-test-key",
     mode: "responses",
@@ -424,7 +486,7 @@ test("whole-show generation retries an incorrect placement count before returnin
 
   assert.equal(result.breaks.length, 3);
   assert.match(result.breaks[0]?.text ?? "", /^晚上好，欢迎收听 Open Music Radio 电台，我是主持人龙安雅。/);
-  assert.equal(calls, 6);
+  assert.equal(calls, 8);
 });
 
 test("whole-show generation retries malformed single-break JSON inside its writing stage", async () => {
@@ -443,8 +505,9 @@ test("whole-show generation retries malformed single-break JSON inside its writi
     { unexpected: true },
     { stillUnexpected: true },
     { break: opening },
+    approvedBreakReview,
     { break: closing },
-    { approved: true, issues: [], rationale: "可播。" },
+    approvedBreakReview,
   ];
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "unit-test-key",
@@ -466,7 +529,7 @@ test("whole-show generation retries malformed single-break JSON inside its writi
 
   assert.equal(result.success, true);
   assert.equal(result.breaks.length, 2);
-  assert.equal(bodies.length, 6);
+  assert.equal(bodies.length, 7);
   assert.doesNotMatch(JSON.stringify(bodies[1]), /上一轮输出未通过 JSON 契约/);
   assert.match(JSON.stringify(bodies[2]), /上一轮输出未通过 JSON 契约/);
   assert.match(JSON.stringify(bodies[3]), /上一轮输出未通过 JSON 契约/);
@@ -487,7 +550,7 @@ test("whole-show placement normalizes DeepSeek closing labels and ignores a dupl
     { id: "break-02", beforeTrackIndex: 2, type: "middle", targetSeconds: 18, text: "接下来听音乐人二的《歌曲二》，从这位创作者的作品继续往前走。", sourceIds: ["track:2:metadata"], deliveryInstruction: "自然。" },
     { id: "break-03", beforeTrackIndex: 3, type: "closing", targetSeconds: 22, text: "这是今天的最后一首，音乐人三的《歌曲三》，把余下的时间交给作品。", sourceIds: ["track:3:metadata"], deliveryInstruction: "自然。" },
   ];
-  const responses = [placements, ...breaks.map((item) => ({ break: item })), { approved: true, issues: [], rationale: "可播。" }];
+  const responses = approvedShowResponses(placements, breaks);
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "unit-test-key",
     mode: "chat_completions",
@@ -550,7 +613,7 @@ test("whole-show prompts bound profile and fact payloads", async () => {
       { beforeTrackIndex: 1, type: "opening", targetSeconds: 20, text: "晚上好，先从音乐人一的《歌曲一》开始，作品资料已经准备好了。", sourceIds: ["track:1:metadata"], deliveryInstruction: "自然。" },
       { beforeTrackIndex: 2, type: "closing", targetSeconds: 20, text: "这是今天的最后一首，音乐人二的《歌曲二》，把结尾交给作品本身。", sourceIds: ["track:2:metadata"], deliveryInstruction: "自然。" },
   ].map((item, index) => ({ ...item, id: `break-0${index + 1}` }));
-  const responses = [placements, ...breaks.map((item) => ({ break: item })), { approved: true, issues: [], rationale: "可播。" }];
+  const responses = approvedShowResponses(placements, breaks);
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "unit-test-key",
     mode: "responses",
