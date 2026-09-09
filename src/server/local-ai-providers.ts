@@ -51,7 +51,11 @@ export class LocalConfiguredHostProvider {
       energyCurve: "平稳",
       tracks: [{ title: "测试曲目", artist: "测试音乐人" }],
     }, { signal });
-    if (!result.success || result.names.length === 0) throw new Error("大模型连接失败");
+    if (!result.success || result.names.length === 0) {
+      this.state = "failed_technical";
+      throw new Error("大模型连接失败");
+    }
+    this.state = "ready";
   }
 
   async adjustRundown(request: { instruction: string; tracks: Array<{ id: string; title: string; artist: string; mood: string[] }> }, signal?: AbortSignal): Promise<string[]> {
@@ -99,7 +103,7 @@ async function completeText(provider: LlmProviderId, apiKey: string, model: stri
     return payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
   }
   const { baseUrl } = llmDetails(provider, customBaseUrl);
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", signal, headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: user }], response_format: { type: "json_object" } }) });
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", signal, headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: user }], response_format: { type: "json_object" }, ...(provider === "deepseek" ? { thinking: { type: "disabled" } } : {}) }) });
   if (!response.ok) throw new Error(`大模型连接失败 (${response.status})`);
   const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
   return payload.choices?.[0]?.message?.content ?? "";

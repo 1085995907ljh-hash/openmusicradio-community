@@ -452,7 +452,9 @@ export class OpenAICompatibleHostProvider implements HostProvider {
             { role: "user", content: prompt.user },
           ],
           max_tokens: maxOutputTokens,
-          reasoning_effort: this.reasoningEffort,
+          ...(isDeepSeekModel(model)
+            ? { thinking: { type: "disabled" } }
+            : { reasoning_effort: this.reasoningEffort }),
           response_format: { type: "json_object" },
         };
 
@@ -495,6 +497,10 @@ function isCredentialTransportSecure(baseUrl: string, allowInsecureHttp: boolean
   } catch {
     return false;
   }
+}
+
+function isDeepSeekModel(model: string): boolean {
+  return /^deepseek-/i.test(model.trim());
 }
 
 export function createHostProvider(env: NodeJS.ProcessEnv = process.env): OpenAICompatibleHostProvider {

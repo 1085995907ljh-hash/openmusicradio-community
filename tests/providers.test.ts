@@ -666,6 +666,31 @@ test("playlist naming uses the selected tracks and accepts only short Chinese co
   assert.match(messages[1]?.content ?? "", /Daniel Caesar/);
 });
 
+test("DeepSeek chat requests disable thinking so bounded JSON output is not consumed by reasoning", async () => {
+  let body: Record<string, unknown> | undefined;
+  const provider = new OpenAICompatibleHostProvider({
+    apiKey: "unit-test-key",
+    model: "deepseek-v4-flash",
+    reasoningEffort: "high",
+    mode: "chat_completions",
+    fetchImpl: async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify({ names: ["专注心流"] }) } }] });
+    },
+  });
+
+  const result = await provider.generatePlaylistNames({
+    scenePreset: "study",
+    energyCurve: "平稳",
+    tracks: [{ title: "测试曲目", artist: "测试音乐人" }],
+  });
+
+  assert.deepEqual(result, { success: true, names: ["专注心流"] });
+  assert.deepEqual(body?.thinking, { type: "disabled" });
+  assert.equal(body?.reasoning_effort, undefined);
+  assert.deepEqual(body?.response_format, { type: "json_object" });
+});
+
 test("cloud host prompts omit unallowlisted track and derived metadata", () => {
   const prompt = buildHostPrompt(context({
     currentTrack: {
