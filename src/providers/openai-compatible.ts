@@ -43,6 +43,7 @@ const WHOLE_SHOW_BUDGET_MS = 300_000;
 const WHOLE_SHOW_REVIEW_TIMEOUT_MS = 45_000;
 const WHOLE_SHOW_REWRITE_TIMEOUT_MS = 45_000;
 const WHOLE_SHOW_MAX_REWRITES = 2;
+const WHOLE_SHOW_STAGE_ATTEMPTS = 3;
 
 interface HostBreakPlacement {
   id: string;
@@ -262,37 +263,49 @@ export class OpenAICompatibleHostProvider implements HostProvider {
         }
         return Math.max(1, Math.min(capMs, remainingMs));
       };
-      const runStage = async <T>(operation: (timeoutMs: number) => Promise<T>, capMs = this.timeoutMs): Promise<T> => {
-        let firstError: ProviderError | undefined;
-        for (let attempt = 0; attempt < 2; attempt += 1) {
+      const runStage = async <T>(stage: string, operation: (timeoutMs: number, attempt: number) => Promise<T>, capMs = this.timeoutMs): Promise<T> => {
+        let lastError: ProviderError | undefined;
+        for (let attempt = 0; attempt < WHOLE_SHOW_STAGE_ATTEMPTS; attempt += 1) {
           try {
-            return await operation(timeoutFor(capMs));
+            return await operation(timeoutFor(capMs), attempt);
           } catch (error) {
             const providerError = asProviderError(error);
-            firstError ??= providerError;
-            if (attempt > 0 || providerError.code === "timeout" || (!providerError.retryable && providerError.code !== "invalid_response")) throw providerError;
+            lastError = providerError;
+            const canRetry = providerError.code !== "timeout"
+              && (providerError.retryable || providerError.code === "invalid_response")
+              && attempt + 1 < WHOLE_SHOW_STAGE_ATTEMPTS;
+            if (!canRetry) {
+              throw new ProviderError(providerErrorInfo(PROVIDER_NAME, providerError.code, `${stage}: ${providerError.message}`, {
+                status: providerError.status,
+                retryable: providerError.retryable,
+                retryAfterMs: providerError.retryAfterMs,
+              }), { cause: providerError });
+            }
           }
         }
-        throw firstError ?? new ProviderError(providerErrorInfo(PROVIDER_NAME, "network_error", "whole-show stage failed", { retryable: true }));
+        throw lastError ?? new ProviderError(providerErrorInfo(PROVIDER_NAME, "network_error", `${stage}: whole-show stage failed`, { retryable: true }));
       };
-      const placements = await runStage(async (timeoutMs) => {
-        const payload = await this.request(mode, buildHostShowPlacementPrompt(request), options.signal, false, 2_400, timeoutMs);
+      const placements = await runStage("口播布点", async (timeoutMs, attempt) => {
+        const payload = await this.request(mode, withStructuredOutputRetry(buildHostShowPlacementPrompt(request), attempt), options.signal, false, 2_400, timeoutMs);
         return parseHostShowPlacementPayload(payload, request);
       }, WHOLE_SHOW_REVIEW_TIMEOUT_MS);
       let breaks: HostShowBreak[] = [];
       for (const placement of placements) {
-        const payload = await runStage(async (timeoutMs) => this.request(
-          mode,
-          buildHostShowBreakPrompt(request, placements, placement, breaks),
-          options.signal,
-          false,
-          1_600,
-          timeoutMs,
-        ));
-        breaks.push(parseHostShowSingleBreakPayload(payload, request, placement));
+        const hostBreak = await runStage(`口播 ${placement.id} 撰稿`, async (timeoutMs, attempt) => {
+          const payload = await this.request(
+            mode,
+            withStructuredOutputRetry(buildHostShowBreakPrompt(request, placements, placement, breaks), attempt),
+            options.signal,
+            false,
+            1_600,
+            timeoutMs,
+          );
+          return parseHostShowSingleBreakPayload(payload, request, placement);
+        });
+        breaks.push(hostBreak);
       }
-      let review = await runStage(async (timeoutMs) => {
-        const payload = await this.request(mode, buildHostShowReviewPrompt(request, breaks), options.signal, false, 2_400, timeoutMs, this.reviewModel);
+      let review = await runStage("整档口播审核", async (timeoutMs, attempt) => {
+        const payload = await this.request(mode, withStructuredOutputRetry(buildHostShowReviewPrompt(request, breaks), attempt), options.signal, false, 2_400, timeoutMs, this.reviewModel);
         return applyHostShowQualityFloor(request, breaks, parseHostShowReviewPayload(payload, breaks));
       }, WHOLE_SHOW_REVIEW_TIMEOUT_MS);
       for (let rewriteRound = 1; !review.approved && rewriteRound <= WHOLE_SHOW_MAX_REWRITES; rewriteRound += 1) {
@@ -301,19 +314,21 @@ export class OpenAICompatibleHostProvider implements HostProvider {
           const current = breaks[breakIndex];
           const placement = placements.find((item) => item.id === issue.breakId);
           if (!current || !placement) continue;
-          const payload = await runStage(async (timeoutMs) => this.request(
-            mode,
-            buildHostShowBreakRewritePrompt(request, placements, current, breaks, issue, rewriteRound),
-            options.signal,
-            false,
-            1_600,
-            timeoutMs,
-          ), WHOLE_SHOW_REWRITE_TIMEOUT_MS);
-          breaks[breakIndex] = parseHostShowSingleBreakPayload(payload, request, placement);
+          breaks[breakIndex] = await runStage(`口播 ${issue.breakId} 第 ${rewriteRound} 轮返修`, async (timeoutMs, attempt) => {
+            const payload = await this.request(
+              mode,
+              withStructuredOutputRetry(buildHostShowBreakRewritePrompt(request, placements, current, breaks, issue, rewriteRound), attempt),
+              options.signal,
+              false,
+              1_600,
+              timeoutMs,
+            );
+            return parseHostShowSingleBreakPayload(payload, request, placement);
+          }, WHOLE_SHOW_REWRITE_TIMEOUT_MS);
         }
         if (rewriteRound < WHOLE_SHOW_MAX_REWRITES) {
-          review = await runStage(async (timeoutMs) => {
-            const payload = await this.request(mode, buildHostShowReviewPrompt(request, breaks), options.signal, false, 2_400, timeoutMs, this.reviewModel);
+          review = await runStage(`整档口播第 ${rewriteRound} 轮复审`, async (timeoutMs, attempt) => {
+            const payload = await this.request(mode, withStructuredOutputRetry(buildHostShowReviewPrompt(request, breaks), attempt), options.signal, false, 2_400, timeoutMs, this.reviewModel);
             return applyHostShowQualityFloor(request, breaks, parseHostShowReviewPayload(payload, breaks));
           }, WHOLE_SHOW_REVIEW_TIMEOUT_MS);
         }
@@ -444,7 +459,7 @@ export class OpenAICompatibleHostProvider implements HostProvider {
       : {
           model,
           messages: [
-            { role: "system", content: prompt.system },
+            { role: "system", content: `${prompt.system}\n\n只返回一个有效的 json 对象。` },
             { role: "user", content: prompt.user },
           ],
           max_tokens: maxOutputTokens,
@@ -481,6 +496,14 @@ export class OpenAICompatibleHostProvider implements HostProvider {
     }
     return bodyResult.json;
   }
+}
+
+function withStructuredOutputRetry(prompt: HostPrompt, attempt: number): HostPrompt {
+  if (attempt === 0) return prompt;
+  return {
+    ...prompt,
+    system: `${prompt.system}\n\n上一轮输出未通过 JSON 契约。保留原任务，只返回一个完整、可解析且字段严格匹配示例的 JSON 对象，不要 Markdown、代码围栏或解释。`,
+  };
 }
 
 function isCredentialTransportSecure(baseUrl: string, allowInsecureHttp: boolean): boolean {
@@ -716,27 +739,31 @@ function parseHostShowPlacementPayload(payload: unknown, request: HostShowGenera
   for (const candidate of collectResponseCandidates(payload)) {
     const object = extractJsonObject(candidate);
     if (!object || !Array.isArray(object.placements)) continue;
-    const placements = object.placements.map((value, index): HostBreakPlacement => {
+    const parsedPlacements = object.placements.map((value, index): (HostBreakPlacement & { afterTrackClosing: boolean }) => {
       if (!isPlainRecord(value)) throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", `show placement ${index + 1} is invalid`, { retryable: false }));
-      const beforeTrackIndex = Number(value.beforeTrackIndex);
+      const afterTrackClosing = value.type === "closing"
+        && Number(value.afterTrackIndex) === request.tracks.length
+        && !Number.isInteger(Number(value.beforeTrackIndex));
+      const beforeTrackIndex = afterTrackClosing ? request.tracks.length : Number(value.beforeTrackIndex);
       const expectedType = request.tracks.length === 1 || beforeTrackIndex === 1
         ? "opening"
         : beforeTrackIndex === request.tracks.length
           ? "closing"
           : "middle";
-      const type = value.type === "opening" || value.type === "middle" || value.type === "closing" ? value.type : null;
       const targetSeconds = Number.isFinite(Number(value.targetSeconds)) && Number(value.targetSeconds) >= 5 && Number(value.targetSeconds) <= 35
         ? Math.round(Number(value.targetSeconds))
         : null;
-      const id = typeof value.id === "string" ? value.id.trim().slice(0, 80) : "";
       const reason = typeof value.reason === "string" ? value.reason.trim().slice(0, 300) : "";
-      if (!Number.isInteger(beforeTrackIndex) || beforeTrackIndex < 1 || beforeTrackIndex > request.tracks.length || !id || type !== expectedType || !targetSeconds || !reason) {
+      if (!Number.isInteger(beforeTrackIndex) || beforeTrackIndex < 1 || beforeTrackIndex > request.tracks.length || !targetSeconds || !reason) {
         throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", `show placement ${index + 1} is incomplete or inconsistent`, { retryable: false }));
       }
-      return { id, beforeTrackIndex, type, targetSeconds, reason };
+      return { id: "", beforeTrackIndex, type: expectedType, targetSeconds, reason, afterTrackClosing };
     }).sort((left, right) => left.beforeTrackIndex - right.beforeTrackIndex);
-    if (new Set(placements.map((item) => item.id)).size !== placements.length || new Set(placements.map((item) => item.beforeTrackIndex)).size !== placements.length) {
-      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "show placements contain duplicate ids or positions", { retryable: false }));
+    const placements = parsedPlacements
+      .filter((placement, index, all) => !placement.afterTrackClosing || !all.some((other, otherIndex) => otherIndex !== index && other.beforeTrackIndex === placement.beforeTrackIndex && !other.afterTrackClosing))
+      .map(({ afterTrackClosing: _afterTrackClosing, ...placement }, index) => ({ ...placement, id: `break-${String(index + 1).padStart(2, "0")}` }));
+    if (new Set(placements.map((item) => item.beforeTrackIndex)).size !== placements.length) {
+      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "show placements contain duplicate positions", { retryable: false }));
     }
     const requiredPositions = request.tracks.length === 1 ? [1] : [1, request.tracks.length];
     if (requiredPositions.some((position) => !placements.some((item) => item.beforeTrackIndex === position))) {

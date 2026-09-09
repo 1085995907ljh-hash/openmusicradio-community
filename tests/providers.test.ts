@@ -426,6 +426,90 @@ test("whole-show generation retries one malformed stage before returning the rev
   assert.equal(calls, 6);
 });
 
+test("whole-show generation retries malformed single-break JSON inside its writing stage", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const placements = {
+    frequency: "low",
+    placements: [
+      { id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 20, reason: "开场" },
+      { id: "break-02", beforeTrackIndex: 2, type: "closing", targetSeconds: 22, reason: "收尾" },
+    ],
+  };
+  const opening = { id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 20, text: "晚上好，先从音乐人一的《歌曲一》开始，听听这位创作者怎样展开今天的声音。", sourceIds: ["track:1:metadata"], deliveryInstruction: "自然，中速。" };
+  const closing = { id: "break-02", beforeTrackIndex: 2, type: "closing", targetSeconds: 22, text: "这是今天的最后一首，音乐人二的《歌曲二》，把余下的时间交给这首作品。", sourceIds: ["track:2:metadata"], deliveryInstruction: "自然，中速。" };
+  const responses = [
+    placements,
+    { unexpected: true },
+    { stillUnexpected: true },
+    { break: opening },
+    { break: closing },
+    { approved: true, issues: [], rationale: "可播。" },
+  ];
+  const provider = new OpenAICompatibleHostProvider({
+    apiKey: "unit-test-key",
+    mode: "responses",
+    fetchImpl: async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return jsonResponse({ output_text: JSON.stringify(responses.shift()) });
+    },
+  });
+  const tracks = [1, 2].map((id) => ({
+    trackIndex: id,
+    title: `歌曲${id}`,
+    artist: `音乐人${id}`,
+    exploration: false,
+    allowedFacts: [{ id: `track:${id}:metadata`, value: `歌曲《歌曲${id}》，艺术家是音乐人${id}。`, source: "user" as const }],
+  }));
+
+  const result = await provider.generateShow({ scenePreset: "study", frequency: "low", openingGreeting: "晚上好", tracks, skillInstruction: "整档撰稿契约", reviewInstruction: "整档监制契约" });
+
+  assert.equal(result.success, true);
+  assert.equal(result.breaks.length, 2);
+  assert.equal(bodies.length, 6);
+  assert.doesNotMatch(JSON.stringify(bodies[1]), /上一轮输出未通过 JSON 契约/);
+  assert.match(JSON.stringify(bodies[2]), /上一轮输出未通过 JSON 契约/);
+  assert.match(JSON.stringify(bodies[3]), /上一轮输出未通过 JSON 契约/);
+});
+
+test("whole-show placement normalizes DeepSeek closing labels and ignores a duplicate after-track closing", async () => {
+  const placements = {
+    frequency: "low",
+    placements: [
+      { id: "opening", beforeTrackIndex: 1, type: "opening", targetSeconds: 20, reason: "开场" },
+      { id: "transition", beforeTrackIndex: 2, type: "middle", targetSeconds: 18, reason: "中段" },
+      { id: "mislabelled-last", beforeTrackIndex: 3, type: "middle", targetSeconds: 22, reason: "最后一首歌前" },
+      { id: "post-show", afterTrackIndex: 3, type: "closing", targetSeconds: 16, reason: "歌后收尾" },
+    ],
+  };
+  const breaks = [
+    { id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 20, text: "晚上好，先从音乐人一的《歌曲一》开始，听听这位创作者怎样展开今天的声音。", sourceIds: ["track:1:metadata"], deliveryInstruction: "自然。" },
+    { id: "break-02", beforeTrackIndex: 2, type: "middle", targetSeconds: 18, text: "接下来听音乐人二的《歌曲二》，从这位创作者的作品继续往前走。", sourceIds: ["track:2:metadata"], deliveryInstruction: "自然。" },
+    { id: "break-03", beforeTrackIndex: 3, type: "closing", targetSeconds: 22, text: "这是今天的最后一首，音乐人三的《歌曲三》，把余下的时间交给作品。", sourceIds: ["track:3:metadata"], deliveryInstruction: "自然。" },
+  ];
+  const responses = [placements, ...breaks.map((item) => ({ break: item })), { approved: true, issues: [], rationale: "可播。" }];
+  const provider = new OpenAICompatibleHostProvider({
+    apiKey: "unit-test-key",
+    mode: "chat_completions",
+    fetchImpl: async () => jsonResponse({ choices: [{ message: { content: JSON.stringify(responses.shift()) } }] }),
+  });
+  const tracks = [1, 2, 3].map((id) => ({
+    trackIndex: id,
+    title: `歌曲${id}`,
+    artist: `音乐人${id}`,
+    exploration: false,
+    allowedFacts: [{ id: `track:${id}:metadata`, value: `歌曲《歌曲${id}》，艺术家是音乐人${id}。`, source: "user" as const }],
+  }));
+
+  const result = await provider.generateShow({ scenePreset: "study", frequency: "low", openingGreeting: "晚上好", tracks, skillInstruction: "整档撰稿契约", reviewInstruction: "整档监制契约" });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.breaks.map(({ id, beforeTrackIndex, type }) => ({ id, beforeTrackIndex, type })), [
+    { id: "break-01", beforeTrackIndex: 1, type: "opening" },
+    { id: "break-02", beforeTrackIndex: 2, type: "middle" },
+    { id: "break-03", beforeTrackIndex: 3, type: "closing" },
+  ]);
+});
+
 test("whole-show generation failure is explicit and never returns automatic fallback copy", async () => {
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "unit-test-key",
@@ -627,6 +711,8 @@ test("DeepSeek chat requests disable thinking so bounded JSON output is not cons
   assert.deepEqual(body?.thinking, { type: "disabled" });
   assert.equal(body?.reasoning_effort, undefined);
   assert.deepEqual(body?.response_format, { type: "json_object" });
+  const messages = body?.messages as Array<{ role: string; content: string }>;
+  assert.match(messages[0]?.content ?? "", /有效的 json 对象/);
 });
 
 test("cloud host prompts omit unallowlisted track and derived metadata", () => {
