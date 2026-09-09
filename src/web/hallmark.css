@@ -9485,7 +9485,7 @@ button:disabled,
 }
 
 .topbar-actions {
-  grid-template-columns: repeat(2, 3.25rem);
+  grid-template-columns: 3.25rem;
   justify-content: end;
   gap: .75rem;
 }
