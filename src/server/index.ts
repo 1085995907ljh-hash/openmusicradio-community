@@ -37,7 +37,13 @@ import { personalizeCandidates, type PersonalizationCandidate } from "../core/pe
 import { isDisallowedRecommendationCandidate, isExplorationVersionCandidate } from "../core/recommendation-guards.js";
 import { buildListeningProfile, inferSongTags } from "../core/listening-profile.js";
 import { isCompleteAccountPlayback } from "../core/playback-access.js";
-import { parseMusicSearchAdjustment } from "../core/rundown-adjustment.js";
+import {
+  parseMusicSearchAdjustment,
+  type RundownAdjustmentConversationMessage,
+  type RundownAdjustmentIntent,
+  type RundownAdjustmentTrack,
+  type RundownReplacementCriteria,
+} from "../core/rundown-adjustment.js";
 import { energyRangeForPhase, getSceneConfig, phaseForElapsedSeconds } from "../core/scenes.js";
 import {
   hostCharacterBounds,
@@ -328,6 +334,8 @@ interface HostProviderLike {
   state?: string;
   getStatus?(): unknown;
   adjustRundown?(request: { instruction: string; tracks: Array<{ id: string; title: string; artist: string; mood: string[] }> }, signal?: AbortSignal): Promise<string[]>;
+  planRundownAdjustment?(request: { instruction: string; conversation: RundownAdjustmentConversationMessage[]; tracks: RundownAdjustmentTrack[] }, signal?: AbortSignal): Promise<RundownAdjustmentIntent>;
+  englishTrackIds?(tracks: RundownAdjustmentTrack[], signal?: AbortSignal): Promise<string[]>;
 }
 
 interface TtsProviderLike {
@@ -492,6 +500,15 @@ function nonEmptyString(value: unknown, field: string, maxLength: number): strin
     throw new ServiceError("INVALID_INPUT", 400, `${field} is required`);
   }
   return value.trim();
+}
+
+function adjustmentConversation(value: unknown): RundownAdjustmentConversationMessage[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-8).flatMap((entry) => {
+    if (!isRecord(entry) || (entry.role !== "user" && entry.role !== "assistant") || typeof entry.text !== "string") return [];
+    const text = entry.text.trim().slice(0, 600);
+    return text ? [{ role: entry.role, text }] : [];
+  });
 }
 
 function safeCode(value: unknown, fallback = "ENGINE_ERROR"): string {
@@ -788,6 +805,41 @@ function candidateSearchText(candidate: Pick<PersonalizationCandidate, "title" |
     }
   }
   return fields.filter((value): value is string => typeof value === "string" && value.trim().length > 0).join(" ").normalize("NFKC");
+}
+
+function providerSongArtists(value: unknown): string[] {
+  const record = isRecord(value) && isRecord(value.song) ? value.song : value;
+  if (!isRecord(record)) return [];
+  const artists = Array.isArray(record.artists) ? record.artists : [];
+  const names = artists.flatMap((artist) => {
+    if (typeof artist === "string") return artist.trim() ? [artist.trim()] : [];
+    return isRecord(artist) && typeof artist.name === "string" && artist.name.trim() ? [artist.name.trim()] : [];
+  });
+  if (names.length > 0) return names;
+  return typeof record.artist === "string" && record.artist.trim() ? [record.artist.trim()] : [];
+}
+
+function providerSongMatchesArtist(value: unknown, requestedArtist: string): boolean {
+  const normalized = requestedArtist.normalize("NFKC").trim().toLocaleLowerCase();
+  return normalized.length > 0 && providerSongArtists(value).some((artist) => artist.normalize("NFKC").trim().toLocaleLowerCase() === normalized);
+}
+
+function providerSongAdjustmentTrack(value: unknown): RundownAdjustmentTrack | null {
+  const record = isRecord(value) && isRecord(value.song) ? value.song : value;
+  if (!isRecord(record) || typeof record.id !== "string" || typeof record.title !== "string") return null;
+  const artist = providerSongArtists(record)[0];
+  if (!artist) return null;
+  const album = typeof record.album === "string"
+    ? record.album
+    : isRecord(record.album) && typeof record.album.name === "string" ? record.album.name : null;
+  return {
+    id: record.id,
+    title: record.title,
+    artist,
+    album,
+    mood: Array.isArray(record.mood) ? record.mood.filter((item): item is string => typeof item === "string") : [],
+    liked: record.liked === true,
+  };
 }
 
 function withSearchContext(song: unknown, searchQuery: string, styleTags: readonly MusicGenreId[]): unknown {
@@ -1687,7 +1739,14 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
   const operationResults = new Map<string, { action: "confirm" | "next" | "stop"; generation?: number; state: ProgramState }>();
   type PlanOperationAction = "reorder" | "regenerate" | "adjust" | "replace" | "regenerate-host";
   type CreateProgressStatus = "running" | "completed" | "failed" | "action_required";
-  const planOperationResults = new Map<string, { action: PlanOperationAction; baseRevision: number; revision: number }>();
+  const planOperationResults = new Map<string, { action: PlanOperationAction; baseRevision: number; revision: number; message?: string }>();
+  const rememberPlanOperation = (key: string, value: { action: PlanOperationAction; baseRevision: number; revision: number; message?: string }) => {
+    planOperationResults.set(key, value);
+    while (planOperationResults.size > 256) {
+      const oldest = planOperationResults.keys().next().value;
+      if (typeof oldest === "string") planOperationResults.delete(oldest); else break;
+    }
+  };
   const createResults = new Map<string, { spec: ProgramSpec; state: ProgramState }>();
   const createProgress = new Map<string, { completedSteps: number; status: CreateProgressStatus; updatedAt: string }>();
   const desktopSelections = new Map<string, DesktopProgramResult>();
@@ -2932,6 +2991,76 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     prepareAccountRundown("netease", spec, preferences, signal);
   const prepareQqRundown = (spec: ProgramSpec, preferences: UnknownRecord, signal: AbortSignal): Promise<ProgramRundownItem[]> =>
     prepareAccountRundown("qq", spec, preferences, signal);
+
+  const findSemanticReplacementCandidates = async (
+    providerId: "netease" | "qq",
+    spec: ProgramSpec,
+    artifact: AccountRundown,
+    criteria: RundownReplacementCriteria,
+    count: number,
+    signal: AbortSignal,
+  ): Promise<ProgramRundownItem[]> => {
+    if (!artifact.preferences) return [];
+    const provider = providerId === "qq" ? await requireQq() : await requireNetease();
+    const requestedGenreTags = criteria.genre ? exactGenreQueryTags(criteria.genre) : [];
+    let searchSongs: unknown[] = [];
+    if (criteria.genre) {
+      if (requestedGenreTags.length === 0 || typeof provider.searchPlaylists !== "function" || typeof provider.playlistDetail !== "function") return [];
+      const playlistQueries = requestedGenreTags.flatMap((genre) => STYLE_PLAYLIST_QUERY_TERMS[genre].map((query) => ({ genre, query })));
+      const playlistResults = await Promise.allSettled(playlistQueries.map(({ query }) => invokeAccount(providerId, () => provider.searchPlaylists!(query, { limit: PUBLIC_PLAYLIST_SEARCH_LIMIT, offset: 0, signal }))));
+      const seenPlaylistIds = new Set<string>();
+      const playlistSeeds = playlistResults.flatMap((task, index) => {
+        const result = task.status === "fulfilled" ? task.value : null;
+        if (!isRecord(result) || !Array.isArray(result.playlists)) return [];
+        const queryEntry = playlistQueries[index];
+        if (!queryEntry) return [];
+        return result.playlists.flatMap((playlist) => {
+          if (!isRecord(playlist) || typeof playlist.id !== "string" || seenPlaylistIds.has(playlist.id) || isDisallowedRecommendationCandidate(playlist) || !playlistHasStyleEvidence(playlist, queryEntry.genre)) return [];
+          seenPlaylistIds.add(playlist.id);
+          return [{ id: playlist.id, query: queryEntry.query, genre: queryEntry.genre }];
+        });
+      }).slice(0, MAX_PUBLIC_PLAYLIST_DETAILS);
+      const playlistDetails = await Promise.all(playlistSeeds.map((playlist) => invokeAccount(providerId, () => provider.playlistDetail!(playlist.id, signal))));
+      searchSongs = playlistDetails.flatMap((detail, index) => {
+        const seed = playlistSeeds[index];
+        if (!seed || !isRecord(detail) || !Array.isArray(detail.tracks) || !playlistHasStyleEvidence(detail, seed.genre)) return [];
+        return detail.tracks.map((track) => withSearchContext(track, seed.query, [seed.genre]));
+      });
+    } else {
+      if (typeof provider.search !== "function") return [];
+      const styleLabels = programStyleTags(spec.scenePreset, spec.musicGenres ?? []).map((genre) => MUSIC_GENRES[genre].label).join(" ");
+      const queries = criteria.artist
+        ? [criteria.artist]
+        : criteria.language === "english" ? [`英文歌曲 ${styleLabels}`.trim(), `English songs ${styleLabels}`.trim()] : [];
+      const results = await Promise.allSettled(queries.map((query) => invokeAccount(providerId, () => provider.search!(query, { limit: 100, offset: 0, signal }))));
+      searchSongs = results.flatMap((task) => task.status === "fulfilled" && isRecord(task.value) && Array.isArray(task.value.songs) ? task.value.songs : []);
+    }
+    const currentIds = new Set(artifact.items.map((track) => track.id));
+    const seenIds = new Set<string>();
+    searchSongs = searchSongs.filter((song) => {
+      const track = providerSongAdjustmentTrack(song);
+      if (!track || seenIds.has(track.id) || currentIds.has(track.id) || artifact.excludedTrackIds.has(track.id)) return false;
+      if (criteria.artist && !providerSongMatchesArtist(song, criteria.artist)) return false;
+      seenIds.add(track.id);
+      return true;
+    });
+    if (criteria.language === "english") {
+      if (!hostProvider || typeof hostProvider.englishTrackIds !== "function") return [];
+      const tracks = searchSongs.flatMap((song) => providerSongAdjustmentTrack(song) ?? []).slice(0, 80);
+      const englishIds = new Set(await hostProvider.englishTrackIds(tracks, signal));
+      searchSongs = searchSongs.filter((song) => {
+        const track = providerSongAdjustmentTrack(song);
+        return Boolean(track && englishIds.has(track.id));
+      });
+    }
+    if (searchSongs.length < count) return [];
+    const searchPreferences = { ...artifact.preferences, programPlan: searchSongs };
+    const selectionSpec = requestedGenreTags.length > 0
+      ? { ...spec, recommendationMode: "genre" as const, musicGenres: requestedGenreTags }
+      : spec;
+    const candidates = await prepareAccountRundown(providerId, selectionSpec, searchPreferences, signal, undefined, 1, count);
+    return candidates.filter((track) => (!criteria.artist || providerSongMatchesArtist(track, criteria.artist))).slice(0, count);
+  };
 
   const revalidateAccountRundown = async (
     providerId: "netease" | "qq",
@@ -4685,12 +4814,13 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             const replay = planOperationResults.get(operationKeyValue);
             if (replay) {
               if (replay.action !== typedAction || replay.baseRevision !== baseRevision) throw new ServiceError("OPERATION_REUSED", 409, publicMessage("OPERATION_REUSED"));
-              return { state: lockedState, message: null };
+              return { state: lockedState, message: replay.message ?? null };
             }
             if (artifact.revision !== baseRevision) throw new ServiceError("GENERATION_MISMATCH", 409, "节目单已经变化，请刷新后再调整。");
             let actionMessage: string | null = null;
             let ordered: ProgramRundownItem[];
-            let excludedTrackId: string | null = null;
+            const excludedTrackIds: string[] = [];
+            let preferenceAdditions: ProgramRundownItem[] = [];
             if (typedAction === "regenerate") {
               if (!artifact.preferences) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "选歌画像已丢失，请重新创建。");
               const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
@@ -4721,11 +4851,57 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               ordered = artifact.items.map(({ hostScript: _hostScript, ...track }, index) => index === replaceIndex
                 ? { ...replacement, hostMoment: track.hostMoment }
                 : track);
-              excludedTrackId = trackId;
+              excludedTrackIds.push(trackId);
             } else {
               const instruction = typedAction === "adjust" ? nonEmptyString(body.message, "message", 600) : "";
-              const searchAdjustment = typedAction === "adjust" ? parseMusicSearchAdjustment(instruction) : null;
-              if (searchAdjustment) {
+              const semanticIntent = typedAction === "adjust" && typeof hostProvider?.planRundownAdjustment === "function"
+                ? await hostProvider.planRundownAdjustment({
+                    instruction,
+                    conversation: adjustmentConversation(body.conversation),
+                    tracks: artifact.items.map((track) => ({ id: track.id, title: track.title, artist: track.artist, album: track.album, mood: track.mood, liked: track.liked === true })),
+                  }, controller.signal)
+                : null;
+              if (semanticIntent && semanticIntent.decision !== "execute") {
+                rememberPlanOperation(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision, message: semanticIntent.message });
+                return { state: lockedState, message: semanticIntent.message };
+              }
+              if (semanticIntent?.decision === "execute" && semanticIntent.action === "replace") {
+                if (semanticIntent.count === 0) {
+                  const message = semanticIntent.message || "当前节目单已经符合这个要求，不需要替换。";
+                  rememberPlanOperation(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision, message });
+                  return { state: lockedState, message };
+                }
+                if (!artifact.preferences) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "选歌画像已丢失，请重新创建。");
+                const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
+                const additions = await findSemanticReplacementCandidates(providerId, lockedState.spec, artifact, semanticIntent.criteria, semanticIntent.count, controller.signal);
+                if (additions.length < semanticIntent.count) {
+                  const target = semanticIntent.criteria.artist
+                    ? `歌手“${semanticIntent.criteria.artist}”`
+                    : semanticIntent.criteria.genre ? `“${semanticIntent.criteria.genre}”风格` : "英文歌曲";
+                  const message = `没有找到足够的${target}可完整播放曲目，节目单没有修改。你可以减少替换数量或换一个条件。`;
+                  rememberPlanOperation(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision, message });
+                  return { state: lockedState, message };
+                }
+                const replaceIndexes = semanticIntent.selection === "specified_tracks"
+                  ? semanticIntent.trackIds.map((id) => artifact.items.findIndex((track) => track.id === id))
+                  : [
+                      ...artifact.items.flatMap((track, index) => track.liked === true ? [] : [index]),
+                      ...artifact.items.flatMap((track, index) => track.liked === true ? [index] : []),
+                    ].slice(0, semanticIntent.count);
+                if (replaceIndexes.length !== semanticIntent.count || replaceIndexes.some((index) => index < 0)) {
+                  throw new ServiceError("INVALID_INPUT", 400, "模型返回的替换范围不在当前节目单中。");
+                }
+                const replacementByIndex = new Map(replaceIndexes.map((index, additionIndex) => [index, additions[additionIndex]!]));
+                ordered = artifact.items.map(({ hostScript: _hostScript, ...track }, index) => {
+                  const replacement = replacementByIndex.get(index);
+                  return replacement ? { ...replacement, hostMoment: track.hostMoment } : track;
+                });
+                excludedTrackIds.push(...replaceIndexes.map((index) => artifact.items[index]!.id));
+                preferenceAdditions = additions;
+                actionMessage = semanticIntent.message || `已替换 ${additions.length} 首歌曲，其他符合要求的歌曲保持不变。`;
+              } else {
+                const searchAdjustment = typedAction === "adjust" && !semanticIntent ? parseMusicSearchAdjustment(instruction) : null;
+                if (searchAdjustment) {
                 if (!artifact.preferences) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "选歌画像已丢失，请重新创建。");
                 const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
                 const provider = providerId === "qq" ? await requireQq() : await requireNetease();
@@ -4780,8 +4956,10 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                 const existingPlan = Array.isArray(artifact.preferences.programPlan) ? artifact.preferences.programPlan : [];
                 artifact.preferences = { ...artifact.preferences, programPlan: [...searchSongs, ...existingPlan] };
                 actionMessage = `已找到“${searchAdjustment.query}”的 ${additions.length} 首可播放歌曲，并更新节目单和相关口播。`;
-              } else {
-                const ids = typedAction === "adjust"
+                } else {
+                  const ids = semanticIntent?.decision === "execute" && semanticIntent.action === "reorder"
+                    ? semanticIntent.trackIds
+                    : typedAction === "adjust"
                   ? typeof hostProvider?.adjustRundown === "function"
                     ? await hostProvider.adjustRundown({
                         instruction,
@@ -4793,6 +4971,8 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                   throw new ServiceError("INVALID_INPUT", 400, "曲目顺序必须包含节目单中的全部歌曲且不能重复。");
                 }
                 ordered = ids.map((id) => artifact.items.find((track) => track.id === id)!).filter(Boolean);
+                  if (semanticIntent?.decision === "execute" && semanticIntent.action === "reorder") actionMessage = semanticIntent.message || "已按你的要求调整歌曲顺序。";
+                }
               }
             }
             if (typedAction === "regenerate") ordered = ordered.map(({ hostScript: _hostScript, ...track }) => track);
@@ -4802,14 +4982,14 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             }
             const locked = await lockNeteaseHostScripts(lockedState.spec, ordered, artifact.listenerProfile, controller.signal);
             artifact.items = locked;
-            if (excludedTrackId) artifact.excludedTrackIds.add(excludedTrackId);
+            for (const trackId of excludedTrackIds) artifact.excludedTrackIds.add(trackId);
+            if (preferenceAdditions.length > 0 && artifact.preferences) {
+              const existingPlan = Array.isArray(artifact.preferences.programPlan) ? artifact.preferences.programPlan : [];
+              artifact.preferences = { ...artifact.preferences, programPlan: [...preferenceAdditions, ...existingPlan] };
+            }
             artifact.hostAudio.clear();
             artifact.revision += 1;
-            planOperationResults.set(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision });
-            while (planOperationResults.size > 256) {
-              const oldest = planOperationResults.keys().next().value;
-              if (typeof oldest === "string") planOperationResults.delete(oldest); else break;
-            }
+            rememberPlanOperation(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision, ...(actionMessage ? { message: actionMessage } : {}) });
             return { state: lockedState, message: actionMessage };
           });
           writeJson(res, 200, { program: responseProgram(result.state), message: result.message ?? (typedAction === "adjust" ? "AI 已按要求调整节目单并重写口播。" : typedAction === "replace" ? "已在原位置补入一首新歌，并重写口播。" : typedAction === "regenerate" ? "已重新生成节目单和主持词。" : "已更新曲序并重写相邻口播。") });
@@ -4849,11 +5029,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             artifact.hostScriptsPending = false;
             artifact.hostScriptsFinalized = true;
             artifact.revision += 1;
-            planOperationResults.set(operationKeyValue, { action: "regenerate-host", baseRevision, revision: artifact.revision });
-            while (planOperationResults.size > 256) {
-              const oldest = planOperationResults.keys().next().value;
-              if (typeof oldest === "string") planOperationResults.delete(oldest); else break;
-            }
+            rememberPlanOperation(operationKeyValue, { action: "regenerate-host", baseRevision, revision: artifact.revision });
             return lockedState;
           });
           writeJson(res, 200, {

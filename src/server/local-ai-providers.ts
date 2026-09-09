@@ -2,7 +2,8 @@ import { OpenAICompatibleHostProvider } from "../providers/openai-compatible.js"
 import { QwenTtsProvider } from "../providers/qwen-tts.js";
 import { HOST_TTS_VOLUME_BOOST_DB } from "../core/scenes.js";
 import type { HostContextPack, ScenePreset } from "../shared/contracts.js";
-import { hostPreviewText, hostTtsInstruction, type HostProfileId } from "../shared/program-options.js";
+import { hostPreviewText, hostTtsInstruction, MUSIC_GENRE_IDS, MUSIC_GENRES, type HostProfileId } from "../shared/program-options.js";
+import type { RundownAdjustmentConversationMessage, RundownAdjustmentIntent, RundownAdjustmentTrack } from "../core/rundown-adjustment.js";
 import { LocalAiConfigStore, type LlmProviderId, type TtsProviderId } from "./local-ai-config.js";
 import { researchPublicMusicFacts } from "./public-music-research.js";
 
@@ -70,6 +71,51 @@ export class LocalConfiguredHostProvider {
     return parsed.trackIds;
   }
 
+  async planRundownAdjustment(request: { instruction: string; conversation: RundownAdjustmentConversationMessage[]; tracks: RundownAdjustmentTrack[] }, signal?: AbortSignal): Promise<RundownAdjustmentIntent> {
+    const settings = await this.store.read();
+    const apiKey = await this.store.llmSecret(settings.llm.provider);
+    if (!apiKey) throw new Error("请先配置大模型 API Key");
+    const system = [
+      "你是音乐电台确认页里的节目单调整主持人。先理解用户要做什么，再判断当前窗口能否完成；不要把所有消息都当成曲序调整。",
+      "可执行能力只有：按歌曲语种、风格或歌手替换当前节目单中的歌曲；以及用户明确指定位置或顺序时重排现有歌曲。",
+      `可靠的风格替换范围仅限：${MUSIC_GENRE_IDS.map((id) => MUSIC_GENRES[id].label).join("、")}。请求不在该范围时返回 unsupported，并说明可用范围。`,
+      "节目歌曲数量、总时长、音乐平台、主持人、主持声线、口播频率、推荐模式、熟悉探索比例和桌面人物都不能在此窗口修改。播放控制、账号操作和保存歌单也不支持。",
+      "系统没有歌曲 BPM。凡是要求按 BPM、节奏快慢、速度或能量自动排序，一律 unsupported，并明确说明缺少 BPM 数据，不能可靠执行。",
+      "用户说换成英文歌时，目标是只替换当前列表里不是英文歌曲或无法确认是英文歌曲的曲目；已有明确英文歌曲必须保留。纯音乐不算英文歌曲。根据曲名、歌手和专辑谨慎判断，无法确认时列入 trackIds。",
+      "如果当前曲目已经全部符合用户条件，返回 execute replace、specified_tracks、count=0、trackIds=[]，message 说明不需要替换。",
+      "用户明确说全部、都是、全换时，selection=specified_tracks，trackIds 列出所有不符合目标的当前歌曲。",
+      "用户说多来几首、加几首某歌手的歌，意图明确：selection=automatic，count=3，由系统优先替换探索歌曲，不追问位置。歌手按实际演唱者理解，不把作词或翻唱原作者混入。",
+      "用户说换 N 首某风格，但没有说换哪 N 首时，必须 clarify，询问用户指定歌曲，或者确认由你优先替换探索歌曲。不能擅自执行。",
+      "用户指定第几首、曲名或说你自己挑后，才能执行相应替换。结合 conversation 理解‘你自己挑’、‘那就三首’等追问回复。",
+      "语义模糊、条件互相冲突、缺少替换范围时返回 clarify。请求包含支持和不支持的多个动作时不做部分执行，返回 clarify 并分别说明。",
+      "不支持时返回 unsupported，并用自然中文说明当前窗口能做什么、为什么这条做不了。不要输出内部错误、接口、JSON、ID 或技术校验文案。",
+      "execute replace 的 criteria 至少包含 language=english、genre 或 artist 之一。count 是需要替换的歌曲数；specified_tracks 的 count 必须等于 trackIds 数量；automatic 的 trackIds 为空。",
+      "execute reorder 的 trackIds 必须把输入中的每个歌曲 ID 恰好返回一次。只有用户给出的顺序能由现有曲目信息确定时才能执行。",
+      "只返回 JSON。替换：{\"decision\":\"execute\",\"action\":\"replace\",\"selection\":\"specified_tracks|automatic\",\"count\":1,\"trackIds\":[],\"criteria\":{\"language\":\"english\",\"genre\":\"\",\"artist\":\"\"},\"message\":\"\"}。",
+      "重排：{\"decision\":\"execute\",\"action\":\"reorder\",\"trackIds\":[\"id\"],\"message\":\"\"}。追问或不支持：{\"decision\":\"clarify|unsupported\",\"message\":\"\"}。",
+    ].join("\n");
+    const user = JSON.stringify({ request: request.instruction, conversation: request.conversation.slice(-8), tracks: request.tracks });
+    const text = await completeText(settings.llm.provider, apiKey, settings.llm.model, settings.llm.baseUrl, system, user, signal);
+    return parseRundownAdjustmentIntent(text, request.tracks.map((track) => track.id));
+  }
+
+  async englishTrackIds(tracks: RundownAdjustmentTrack[], signal?: AbortSignal): Promise<string[]> {
+    if (tracks.length === 0) return [];
+    const settings = await this.store.read();
+    const apiKey = await this.store.llmSecret(settings.llm.provider);
+    if (!apiKey) throw new Error("请先配置大模型 API Key");
+    const system = [
+      "判断候选曲目中哪些可以明确视为英文歌曲。英文歌曲指主要演唱语言为英语。",
+      "纯音乐、中文、粤语、日语、韩语和无法确认语种的歌曲都不要选。不能只因为曲名是英文就认定歌词是英文。",
+      "只返回 JSON：{\"trackIds\":[\"id\"]}，不得新增或改写 ID。",
+    ].join("\n");
+    const text = await completeText(settings.llm.provider, apiKey, settings.llm.model, settings.llm.baseUrl, system, JSON.stringify({ tracks }), signal);
+    const parsed = JSON.parse(stripJsonFence(text)) as { trackIds?: unknown };
+    const allowed = new Set(tracks.map((track) => track.id));
+    if (!Array.isArray(parsed.trackIds) || parsed.trackIds.some((id) => typeof id !== "string" || !allowed.has(id))) throw new Error("模型没有返回有效的英文歌曲判断");
+    return [...new Set(parsed.trackIds as string[])];
+  }
+
   private async provider(): Promise<OpenAICompatibleHostProvider> {
     const settings = await this.store.read();
     const apiKey = await this.store.llmSecret(settings.llm.provider);
@@ -87,6 +133,39 @@ export class LocalConfiguredHostProvider {
       fetchImpl: translatedProvider ? nativeFormatFetch(translatedProvider, apiKey, settings.llm.model) : undefined,
     });
   }
+}
+
+function stripJsonFence(value: string): string {
+  return value.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+}
+
+function parseRundownAdjustmentIntent(value: string, currentTrackIds: string[]): RundownAdjustmentIntent {
+  const parsed = JSON.parse(stripJsonFence(value)) as Record<string, unknown>;
+  const message = typeof parsed.message === "string" ? parsed.message.trim().slice(0, 400) : "";
+  if (parsed.decision === "clarify" || parsed.decision === "unsupported") {
+    if (!message) throw new Error("模型没有返回有效的调整说明");
+    return { decision: parsed.decision, message };
+  }
+  if (parsed.decision !== "execute") throw new Error("模型没有返回有效的调整意图");
+  const allowedIds = new Set(currentTrackIds);
+  if (!Array.isArray(parsed.trackIds) || parsed.trackIds.some((id) => typeof id !== "string" || !allowedIds.has(id))) throw new Error("模型返回了无效的歌曲范围");
+  const trackIds = [...new Set(parsed.trackIds as string[])];
+  if (parsed.action === "reorder") return { decision: "execute", action: "reorder", trackIds, message };
+  if (parsed.action !== "replace" || (parsed.selection !== "specified_tracks" && parsed.selection !== "automatic")) throw new Error("模型返回了不支持的调整动作");
+  const criteriaValue = parsed.criteria;
+  if (typeof criteriaValue !== "object" || criteriaValue === null || Array.isArray(criteriaValue)) throw new Error("模型没有返回替换条件");
+  const rawCriteria = criteriaValue as Record<string, unknown>;
+  const criteria = {
+    ...(rawCriteria.language === "english" ? { language: "english" as const } : {}),
+    ...(typeof rawCriteria.genre === "string" && rawCriteria.genre.trim() ? { genre: rawCriteria.genre.trim().slice(0, 60) } : {}),
+    ...(typeof rawCriteria.artist === "string" && rawCriteria.artist.trim() ? { artist: rawCriteria.artist.trim().slice(0, 100) } : {}),
+  };
+  if (!criteria.language && !criteria.genre && !criteria.artist) throw new Error("模型没有返回可执行的替换条件");
+  const count = typeof parsed.count === "number" && Number.isSafeInteger(parsed.count) && parsed.count >= 0 ? parsed.count : -1;
+  if (count < 0 || count > currentTrackIds.length) throw new Error("模型返回了无效的替换数量");
+  if (parsed.selection === "specified_tracks" && trackIds.length !== count) throw new Error("模型返回的替换范围与数量不一致");
+  if (parsed.selection === "automatic" && (trackIds.length !== 0 || count === 0)) throw new Error("模型返回了冲突的自动替换范围");
+  return { decision: "execute", action: "replace", selection: parsed.selection, count, trackIds, criteria, message };
 }
 
 async function completeText(provider: LlmProviderId, apiKey: string, model: string, customBaseUrl: string | undefined, system: string, user: string, signal?: AbortSignal): Promise<string> {

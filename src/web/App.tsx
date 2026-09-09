@@ -2740,7 +2740,7 @@ function App() {
           : Boolean(health.providers?.host?.configured && ["ready", "configured_unverified"].includes(health.providers.host.state ?? "")),
         tts: apiMusic ? invitationAccess?.connected === true : Boolean(health.providers?.tts?.configured),
       };
-      return <ConfirmView program={program} checks={checks} onExit={() => void handleExitProgram()} onConfirm={requestProgramConfirmation} confirming={isConfirming} exiting={isStopping} updating={planUpdating} onReplace={(trackId) => updatePlan("replace", { trackId })} onAdjust={(message) => updatePlan("adjust", { message })} onRegenerate={() => updatePlan("regenerate")} />;
+      return <ConfirmView program={program} checks={checks} onExit={() => void handleExitProgram()} onConfirm={requestProgramConfirmation} confirming={isConfirming} exiting={isStopping} updating={planUpdating} onReplace={(trackId) => updatePlan("replace", { trackId })} onAdjust={(message, conversation) => updatePlan("adjust", { message, conversation })} onRegenerate={() => updatePlan("regenerate")} />;
     }
     if ((view === "on_air" || view === "ended") && program) {
       return (
@@ -3793,7 +3793,7 @@ function SourceGlyph({ sourceId }: { sourceId: SourceId }) {
   return <Music2 size={17} aria-hidden="true" />;
 }
 
-function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, updating, onReplace, onAdjust, onRegenerate }: { program: LocalProgram; checks: { source: boolean; player: boolean; service: boolean; host: boolean; tts: boolean }; onExit: () => void; onConfirm: () => void; confirming: boolean; exiting: boolean; updating: boolean; onReplace: (trackId: string) => Promise<PlanUpdateResult>; onAdjust: (message: string) => Promise<PlanUpdateResult>; onRegenerate: () => Promise<PlanUpdateResult> }) {
+function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, updating, onReplace, onAdjust, onRegenerate }: { program: LocalProgram; checks: { source: boolean; player: boolean; service: boolean; host: boolean; tts: boolean }; onExit: () => void; onConfirm: () => void; confirming: boolean; exiting: boolean; updating: boolean; onReplace: (trackId: string) => Promise<PlanUpdateResult>; onAdjust: (message: string, conversation: Array<{ role: "user" | "assistant"; text: string }>) => Promise<PlanUpdateResult>; onRegenerate: () => Promise<PlanUpdateResult> }) {
   const apiMusic = isApiMusicSource(program.spec.sourceId);
   const rundown = program.rundown ?? [];
   const hostMoments = rundown.filter((track) => Boolean(track.hostMoment));
@@ -3806,7 +3806,7 @@ function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, 
   const [replacingTrackId, setReplacingTrackId] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [messages, setMessages] = useState<PlannerChatMessage[]>([
-    { id: "planner-welcome", role: "assistant", text: "我可以按你的要求调整节目单。想换一整组推荐，可以点击节目单右上角的刷新按钮；删除单曲时会在原位置补入新歌。" },
+    { id: "planner-welcome", role: "assistant", text: "我会先判断你的要求能否在当前节目单完成。可以按语种、风格或歌手调整；节目时长、音源和主持人需要退出后重新设置。" },
   ]);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
   const canConfirm = checks.source && checks.player && checks.service && checks.host && checks.tts && (!apiMusic || (rundown.length > 0 && allScriptsLocked && Boolean(program.listenerProfile)));
@@ -3828,9 +3828,12 @@ function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, 
   const submitAdjustment = async () => {
     const message = chat.trim();
     if (!message || updating) return;
+    const conversation = [...messages, { id: "pending-user", role: "user" as const, text: message }]
+      .slice(-8)
+      .map(({ role, text }) => ({ role, text }));
     appendMessage("user", message);
     setChat("");
-    const result = await onAdjust(message);
+    const result = await onAdjust(message, conversation);
     appendMessage("assistant", result.message);
   };
   const regeneratePlan = async () => {
@@ -3888,14 +3891,14 @@ function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, 
             <div className="ai-chat-identity"><span className="ai-host-avatar"><RadioHostAvatar profileId={selectedHost.id} portrait /></span><div className="ai-host-copy"><h3>{selectedHost.name}</h3><span><i />在线 · {selectedHost.trait}</span></div></div>
             <div className="ai-chat-log" ref={chatLogRef} aria-live="polite">
               {messages.map((message) => <div key={message.id} className={`ai-chat-message is-${message.role}`}>{message.role === "assistant" && <RadioHostAvatar profileId={selectedHost.id} portrait />}<div><span>{message.role === "assistant" ? selectedHost.name : "你"}</span><p>{message.text}</p></div></div>)}
-              {updating && <div className="ai-chat-message is-assistant is-working"><RadioHostAvatar profileId={selectedHost.id} portrait /><div><span>{selectedHost.name}</span><p><LoaderCircle size={13} className="spin" />正在调整歌曲推荐与顺序...</p></div></div>}
+              {updating && <div className="ai-chat-message is-assistant is-working"><RadioHostAvatar profileId={selectedHost.id} portrait /><div><span>{selectedHost.name}</span><p><LoaderCircle size={13} className="spin" />正在理解并调整节目单...</p></div></div>}
             </div>
             <div className="ai-chat-compose">
               <div className="ai-chat-input-shell">
                 <textarea rows={1} value={chat} onChange={(event) => setChat(event.target.value)} maxLength={600} placeholder={`告诉${selectedHost.name}你想怎样调整节目单`} disabled={updating} />
                 <div className="ai-chat-input-actions"><small>{chat.length}/600</small><IconButton label={`发送给${selectedHost.name}`} className="ai-chat-send" disabled={updating || !chat.trim()} onClick={() => void submitAdjustment()}>{updating ? <LoaderCircle size={15} className="spin" /> : <Send size={16} />}</IconButton></div>
               </div>
-              <small>可以调整歌曲顺序和推荐倾向。重新推荐整组歌曲请使用节目单右上角的刷新按钮。</small>
+              <small>支持按语种、风格、歌手调整和明确的曲序变更；其他节目参数需退出后重新设置。</small>
             </div>
           </aside>
         </div>

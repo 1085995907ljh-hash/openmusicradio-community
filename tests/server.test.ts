@@ -2070,6 +2070,98 @@ test("planner chat finds requested music and returns useful success or failure m
   assert.match((await json(failedResponse)).error, /没有找到“不存在的歌手”的可用歌曲/);
 });
 
+test("planner chat classifies semantic requests before mutating the rundown", async (context) => {
+  const baseSongs = [
+    { id: "current-en-1", title: "English Song One", artists: [{ id: "en-a", name: "English Artist" }], durationMs: 360_000 },
+    { id: "current-zh-1", title: "中文歌一", artists: [{ id: "zh-a", name: "中文歌手一" }], durationMs: 360_000 },
+    { id: "current-en-2", title: "English Song Two", artists: [{ id: "en-b", name: "English Band" }], durationMs: 360_000 },
+    { id: "current-zh-2", title: "中文歌二", artists: [{ id: "zh-b", name: "中文歌手二" }], durationMs: 360_000 },
+    { id: "current-zh-3", title: "中文歌三", artists: [{ id: "zh-c", name: "中文歌手三" }], durationMs: 360_000 },
+  ];
+  const englishSongs = Array.from({ length: 3 }, (_, index) => ({
+    id: `new-en-${index + 1}`, title: `Replacement English ${index + 1}`, artists: [{ id: `new-en-artist-${index}`, name: `English Singer ${index + 1}` }], durationMs: 360_000,
+  }));
+  const jaySongs = Array.from({ length: 3 }, (_, index) => ({
+    id: `jay-${index + 1}`, title: `周杰伦候选 ${index + 1}`, artists: [{ id: "jay", name: "周杰伦" }], durationMs: 360_000,
+  }));
+  const allSongs = [...baseSongs, ...englishSongs, ...jaySongs];
+  const baseProvider = planningProvider(baseSongs, []);
+  const seenConversations: Array<Array<{ role: string; text: string }>> = [];
+  const hostProvider = {
+    ...groundedHostProvider(),
+    async planRundownAdjustment({ instruction, conversation, tracks }: { instruction: string; conversation: Array<{ role: string; text: string }>; tracks: Array<{ id: string; title: string }> }): Promise<any> {
+      seenConversations.push(conversation);
+      if (instruction.includes("英文歌")) {
+        const trackIds = tracks.filter((track) => track.id.startsWith("current-zh-")).map((track) => track.id);
+        return { decision: "execute", action: "replace", selection: "specified_tracks", count: trackIds.length, trackIds, criteria: { language: "english" }, message: `只替换 ${trackIds.length} 首非英文歌曲，已有英文歌保留。` };
+      }
+      if (instruction.includes("三首爵士")) return { decision: "clarify", message: "请指定要替换的三首歌，或回复“你自己挑”，我会优先替换探索歌曲。" };
+      if (instruction.includes("周杰伦")) return { decision: "execute", action: "replace", selection: "automatic", count: 3, trackIds: [], criteria: { artist: "周杰伦" }, message: "已多换入三首周杰伦的歌。" };
+      if (instruction.includes("节奏")) return { decision: "unsupported", message: "当前没有歌曲 BPM 数据，不能可靠地按节奏从慢到快排序，节目单没有修改。" };
+      return { decision: "unsupported", message: "当前确认页不支持更换主持人，请退出节目后在设置页修改。" };
+    },
+    async englishTrackIds(tracks: Array<{ id: string }>) { return tracks.filter((track) => track.id.startsWith("new-en-")).map((track) => track.id); },
+  };
+  const token = "semantic-adjustment-token";
+  const service = await createLocalService({
+    port: 0,
+    localControlToken: token,
+    neteaseProvider: {
+      ...baseProvider,
+      search(keyword: string) {
+        if (/英文歌曲|English songs/i.test(keyword)) return { songs: englishSongs, total: englishSongs.length };
+        if (keyword === "周杰伦") return { songs: jaySongs, total: jaySongs.length };
+        return { songs: baseSongs, total: baseSongs.length };
+      },
+      songDetail(ids: string[]) { return allSongs.filter((song) => ids.includes(song.id)); },
+      songUrl(id: string) { return { id, url: `https://music.126.net/${id}.mp3`, durationMs: allSongs.find((song) => song.id === id)?.durationMs }; },
+    },
+    hostProvider,
+    ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+  const created = await json(await fetch(`${base}/programs`, {
+    method: "POST", headers,
+    body: JSON.stringify({ operationId: "semantic-create", spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
+  }));
+  const draft = created.program;
+  const originalEnglishIds = draft.rundown.filter((track: { id: string }) => track.id.startsWith("current-en-")).map((track: { id: string }) => track.id);
+  const adjust = async (operationId: string, planRevision: number, message: string, conversation: Array<{ role: string; text: string }> = []) => json(await fetch(`${base}/programs/${draft.id}/adjust`, {
+    method: "POST", headers,
+    body: JSON.stringify({ generation: draft.generation, planRevision, operationId, message, conversation }),
+  }));
+
+  const englishResult = await adjust("semantic-english", 0, "换成英文歌");
+  assert.equal(englishResult.program.planRevision, 1);
+  assert.deepEqual(englishResult.program.rundown.filter((track: { id: string }) => track.id.startsWith("current-en-")).map((track: { id: string }) => track.id), originalEnglishIds);
+  assert.equal(englishResult.program.rundown.filter((track: { id: string }) => track.id.startsWith("new-en-")).length, 3);
+
+  const idsAfterEnglish = englishResult.program.rundown.map((track: { id: string }) => track.id);
+  const clarifyResult = await adjust("semantic-clarify", 1, "换三首爵士", [{ role: "user", text: "换三首爵士" }]);
+  assert.match(clarifyResult.message, /指定.*三首|你自己挑/);
+  assert.equal(clarifyResult.program.planRevision, 1);
+  assert.deepEqual(clarifyResult.program.rundown.map((track: { id: string }) => track.id), idsAfterEnglish);
+  assert.deepEqual(seenConversations.at(-1), [{ role: "user", text: "换三首爵士" }]);
+
+  const jayResult = await adjust("semantic-jay", 1, "多来几首周杰伦的");
+  assert.equal(jayResult.program.planRevision, 2);
+  assert.equal(jayResult.program.rundown.filter((track: { artist: string }) => track.artist === "周杰伦").length, 3);
+
+  const idsAfterJay = jayResult.program.rundown.map((track: { id: string }) => track.id);
+  const bpmResult = await adjust("semantic-bpm", 2, "节奏从慢到快");
+  assert.match(bpmResult.message, /BPM.*不能可靠/);
+  assert.equal(bpmResult.program.planRevision, 2);
+  assert.deepEqual(bpmResult.program.rundown.map((track: { id: string }) => track.id), idsAfterJay);
+
+  const hostResult = await adjust("semantic-host", 2, "把主持人换成龙浩");
+  assert.match(hostResult.message, /不支持更换主持人.*设置页/);
+  assert.equal(hostResult.program.planRevision, 2);
+  assert.deepEqual(hostResult.program.rundown.map((track: { id: string }) => track.id), idsAfterJay);
+});
+
 test("NetEase confirmation replaces a song that becomes trial-only before broadcast", async (context) => {
   const songs = Array.from({ length: 20 }, (_, index) => ({
     id: String(18_000 + index),
