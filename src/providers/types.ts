@@ -145,6 +145,7 @@ export interface HostShowBreak {
   text: string;
   sourceIds: string[];
   deliveryInstruction: string;
+  finalization?: "draft_approved" | "rewrite_approved" | "metadata_fallback";
 }
 
 export interface HostShowGenerationResult {

@@ -55,6 +55,8 @@ interface HostShowReviewIssue {
   direction: string;
 }
 
+type HostFactAvailability = "rich" | "sparse";
+
 const GENERATOR_SYSTEM_PROMPT = [
   "你是本地音乐电台的中文主持人兼撰稿人。先考虑听众体验，再根据节目上下文和 allowedFacts 写候选口播。",
   "不得猜测用户的位置、心情、记忆、身体或私人经历，不得创造歌曲或艺人事实。",
@@ -312,7 +314,11 @@ export class OpenAICompatibleHostProvider implements HostProvider {
           });
           if (!review.approved) {
             hostBreak = fallbackHostShowBreak(request, placement);
+          } else {
+            hostBreak = { ...hostBreak, finalization: "rewrite_approved" };
           }
+        } else {
+          hostBreak = { ...hostBreak, finalization: "draft_approved" };
         }
         breaks.push(hostBreak);
       }
@@ -614,11 +620,14 @@ function safeHostShowRequest(request: HostShowGenerationRequest): Record<string,
 function buildHostShowPlacementPrompt(request: HostShowGenerationRequest): HostPrompt {
   const middleCount = middleHostBreakCount(request.tracks.length, request.frequency);
   const totalCount = request.tracks.length === 1 ? 1 : middleCount + 2;
+  const placementRequirement = request.tracks.length === 1
+    ? "本档只有 1 首歌，只返回开场 1 个；这条开场同时承担最后一首提示，不要再返回 closing。"
+    : `必须返回 ${totalCount} 个互不重复的口播位置：开场 1 个、中间 ${middleCount} 个、最后一首前的 closing 1 个。`;
   return {
     system: [
       request.skillInstruction.slice(0, 48_000),
       "本轮只规划口播位置，不写任何口播正文。先通读歌单和事实，按频率、资料价值、曲风变化及前后关系决定位置。",
-      `本档共有 ${request.tracks.length} 首歌，必须返回 ${totalCount} 个互不重复的口播位置：开场 1 个、中间 ${middleCount} 个、最后一首前的 closing 1 个。`,
+      `本档共有 ${request.tracks.length} 首歌。${placementRequirement}`,
       "只返回 JSON：{\"frequency\":\"low | medium | high\",\"placements\":[{\"id\":\"break-01\",\"beforeTrackIndex\":1,\"type\":\"opening | middle | closing\",\"targetSeconds\":20,\"reason\":\"布点理由\"}]}。",
     ].join("\n\n"),
     user: JSON.stringify(safeHostShowRequest(request)),
@@ -633,6 +642,9 @@ function safeHostShowWritingContext(
 ): Record<string, unknown> {
   const safeRequest = safeHostShowRequest(request);
   const safeTracks = Array.isArray(safeRequest.tracks) ? safeRequest.tracks : [];
+  const currentTrack = request.tracks[placement.beforeTrackIndex - 1]!;
+  const factAvailability = hostFactAvailability(currentTrack);
+  const durationRange = hostDurationRange(factAvailability, placement.type);
   return {
     show: {
       ...safeRequest,
@@ -645,6 +657,12 @@ function safeHostShowWritingContext(
     placements,
     currentPlacement: placement,
     currentTrack: safeTracks[placement.beforeTrackIndex - 1],
+    factAvailability: {
+      level: factAvailability,
+      durationPolicy: factAvailability === "sparse"
+        ? `资料不足，正文按 ${durationRange.min}-${durationRange.max} 秒生成，不用空话补齐。`
+        : `资料充足，正文优先按 ${durationRange.min}-${durationRange.max} 秒生成。`,
+    },
     completedBreaks: breaks.map(({ id, beforeTrackIndex, type, text }) => ({ id, beforeTrackIndex, type, text })),
   };
 }
@@ -659,7 +677,7 @@ function buildHostShowBreakPrompt(
     system: [
       request.skillInstruction.slice(0, 48_000),
       "本轮只写 currentPlacement 指定的一条口播。先在内部判断这一条最值得讲的主线，再结合 completedBreaks 避免重复角度、开头、句式和收尾。不要输出思考过程。",
-      "不得改变 id、beforeTrackIndex、type 或 targetSeconds。只返回 JSON：{\"break\":{\"id\":\"break-01\",\"beforeTrackIndex\":1,\"type\":\"opening | middle | closing\",\"targetSeconds\":20,\"text\":\"可直接播出的口播\",\"sourceIds\":[\"事实ID\"],\"deliveryInstruction\":\"TTS演绎指令\"}}。",
+      "不得改变 id、beforeTrackIndex 或 type。资料充足时优先写 25 至 30 秒；资料不足时，中段和结尾写 5 至 10 秒，开场只额外保留电台与主持人身份所需时间。按正文实际播报长度填写 targetSeconds，不用空话补时长。只返回 JSON：{\"break\":{\"id\":\"break-01\",\"beforeTrackIndex\":1,\"type\":\"opening | middle | closing\",\"targetSeconds\":20,\"text\":\"可直接播出的口播\",\"sourceIds\":[\"事实ID\"],\"deliveryInstruction\":\"TTS演绎指令\"}}。",
     ].join("\n\n"),
     user: JSON.stringify(safeHostShowWritingContext(request, placements, placement, breaks)),
   };
@@ -677,7 +695,7 @@ function buildHostShowBreakRewritePrompt(
     system: [
       request.skillInstruction.slice(0, 48_000),
       "本轮只修改监制退回的这一条口播。已经通过的其他口播只用于检查整档重复，不得重写或返回。",
-      "保持 currentBreak 的 id、beforeTrackIndex、type 和 targetSeconds 不变。只返回与单条初稿相同的 break JSON。",
+      "保持 currentBreak 的 id、beforeTrackIndex 和 type 不变。targetSeconds 随修改后的实际正文调整；资料稀疏且问题是元数据重复时，删除重复的专辑或年份，简洁报出音乐人和歌名，不得虚构内容补时长。只返回与单条初稿相同的 break JSON。",
     ].join("\n\n"),
     user: JSON.stringify({
       ...safeHostShowWritingContext(request, placements, placement, breaks.filter((item) => item.id !== current.id)),
@@ -698,11 +716,16 @@ function buildHostShowBreakReviewPrompt(
   lockedBreaks: HostShowBreak[],
   reviewRound: 1 | 2,
 ): HostPrompt {
+  const track = request.tracks[currentBreak.beforeTrackIndex - 1]!;
+  const factAvailability = hostFactAvailability(track);
   return {
     system: request.reviewInstruction.slice(0, 48_000),
     user: JSON.stringify({
       context: safeHostShowRequest(request),
-      reviewScope: "只审核 currentBreak 这一条。结合 lockedBreaks 检查与已通过前文的重复，但不得退回或改写 lockedBreaks。合格返回 approved=true；不合格返回 approved=false，并且只为 currentBreak 给出一条具体问题和可执行修改方向。",
+      reviewScope: factAvailability === "sparse"
+        ? "只审核 currentBreak 这一条。当前歌曲只有基础元数据：只要正确说清音乐人和歌名、没有虚构或明显重复，就必须批准短稿；完全不审核字数、时长或 targetSeconds，不得因缺少背景故事或信息维度少而退回。结合 lockedBreaks 检查重复，但不得改写 lockedBreaks。不合格时只给 currentBreak 一条具体问题和可执行修改方向。"
+        : "只审核 currentBreak 这一条。完全不审核字数、时长或 targetSeconds，只判断事实是否可靠、文字和信息表达是否成立，并结合 lockedBreaks 检查与已通过前文的重复；不得退回或改写 lockedBreaks。不合格时只为 currentBreak 给出一条具体问题和可执行修改方向。",
+      factAvailability,
       reviewRound,
       lockedBreaks: lockedBreaks.map(({ id, beforeTrackIndex, type, text }) => ({ id, beforeTrackIndex, type, text })),
       currentBreak,
@@ -754,6 +777,7 @@ function parseHostShowPlacementPayload(payload: unknown, request: HostShowGenera
     }).sort((left, right) => left.beforeTrackIndex - right.beforeTrackIndex);
     const placements = parsedPlacements
       .filter((placement, index, all) => !placement.afterTrackClosing || !all.some((other, otherIndex) => otherIndex !== index && other.beforeTrackIndex === placement.beforeTrackIndex && !other.afterTrackClosing))
+      .filter((placement, index, all) => request.tracks.length !== 1 || all.findIndex((other) => other.beforeTrackIndex === placement.beforeTrackIndex) === index)
       .map(({ afterTrackClosing: _afterTrackClosing, ...placement }, index) => ({ ...placement, id: `break-${String(index + 1).padStart(2, "0")}` }));
     if (new Set(placements.map((item) => item.beforeTrackIndex)).size !== placements.length) {
       throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "show placements contain duplicate positions", { retryable: false }));
@@ -780,11 +804,10 @@ function parseHostShowSingleBreakPayload(payload: unknown, request: HostShowGene
     const parsed = parseHostShowBreak(value, request, placement.beforeTrackIndex - 1, false);
     if (parsed.id !== placement.id
       || parsed.beforeTrackIndex !== placement.beforeTrackIndex
-      || parsed.type !== placement.type
-      || parsed.targetSeconds !== placement.targetSeconds) {
+      || parsed.type !== placement.type) {
       throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", `show break ${placement.id} changed its locked placement`, { retryable: false }));
     }
-    return parsed;
+    return withMeasuredHostDuration(request, parsed);
   }
   throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", `provider response did not contain ${placement.id}`, { retryable: false }));
 }
@@ -927,6 +950,25 @@ function applyHostBreakQualityFloor(
   return { approved: review.approved && issues.length === 0, issues };
 }
 
+function hostFactAvailability(track: HostShowGenerationRequest["tracks"][number]): HostFactAvailability {
+  return track.allowedFacts.some((fact) => fact.source === "web" || !/:(?:metadata|album|year)$/.test(fact.id))
+    ? "rich"
+    : "sparse";
+}
+
+function hostDurationRange(factAvailability: HostFactAvailability, type: HostShowBreak["type"]): { min: number; max: number } {
+  if (factAvailability === "rich") return { min: 25, max: 30 };
+  return type === "opening" ? { min: 12, max: 18 } : { min: 5, max: 10 };
+}
+
+function withMeasuredHostDuration(request: HostShowGenerationRequest, hostBreak: HostShowBreak): HostShowBreak {
+  const track = request.tracks[hostBreak.beforeTrackIndex - 1]!;
+  const range = hostDurationRange(hostFactAvailability(track), hostBreak.type);
+  const characterCount = Array.from(hostBreak.text.replace(/\s+/g, "")).length;
+  const targetSeconds = Math.min(range.max, Math.max(range.min, Math.round(characterCount / 3.25)));
+  return { ...hostBreak, targetSeconds };
+}
+
 function fallbackHostShowBreak(request: HostShowGenerationRequest, placement: HostBreakPlacement): HostShowBreak {
   const track = request.tracks[placement.beforeTrackIndex - 1]!;
   const album = track.album?.trim() && !/^(?:未知(?:专辑)?|unknown album)$/i.test(track.album.trim()) ? track.album.trim() : "";
@@ -953,7 +995,7 @@ function fallbackHostShowBreak(request: HostShowGenerationRequest, placement: Ho
       || (album && (fact.id.includes(":album") || fact.value.includes(album))))
     .map((fact) => fact.id);
   if (sourceIds.length === 0 && track.allowedFacts[0]) sourceIds.push(track.allowedFacts[0].id);
-  return {
+  return withMeasuredHostDuration(request, {
     id: placement.id,
     beforeTrackIndex: placement.beforeTrackIndex,
     type: placement.type,
@@ -961,7 +1003,8 @@ function fallbackHostShowBreak(request: HostShowGenerationRequest, placement: Ho
     text: normalizeSpokenYearDigits(normalizeSpokenEnglishCase(text)),
     sourceIds: [...new Set(sourceIds)],
     deliveryInstruction: "自然、简洁，音乐人、年份和专辑名说清楚。",
-  };
+    finalization: "metadata_fallback",
+  });
 }
 
 function buildHostFinalRewritePrompt(context: HostContextPack, reviewFeedback: string): HostPrompt {

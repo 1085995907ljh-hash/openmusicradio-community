@@ -240,6 +240,7 @@ test("whole-show generation drafts and reviews each break sequentially without a
 });
 
 test("whole-show copy accepts natural duration estimates and repairs unknown source ids", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
   const placements = {
     frequency: "low",
     placements: [
@@ -260,7 +261,10 @@ test("whole-show copy accepts natural duration estimates and repairs unknown sou
     reviewModel: "gpt-5.5",
     reasoningEffort: "high",
     mode: "responses",
-    fetchImpl: async () => jsonResponse({ output_text: JSON.stringify(responses.shift()) }),
+    fetchImpl: async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return jsonResponse({ output_text: JSON.stringify(responses.shift()) });
+    },
   });
   const tracks = [1, 2, 3].map((id) => ({
     trackIndex: id,
@@ -274,7 +278,11 @@ test("whole-show copy accepts natural duration estimates and repairs unknown sou
 
   assert.match(result.breaks[0]?.text ?? "", /^下午好，欢迎收听 Open Music Radio 电台，我是主持人龙浩。/);
   assert.doesNotMatch(result.breaks[0]?.text ?? "", /晚上好/);
-  assert.deepEqual(result.breaks.map((item) => item.targetSeconds), [15, 18, 27]);
+  assert.deepEqual(result.breaks.map((item) => item.targetSeconds), [15, 10, 6]);
+  assert.deepEqual(result.breaks.map((item) => item.finalization), ["draft_approved", "draft_approved", "draft_approved"]);
+  assert.match(JSON.stringify(bodies[1]), /资料充足时优先写 25 至 30 秒/);
+  assert.match(JSON.stringify(bodies[2]), /当前歌曲只有基础元数据/);
+  assert.match(JSON.stringify(bodies[2]), /完全不审核字数、时长或 targetSeconds/);
   assert.match(result.breaks[1]?.text ?? "", /2017年/);
   assert.doesNotMatch(result.breaks[1]?.text ?? "", /二[〇零]一七年/);
   assert.deepEqual(result.breaks[1]?.sourceIds, ["track:2:metadata"]);
@@ -327,6 +335,7 @@ test("each host break is reviewed immediately and a rejected draft is rewritten 
   assert.equal(result.breaks.length, 3);
   assert.equal(result.breaks[0]?.text, "下午好，欢迎收听 Open Music Radio 电台，我是主持人龙浩。先从音乐人一的《歌曲一》开始。");
   assert.match(result.breaks[1]?.text ?? "", /第一次修改/);
+  assert.equal(result.breaks[1]?.finalization, "rewrite_approved");
   assert.equal(result.breaks[2]?.text, closing.text);
   assert.equal(bodies.length, 9);
   assert.match(JSON.stringify(bodies[2]), /reviewScope/);
@@ -397,6 +406,7 @@ test("whole-show quality floor rejects repeated album and release templates even
   assert.equal(result.breaks[0]?.text.includes("专辑一"), true);
   assert.equal(result.breaks[1]?.text, rewritten[0]!.text);
   assert.equal(result.breaks[2]?.text, rewritten[1]!.text);
+  assert.deepEqual(result.breaks.map((item) => item.finalization), ["draft_approved", "rewrite_approved", "rewrite_approved"]);
   assert.equal(bodies.length, 11);
   assert.match(JSON.stringify(bodies[5]), /重复用专辑名/);
   assert.match(JSON.stringify(bodies[9]), /重复用发行年份/);
@@ -447,6 +457,7 @@ test("a host break rejected twice uses the factual metadata fallback and stops r
   assert.equal(calls, 5);
   assert.equal(result.breaks[0]?.text, "下午好，欢迎收听 Open Music Radio 电台，我是主持人龙浩。接下来听音乐人一的《歌曲一》，发行于2021年，收录在专辑《专辑一》中。");
   assert.deepEqual(result.breaks[0]?.sourceIds, ["track:1:metadata", "track:1:year", "track:1:album"]);
+  assert.equal(result.breaks[0]?.finalization, "metadata_fallback");
 });
 
 test("whole-show generation retries an incorrect placement count before returning the reviewed copy", async () => {
@@ -572,6 +583,50 @@ test("whole-show placement normalizes DeepSeek closing labels and ignores a dupl
     { id: "break-02", beforeTrackIndex: 2, type: "middle" },
     { id: "break-03", beforeTrackIndex: 3, type: "closing" },
   ]);
+});
+
+test("single-track placement keeps one opening when DeepSeek also returns a duplicate closing", async () => {
+  const responses = [
+    {
+      frequency: "low",
+      placements: [
+        { id: "opening", beforeTrackIndex: 1, type: "opening", targetSeconds: 18, reason: "开场" },
+        { id: "closing", beforeTrackIndex: 1, type: "closing", targetSeconds: 8, reason: "最后一首" },
+      ],
+    },
+    { break: { id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 8, text: "下午好，先听音乐人一的《歌曲一》。", sourceIds: ["track:1:metadata"], deliveryInstruction: "自然。" } },
+    approvedBreakReview,
+  ];
+  const bodies: Array<Record<string, unknown>> = [];
+  const provider = new OpenAICompatibleHostProvider({
+    apiKey: "unit-test-key",
+    mode: "chat_completions",
+    fetchImpl: async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return jsonResponse({ choices: [{ message: { content: JSON.stringify(responses.shift()) } }] });
+    },
+  });
+
+  const result = await provider.generateShow({
+    scenePreset: "study",
+    frequency: "low",
+    openingGreeting: "下午好",
+    tracks: [{
+      trackIndex: 1,
+      title: "歌曲一",
+      artist: "音乐人一",
+      exploration: true,
+      allowedFacts: [{ id: "track:1:metadata", value: "歌曲《歌曲一》，艺术家是音乐人一。", source: "user" }],
+    }],
+    skillInstruction: "整档撰稿契约",
+    reviewInstruction: "整档监制契约",
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.breaks.length, 1);
+  assert.equal(result.breaks[0]?.type, "opening");
+  assert.match(JSON.stringify(bodies[0]), /只返回开场 1 个/);
+  assert.match(JSON.stringify(bodies[0]), /不要再返回 closing/);
 });
 
 test("whole-show generation failure is explicit and never returns automatic fallback copy", async () => {

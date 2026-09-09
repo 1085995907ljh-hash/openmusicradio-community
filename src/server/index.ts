@@ -3227,7 +3227,11 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           id: typeof hostBreak.id === "string" ? hostBreak.id : randomUUID(),
           text,
           factIds,
-          instruction: "whole-show writer finalized after producer feedback",
+          instruction: hostBreak.finalization === "metadata_fallback"
+            ? "whole-show metadata fallback after second producer rejection"
+            : hostBreak.finalization === "rewrite_approved"
+              ? "whole-show rewrite approved by producer"
+              : "whole-show draft approved by producer",
           deliveryInstruction: typeof hostBreak.deliveryInstruction === "string" ? hostBreak.deliveryInstruction.slice(0, 160) : "自然口语，音乐人和歌名说清楚。",
           hostMoment,
           generatedAt: typeof result.generatedAt === "string" ? result.generatedAt : nowIso(),
