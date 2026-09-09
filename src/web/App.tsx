@@ -797,7 +797,6 @@ function App() {
   const hostRequestRef = useRef<{ key: string; controller: AbortController } | null>(null);
   const hostRetryRef = useRef<{ key: string; attempts: number } | null>(null);
   const hostRetryTimerRef = useRef<number | null>(null);
-  const hostPlaybackWatchdogRef = useRef<number | null>(null);
   const heartbeatRequestRef = useRef<AbortController | null>(null);
   const programPollRequestRef = useRef<AbortController | null>(null);
   const hostScriptRetryAttemptRef = useRef(0);
@@ -1083,8 +1082,6 @@ function App() {
     hostRequestRef.current = null;
     if (hostRetryTimerRef.current !== null) window.clearTimeout(hostRetryTimerRef.current);
     hostRetryTimerRef.current = null;
-    if (hostPlaybackWatchdogRef.current !== null) window.clearTimeout(hostPlaybackWatchdogRef.current);
-    hostPlaybackWatchdogRef.current = null;
     hostRetryRef.current = null;
     hostKeyRef.current = null;
     const audio = audioRef.current;
@@ -1202,8 +1199,6 @@ function App() {
   const cancelHostForTrackChange = useCallback(() => {
     const audio = audioRef.current;
     audioTokenRef.current += 1;
-    if (hostPlaybackWatchdogRef.current !== null) window.clearTimeout(hostPlaybackWatchdogRef.current);
-    hostPlaybackWatchdogRef.current = null;
     if (hostMusicStartTimerRef.current !== null) window.clearTimeout(hostMusicStartTimerRef.current);
     hostMusicStartTimerRef.current = null;
     if (audio && ttsEndedRef.current) audio.removeEventListener("ended", ttsEndedRef.current);
@@ -1310,8 +1305,6 @@ function App() {
       const finishHost = () => {
         if (ttsEndedRef.current === finishHost) ttsEndedRef.current = null;
         if (token !== audioTokenRef.current) return;
-        if (hostPlaybackWatchdogRef.current !== null) window.clearTimeout(hostPlaybackWatchdogRef.current);
-        hostPlaybackWatchdogRef.current = null;
         if (currentAudioModeRef.current?.key === pending.key) currentAudioModeRef.current = null;
         void restorePlayerVolume(pending.key);
         restoreWebMusic(pending.key);
@@ -1323,12 +1316,6 @@ function App() {
       };
       ttsEndedRef.current = finishHost;
       audio.addEventListener("ended", finishHost, { once: true });
-      if (hostPlaybackWatchdogRef.current !== null) window.clearTimeout(hostPlaybackWatchdogRef.current);
-      hostPlaybackWatchdogRef.current = window.setTimeout(() => {
-        audio.pause();
-        finishHost();
-        audioTokenRef.current += 1;
-      }, 45_000);
       const delaySeconds = (program?.currentTrack as ProgramRundownItem | null)?.hostScript?.musicBedDelaySeconds ?? HOST_MUSIC_START_DELAY_SECONDS;
       startMusicBehindHost(pending.key, delaySeconds, audio);
     }
@@ -2032,8 +2019,6 @@ function App() {
             const restoreFixture = () => {
               if (ttsEndedRef.current === restoreFixture) ttsEndedRef.current = null;
               if (token !== audioTokenRef.current) return;
-              if (hostPlaybackWatchdogRef.current !== null) window.clearTimeout(hostPlaybackWatchdogRef.current);
-              hostPlaybackWatchdogRef.current = null;
               if (currentAudioModeRef.current?.key === requestKey) currentAudioModeRef.current = null;
               void restorePlayerVolume(requestKey);
               if (hostAudioSourceRef.current?.token === token) hostAudioSourceRef.current = null;
@@ -2054,12 +2039,6 @@ function App() {
               if (token !== audioTokenRef.current || (fixture && fixtureAudioRef.current?.key !== requestKey)) return;
               pendingAudioRef.current = null;
               currentAudioModeRef.current = { mode: "host", key: requestKey, sourceId: playerSource ?? undefined };
-              if (hostPlaybackWatchdogRef.current !== null) window.clearTimeout(hostPlaybackWatchdogRef.current);
-              hostPlaybackWatchdogRef.current = window.setTimeout(() => {
-                audio.pause();
-                restoreFixture();
-                audioTokenRef.current += 1;
-              }, 45_000);
               setAudioNeedsGesture(false);
               startMusicBehindHost(requestKey, rundownItem.hostScript?.musicBedDelaySeconds ?? HOST_MUSIC_START_DELAY_SECONDS, audio);
               setProgram((current) => {
