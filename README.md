@@ -19,11 +19,11 @@
 
 ![OpenMusicRadio 开屏与进入按钮](docs/screenshots/openmusicradio-landing.png)
 
-### 节目播出
+### 确认节目计划
 
-![OpenMusicRadio 正在播出的节目、主持人口播与剩余时间](docs/screenshots/openmusicradio-program.png)
+![OpenMusicRadio 节目参数、歌单与逐条主持人口播确认页](docs/screenshots/openmusicradio-program.png)
 
-节目页会同时显示当前歌曲、主持人口播、剩余时间、下一首和本次歌单入口。
+确认页会同时显示本次节目参数、歌单顺序、逐条主持人口播和 AI 调整入口，确认后再创建歌单并开始播放。
 
 ## 为此刻选一档音乐
 
