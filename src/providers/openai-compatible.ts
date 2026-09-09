@@ -299,7 +299,7 @@ export class OpenAICompatibleHostProvider implements HostProvider {
       for (let reviewRound = 0; reviewRound <= WHOLE_SHOW_MAX_REWRITES; reviewRound += 1) {
         const review = await runStage(async (timeoutMs) => {
           const payload = await this.request(mode, buildHostShowReviewPrompt(request, breaks), options.signal, false, 2_400, timeoutMs, this.reviewModel);
-          return parseHostShowReviewPayload(payload, breaks);
+          return applyHostShowQualityFloor(request, breaks, parseHostShowReviewPayload(payload, breaks));
         }, WHOLE_SHOW_REVIEW_TIMEOUT_MS);
         if (review.approved) break;
         if (reviewRound >= WHOLE_SHOW_MAX_REWRITES) break;
@@ -318,6 +318,9 @@ export class OpenAICompatibleHostProvider implements HostProvider {
           ), WHOLE_SHOW_REWRITE_TIMEOUT_MS);
           breaks[breakIndex] = parseHostShowSingleBreakPayload(payload, request, placement);
         }
+      }
+      if (metadataTemplateIssues(request, breaks).length > 0) {
+        throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "whole-show copy still repeats album or release metadata after review", { retryable: false }));
       }
       this.runtimeState = "ready";
       return { success: true, provider: PROVIDER_NAME, status: "ready", model: this.model, reviewModel: this.reviewModel, apiMode: mode, breaks, generatedAt };
@@ -683,7 +686,7 @@ function buildHostShowReviewPrompt(request: HostShowGenerationRequest, breaks: H
     system: request.reviewInstruction.slice(0, 48_000),
     user: JSON.stringify({
       context: safeHostShowRequest(request),
-      reviewScope: "统一审核完整节目。检查整档重复和衔接，同时只列出确实不合格的具体 breakId；未列出的口播视为通过并锁定。",
+      reviewScope: "统一审核完整节目。检查整档重复和衔接；只靠专辑或发行年份补充信息的口播最多两条，且专辑和年份各最多一条，未知专辑必须删除。只列出确实不合格的具体 breakId；未列出的口播视为通过并锁定。",
       completeShowDraft: { frequency: request.frequency, breaks },
     }),
   };
@@ -827,6 +830,68 @@ function parseHostShowReviewPayload(payload: unknown, breaks: HostShowBreak[]): 
     return { approved: false, issues };
   }
   throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "provider response did not contain a whole-show review", { retryable: false }));
+}
+
+function metadataTemplateIssues(request: HostShowGenerationRequest, breaks: HostShowBreak[]): HostShowReviewIssue[] {
+  const problems = new Map<string, string[]>();
+  const directions = new Map<string, string[]>();
+  const addIssue = (breakId: string, problem: string, direction: string): void => {
+    problems.set(breakId, [...(problems.get(breakId) ?? []), problem]);
+    directions.set(breakId, [...(directions.get(breakId) ?? []), direction]);
+  };
+  const metadataOnly = breaks.flatMap((hostBreak) => {
+    const track = request.tracks[hostBreak.beforeTrackIndex - 1];
+    const sourceIds = hostBreak.sourceIds.filter((id) => track?.allowedFacts.some((fact) => fact.id === id));
+    const onlyMetadataSources = sourceIds.length > 0 && sourceIds.every((id) => /:(?:metadata|album|year)$/.test(id));
+    const kinds = [
+      /专辑|收录/.test(hostBreak.text) ? "album" as const : null,
+      /(?:发行于|发行时间|首发|来自)\s*(?:18|19|20)\d{2}年/.test(hostBreak.text) ? "release" as const : null,
+    ].filter((kind): kind is "album" | "release" => kind !== null);
+    if (/未知(?:专辑)?|unknown album/i.test(hostBreak.text)) {
+      addIssue(hostBreak.id, "口播念出了无效的专辑占位值。", "删除未知专辑，不补写未经核验的信息。");
+    }
+    return onlyMetadataSources && kinds.length > 0 ? [{ hostBreak, kinds }] : [];
+  });
+  for (const kind of ["album", "release"] as const) {
+    const repeated = metadataOnly.filter((entry) => entry.kinds.includes(kind));
+    for (const entry of repeated.slice(1)) {
+      addIssue(
+        entry.hostBreak.id,
+        kind === "album" ? "整档重复用专辑名作为唯一补充信息。" : "整档重复用发行年份作为唯一补充信息。",
+        "优先改用音乐人背景、创作、风格、成就或故事；没有可靠材料时只简洁报出音乐人和歌名。",
+      );
+    }
+  }
+  for (const entry of metadataOnly.slice(2)) {
+    addIssue(
+      entry.hostBreak.id,
+      "整档只靠专辑或发行年份补充信息的口播超过两条。",
+      "换用有来源的其他信息维度；没有可靠材料时缩成简洁报歌，不要继续念元数据。",
+    );
+  }
+  return [...problems].map(([breakId, entries]) => ({
+    breakId,
+    problem: [...new Set(entries)].join("；"),
+    direction: [...new Set(directions.get(breakId) ?? [])].join("；"),
+  }));
+}
+
+function applyHostShowQualityFloor(
+  request: HostShowGenerationRequest,
+  breaks: HostShowBreak[],
+  review: { approved: boolean; issues: HostShowReviewIssue[] },
+): { approved: boolean; issues: HostShowReviewIssue[] } {
+  const byBreakId = new Map(review.issues.map((issue) => [issue.breakId, issue]));
+  for (const issue of metadataTemplateIssues(request, breaks)) {
+    const existing = byBreakId.get(issue.breakId);
+    byBreakId.set(issue.breakId, existing ? {
+      breakId: issue.breakId,
+      problem: `${existing.problem}；${issue.problem}`,
+      direction: `${existing.direction}；${issue.direction}`,
+    } : issue);
+  }
+  const issues = [...byBreakId.values()];
+  return { approved: review.approved && issues.length === 0, issues };
 }
 
 function buildHostFinalRewritePrompt(context: HostContextPack, reviewFeedback: string): HostPrompt {

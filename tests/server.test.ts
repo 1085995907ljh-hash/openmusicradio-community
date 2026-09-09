@@ -2430,7 +2430,7 @@ test("producer failure locks varied fact-safe host copy for the whole plan", asy
     id: String(9_900 + index),
     title: `备用歌曲 ${index + 1}`,
     artists: [{ id: String(10_000 + index), name: `艺术家 ${index + 1}` }],
-    album: { id: String(11_000 + index), name: `备用专辑 ${index + 1}` },
+    album: { id: String(11_000 + index), name: index === 0 ? "未知专辑" : `备用专辑 ${index + 1}` },
     durationMs: 225_000,
     releaseYear: 2018 + index,
     styleTags: index % 2 === 0 ? ["electronic"] : ["folk"],
@@ -2464,7 +2464,11 @@ test("producer failure locks varied fact-safe host copy for the whole plan", asy
   assert.ok(hostScripts.every((text: string) => !/高赞评论|曲库标签/.test(text)));
   assert.ok(hostScripts.some((text: string) => /备用专辑/.test(text)));
   assert.ok(hostScripts.some((text: string) => /20\d{2}年/.test(text)));
-  assert.ok(hostScripts.some((text: string) => !/备用专辑/.test(text) || !/20\d{2}年/.test(text)));
+  assert.ok(hostScripts.some((text: string) => !/备用专辑|20\d{2}年/.test(text)));
+  assert.ok(hostScripts.filter((text: string) => /备用专辑/.test(text)).length <= 1);
+  assert.ok(hostScripts.filter((text: string) => /20\d{2}年/.test(text)).length <= 1);
+  assert.ok(hostScripts.filter((text: string) => /备用专辑|20\d{2}年/.test(text)).length <= 2);
+  assert.ok(hostScripts.every((text: string) => !/未知专辑|Unknown Album/i.test(text)));
   assert.ok((await json(await fetch(`http://127.0.0.1:${service.port}/api/program`, { headers: { "x-one-radio-control-token": token } }))).program);
 });
 

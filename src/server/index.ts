@@ -474,6 +474,10 @@ function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isUsableAlbumTitle(value: string): boolean {
+  return !/^(?:未知(?:专辑)?|unknown(?: album)?|n\/?a|null|-)$/i.test(value.trim());
+}
+
 function musicFactMatchesTrack(value: string, track: Pick<ProgramRundownItem, "title" | "artist">, playlist: Array<Pick<ProgramRundownItem, "title" | "artist">>): boolean {
   const fact = value.toLocaleLowerCase();
   const title = track.title.toLocaleLowerCase();
@@ -2977,6 +2981,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       (artist: string, title: string) => `下面这首${title}，由${artist}演唱。`,
       (artist: string, title: string) => `${artist}带来的下一首歌是${title}。`,
     ];
+    const usedMetadataDimensions = new Set<"album" | "release">();
     return sourceItems.map(({ hostMoment: _hostMoment, hostScript: _hostScript, ...item }, index) => {
       if (!positions.has(index)) return item;
       const artist = normalizeSpokenEnglishCase(spokenArtistName(item.artist));
@@ -2990,13 +2995,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           ? `今天的最后一首，留给${artist}的${title}。`
           : middleLeads[index % middleLeads.length]!(artist, title);
       const dimensions: Array<{ kind: string; text: string; factIds: string[] }> = [];
-      const album = item.album && !releaseTitlesMatch(item.title, item.album) ? normalizeSpokenEnglishCase(item.album) : "";
-      if (album && item.releaseYear && index % 3 === 0) {
-        dimensions.push({ kind: "release", text: `它来自${item.releaseYear}年的专辑《${album}》。`, factIds: [`track:${item.id}:album`, `track:${item.id}:year`] });
-      } else {
-        if (album) dimensions.push({ kind: "album", text: `${title}收录在专辑《${album}》中。`, factIds: [`track:${item.id}:album`] });
-        if (item.releaseYear) dimensions.push({ kind: "release", text: `这首作品发行于${item.releaseYear}年。`, factIds: [`track:${item.id}:year`] });
-      }
+      const album = item.album && isUsableAlbumTitle(item.album) && !releaseTitlesMatch(item.title, item.album) ? normalizeSpokenEnglishCase(item.album) : "";
+      if (album) dimensions.push({ kind: "album", text: `${title}收录在专辑《${album}》中。`, factIds: [`track:${item.id}:album`] });
+      if (item.releaseYear) dimensions.push({ kind: "release", text: `这首作品发行于${item.releaseYear}年。`, factIds: [`track:${item.id}:year`] });
       const relevantFacts = supplementalFacts
         .filter((fact) => musicFactMatchesTrack(fact.value, item, sourceItems))
         .filter((fact) => /[\u3400-\u9fff]/.test(fact.value))
@@ -3014,19 +3015,21 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         .filter((fact) => fact.text.length >= 12 && fact.text.length <= 120);
       dimensions.push(...relevantFacts.slice(0, 2));
       const preferredKinds = [
-        ["artist", "style", "album", "award", "story", "release"],
-        ["story", "artist", "style", "album", "release", "award"],
-        ["album", "style", "artist", "award", "story", "release"],
-        ["award", "release", "story", "artist", "style", "album"],
+        ["artist", "style", "award", "story", "album", "release"],
+        ["story", "artist", "style", "award", "release", "album"],
+        ["style", "artist", "award", "story", "album", "release"],
+        ["award", "story", "artist", "style", "release", "album"],
       ][index % 4]!;
       const selected: typeof dimensions = [];
       const plannedDurationSeconds = item.liked !== true ? 24 : 18;
       const maxCharacters = hostCharacterBounds(plannedDurationSeconds).max;
       const targetDimensionCount = item.liked === true || !dimensions.some((entry) => ["artist", "award", "story", "style"].includes(entry.kind)) ? 1 : 2;
       for (const kind of preferredKinds) {
+        if ((kind === "album" || kind === "release") && usedMetadataDimensions.has(kind)) continue;
         const dimension = dimensions.find((entry) => entry.kind === kind && !selected.includes(entry));
         if (dimension && Array.from(`${lead}${selected.map((entry) => entry.text).join("")}${dimension.text}`).length <= maxCharacters) {
           selected.push(dimension);
+          if (kind === "album" || kind === "release") usedMetadataDimensions.add(kind);
         }
         if (selected.length >= targetDimensionCount) break;
       }
@@ -3104,7 +3107,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           .slice(0, item.liked !== true ? 6 : 3);
         const allowedFacts: HostContextPack["allowedFacts"] = [
           { id: `track:${item.id}:metadata`, value: `歌曲《${item.title}》，艺术家是${spokenArtist}。`, source: "user" },
-          ...(item.album && !releaseTitlesMatch(item.title, item.album) ? [{ id: `track:${item.id}:album`, value: `《${item.title}》所属专辑是《${item.album}》。`, source: "user" as const }] : []),
+          ...(item.album && isUsableAlbumTitle(item.album) && !releaseTitlesMatch(item.title, item.album) ? [{ id: `track:${item.id}:album`, value: `《${item.title}》所属专辑是《${item.album}》。`, source: "user" as const }] : []),
           ...(item.releaseYear ? [{ id: `track:${item.id}:year`, value: `《${item.title}》发行于${item.releaseYear}年。`, source: "user" as const }] : []),
           ...relevantWebFacts.map((fact) => ({ id: fact.id, value: fact.value, source: "web" as const, sourceUrl: fact.sourceUrl })),
         ];
@@ -3112,7 +3115,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           trackIndex: index + 1,
           title: item.title,
           artist: spokenArtist,
-          ...(item.album ? { album: item.album } : {}),
+          ...(item.album && isUsableAlbumTitle(item.album) ? { album: item.album } : {}),
           ...(item.releaseYear ? { releaseYear: item.releaseYear } : {}),
           ...(item.credits ? { credits: item.credits } : {}),
           exploration: item.liked !== true,
@@ -3221,7 +3224,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           value: `${hostMode === "previous_review" ? "刚刚播完的歌曲" : "马上要播的歌曲"}《${groundedTrack.title}》，艺术家是${spokenArtist}。`,
           source: "user",
         },
-        ...(groundedTrack.album && !releaseTitlesMatch(groundedTrack.title, groundedTrack.album) ? [{ id: `track:${groundedTrack.id}:album`, value: `《${groundedTrack.title}》所属专辑是《${groundedTrack.album}》。`, source: "user" as const }] : []),
+        ...(groundedTrack.album && isUsableAlbumTitle(groundedTrack.album) && !releaseTitlesMatch(groundedTrack.title, groundedTrack.album) ? [{ id: `track:${groundedTrack.id}:album`, value: `《${groundedTrack.title}》所属专辑是《${groundedTrack.album}》。`, source: "user" as const }] : []),
         ...(groundedTrack.releaseYear ? [{ id: `track:${groundedTrack.id}:year`, value: `《${groundedTrack.title}》发行于${groundedTrack.releaseYear}年。`, source: "user" as const }] : []),
         ...(previous && previous.id !== groundedTrack.id ? [{ id: `track:${previous.id}:previous`, value: `刚刚播完的是${spokenArtistName(previous.artist)}的《${previous.title}》。`, source: "user" as const }] : []),
         ...(profileForPrompt?.favoriteArtists.length ? [{ id: "profile:artists", value: `听众长期偏好的艺术家包括：${profileForPrompt.favoriteArtists.join("、")}。`, source: "user" as const }] : []),

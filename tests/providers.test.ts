@@ -331,6 +331,63 @@ test("whole-show review rewrites only rejected break ids and keeps approved copy
   assert.match(JSON.stringify(bodies[7]), /attempt.*2/);
 });
 
+test("whole-show quality floor rejects repeated album and release templates even when the model reviewer approves", async () => {
+  const placements = {
+    frequency: "low",
+    placements: [
+      { id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 18, reason: "开场" },
+      { id: "break-02", beforeTrackIndex: 2, type: "middle", targetSeconds: 18, reason: "中段" },
+      { id: "break-03", beforeTrackIndex: 3, type: "closing", targetSeconds: 18, reason: "收尾" },
+    ],
+  };
+  const initialBreaks = [
+    { id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 18, text: "早上好，先听音乐人一的《歌曲一》，收录在专辑《专辑一》中。", sourceIds: ["track:1:metadata", "track:1:album"], deliveryInstruction: "自然。" },
+    { id: "break-02", beforeTrackIndex: 2, type: "middle", targetSeconds: 18, text: "接下来听音乐人二的《歌曲二》，收录在专辑《专辑二》中。", sourceIds: ["track:2:metadata", "track:2:album"], deliveryInstruction: "自然。" },
+    { id: "break-03", beforeTrackIndex: 3, type: "closing", targetSeconds: 18, text: "今天的最后一首是音乐人三的《歌曲三》，发行于2020年。", sourceIds: ["track:3:metadata", "track:3:year"], deliveryInstruction: "自然。" },
+  ];
+  const rewritten = [
+    { ...initialBreaks[1], text: "接下来是音乐人二的《歌曲二》。", sourceIds: ["track:2:metadata"] },
+    { ...initialBreaks[2], text: "今天的最后一首，音乐人三的《歌曲三》。", sourceIds: ["track:3:metadata"] },
+  ];
+  const responses = [
+    placements,
+    ...initialBreaks.map((item) => ({ break: item })),
+    { approved: true, issues: [], rationale: "整档可播。" },
+    ...rewritten.map((item) => ({ break: item })),
+    { approved: true, issues: [], rationale: "整档可播。" },
+  ];
+  const bodies: Array<Record<string, unknown>> = [];
+  const provider = new OpenAICompatibleHostProvider({
+    apiKey: "unit-test-key",
+    mode: "responses",
+    fetchImpl: async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return jsonResponse({ output_text: JSON.stringify(responses.shift()) });
+    },
+  });
+  const tracks = [1, 2, 3].map((id) => ({
+    trackIndex: id,
+    title: `歌曲${id}`,
+    artist: `音乐人${id}`,
+    exploration: true,
+    allowedFacts: [
+      { id: `track:${id}:metadata`, value: `歌曲《歌曲${id}》，艺术家是音乐人${id}。`, source: "user" as const },
+      { id: `track:${id}:album`, value: `《歌曲${id}》所属专辑是《专辑${id}》。`, source: "user" as const },
+      { id: `track:${id}:year`, value: `《歌曲${id}》发行于${2017 + id}年。`, source: "user" as const },
+    ],
+  }));
+
+  const result = await provider.generateShow({ scenePreset: "commute", frequency: "low", openingGreeting: "早上好", tracks, skillInstruction: "整档撰稿契约", reviewInstruction: "整档监制契约" });
+
+  assert.equal(result.success, true);
+  assert.equal(result.breaks[0]?.text.includes("专辑一"), true);
+  assert.equal(result.breaks[1]?.text, rewritten[0]!.text);
+  assert.equal(result.breaks[2]?.text, rewritten[1]!.text);
+  assert.equal(bodies.length, 8);
+  assert.match(JSON.stringify(bodies[5]), /重复用专辑名/);
+  assert.match(JSON.stringify(bodies[6]), /超过两条/);
+});
+
 test("whole-show generation retries one malformed stage before returning the reviewed copy", async () => {
   let calls = 0;
   const placements = {
