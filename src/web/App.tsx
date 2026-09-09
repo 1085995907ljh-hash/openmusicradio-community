@@ -2192,7 +2192,7 @@ function App() {
       if (hostRetry.required) {
         setProcessCompletedSteps(3);
         setProcessComplete(false);
-        setHostScriptRetryMessage(hostRetry.message ?? "口播审核没有通过，歌单已保留。请确认后单独重新生成口播。");
+        setHostScriptRetryMessage(hostRetry.message ?? "口播生成未完成，歌单已保留。请单独重新生成口播。");
         setView("generating");
         return;
       }
@@ -2212,7 +2212,7 @@ function App() {
           if (isApiMusicSource(current.spec.sourceId) && !hasLockedMusicArtifacts(current)) {
             setProcessCompletedSteps(3);
             setProcessComplete(false);
-            setHostScriptRetryMessage("口播审核没有通过，歌单已保留。请确认后单独重新生成口播。");
+            setHostScriptRetryMessage("口播生成未完成，歌单已保留。请单独重新生成口播。");
             setView("generating");
             return;
           }

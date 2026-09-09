@@ -24,7 +24,7 @@ export class LocalConfiguredHostProvider {
 
   async generateShow(request: Parameters<OpenAICompatibleHostProvider["generateShow"]>[0], options: { signal?: AbortSignal } = {}) {
     const result = await (await this.provider()).generateShow(request, options);
-    this.state = result.fallback ? "ready_with_fallback" : result.success ? "ready" : result.error?.code === "unauthorized" ? "blocked_by_credentials" : "failed_technical";
+    this.state = result.success ? "ready" : result.error?.code === "unauthorized" ? "blocked_by_credentials" : "failed_technical";
     return result;
   }
 

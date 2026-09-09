@@ -77,8 +77,6 @@ export interface HostGenerationResult {
   generatedAt: string;
   model: string;
   apiMode: OpenAIApiMode | "mock";
-  /** True when fact-safe local copy was used to guarantee an on-air break. */
-  fallback?: boolean;
   error?: ProviderErrorInfo;
 }
 
@@ -157,8 +155,6 @@ export interface HostShowGenerationResult {
   apiMode: OpenAIApiMode | "mock";
   breaks: HostShowBreak[];
   generatedAt: string;
-  /** True only when the model/reviewer flow failed and local fact-safe copy was used. */
-  fallback?: boolean;
   error?: ProviderErrorInfo;
 }
 

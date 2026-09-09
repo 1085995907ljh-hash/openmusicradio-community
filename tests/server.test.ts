@@ -277,6 +277,67 @@ test("full account reset clears local authorization and returns to an empty sess
   assert.equal((await json(await fetch(`${base}/device/status`, { headers }))).storage.profiles.files, 0);
 });
 
+test("admin usage proxy stays local and keeps the administrator credential server-side", async (context) => {
+  const controlToken = "admin-page-control-token";
+  const adminToken = "owner-secret-token";
+  const upstreamCalls: Array<{ url: string; authorization: string | null }> = [];
+  const report = {
+    generatedAt: "2026-09-03T08:00:00.000Z",
+    windowDays: 30,
+    totals: { users: 1, llmRequests: 2, ttsRequests: 1, inputTokens: 90, outputTokens: 30, totalTokens: 120, ttsBillableCharacters: 24, failedRequests: 0, unmeteredResponses: 0 },
+    users: [{
+      displayName: "小林",
+      invite: { label: "小林内测", codeHint: "AM01", claimedAt: "2026-09-02T08:00:00.000Z" },
+      devices: 1,
+      lastSeenAt: "2026-09-03T07:59:00.000Z",
+      lastUsedAt: "2026-09-03T07:58:00.000Z",
+      usage: { llmRequests: 2, ttsRequests: 1, inputTokens: 90, outputTokens: 30, totalTokens: 120, ttsBillableCharacters: 24, failedRequests: 0, unmeteredResponses: 0, models: { "gpt-test": 2 } },
+    }],
+  };
+  const aiConfigStore = {
+    async read() { return { llm: { provider: "custom", model: "gpt-test", baseUrl: "https://radio-worker.example/v1" }, tts: { provider: "qwen", model: "cosyvoice-v2", voice: "managed" } }; },
+    async llmSecret() { return adminToken; },
+    async status() { return { llm: { provider: "custom", model: "gpt-test", baseUrl: "https://radio-worker.example/v1", hasKey: true }, tts: { provider: "qwen", model: "cosyvoice-v2", voice: "managed", hasKey: true } }; },
+  } as unknown as LocalAiConfigStore;
+  const adminFetch: typeof globalThis.fetch = async (input, init) => {
+    upstreamCalls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
+    return Response.json(report);
+  };
+  const service = await createLocalService({ port: 0, localControlToken: controlToken, aiConfigStore, adminFetch });
+  await service.start();
+  context.after(() => service.stop());
+  const url = `http://127.0.0.1:${service.port}/api/admin/usage`;
+
+  assert.equal((await fetch(`${url}?days=30`)).status, 401);
+  assert.equal(upstreamCalls.length, 0);
+  const invalid = await fetch(`${url}?days=0`, { headers: { "x-one-radio-control-token": controlToken } });
+  assert.equal(invalid.status, 400);
+  assert.equal(upstreamCalls.length, 0);
+
+  const response = await fetch(`${url}?days=30`, { headers: { "x-one-radio-control-token": controlToken } });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), report);
+  assert.deepEqual(upstreamCalls, [{ url: "https://radio-worker.example/admin/usage?days=30", authorization: `Bearer ${adminToken}` }]);
+  assert.equal(response.headers.get("authorization"), null);
+});
+
+test("admin usage proxy returns a safe error when the upstream rejects access", async (context) => {
+  const aiConfigStore = {
+    async read() { return { llm: { provider: "custom", model: "gpt-test", baseUrl: "https://radio-worker.example/v1" }, tts: { provider: "qwen", model: "cosyvoice-v2", voice: "managed" } }; },
+    async llmSecret() { return "wrong-owner-secret"; },
+  } as unknown as LocalAiConfigStore;
+  const adminFetch: typeof globalThis.fetch = async () => Response.json({ error: "upstream-secret-detail" }, { status: 401 });
+  const service = await createLocalService({ port: 0, localControlToken: "safe-admin-token", aiConfigStore, adminFetch });
+  await service.start();
+  context.after(() => service.stop());
+
+  const response = await fetch(`http://127.0.0.1:${service.port}/api/admin/usage?days=7`, { headers: { "x-one-radio-control-token": "safe-admin-token" } });
+  assert.equal(response.status, 403);
+  const body = await json(response);
+  assert.equal(body.code, "ADMIN_ACCESS_DENIED");
+  assert.doesNotMatch(JSON.stringify(body), /upstream-secret-detail|wrong-owner-secret/);
+});
+
 test("local service exposes protected desktop-player controls", async (context) => {
   const calls: string[] = [];
   const desktopPlayerController: DesktopPlayerControllerLike = {
@@ -2074,7 +2135,7 @@ test("NetEase planning excludes alternate versions from exploration but keeps a 
   assert.ok(program.rundown.every((track: { id: string }) => track.id === likedLive.id || track.id.startsWith("original-")));
 });
 
-test("NetEase planning finalizes fact-safe host scripts when draft quality fails", async (context) => {
+test("NetEase planning preserves the rundown and requests host retry when draft quality fails", async (context) => {
   const songs = Array.from({ length: 5 }, (_, index) => ({
     id: String(9_000 + index),
     title: `事实歌曲 ${index + 1}`,
@@ -2098,18 +2159,17 @@ test("NetEase planning finalizes fact-safe host scripts when draft quality fails
     headers: { "content-type": "application/json", "x-one-radio-control-token": token },
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(response.status, 201);
+  assert.equal(response.status, 202);
   const payload = await json(response);
-  assert.equal(payload.hostRetryRequired, undefined);
+  assert.equal(payload.hostRetryRequired, true);
   assert.equal(payload.program.status, "awaiting_confirmation");
   assert.ok(payload.program.rundown.length > 0);
-  assert.ok(payload.program.rundown.some((track: { hostMoment?: string; hostScript?: { text?: string } }) => track.hostMoment === "opening" && /欢迎收听/.test(track.hostScript?.text ?? "")));
-  assert.ok(payload.program.rundown.some((track: { hostScript?: { text?: string } }) => /最后一首/.test(track.hostScript?.text ?? "")));
+  assert.ok(payload.program.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
   assert.equal(ttsCalls, 0);
   assert.equal((await json(await fetch(`${base}/program`, { headers: { "x-one-radio-control-token": token } }))).program.id, payload.program.id);
 });
 
-test("NetEase planning keeps song order when host copy is internally finalized", async (context) => {
+test("NetEase host-only retry keeps the planned song order", async (context) => {
   const songs = Array.from({ length: 5 }, (_, index) => ({
     id: String(9_120 + index),
     title: `重写歌曲 ${index + 1}`,
@@ -2145,15 +2205,26 @@ test("NetEase planning keeps song order when host copy is internally finalized",
     headers,
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(createdResponse.status, 201);
-  const created = (await json(createdResponse)).program;
+  assert.equal(createdResponse.status, 202);
+  const createdPayload = await json(createdResponse);
+  assert.equal(createdPayload.hostRetryRequired, true);
+  const created = createdPayload.program;
   const originalIds = created.rundown.map((track: { id: string }) => track.id);
-  assert.deepEqual(created.rundown.map((track: { id: string }) => track.id), originalIds);
-  assert.ok(created.rundown.every((track: { hostMoment?: string; hostScript?: { text?: string } }) => !track.hostMoment || Boolean(track.hostScript?.text)));
+  assert.ok(created.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
+  retryAllowed = true;
+  const retryResponse = await fetch(`${base}/programs/${created.id}/regenerate-host`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ generation: created.generation, planRevision: created.planRevision, operationId: "host-only-retry" }),
+  });
+  assert.equal(retryResponse.status, 200);
+  const retried = (await json(retryResponse)).program;
+  assert.deepEqual(retried.rundown.map((track: { id: string }) => track.id), originalIds);
+  assert.ok(retried.rundown.every((track: { hostMoment?: string; hostScript?: { text?: string } }) => !track.hostMoment || Boolean(track.hostScript?.text)));
   assert.ok(hostCalls > 1);
 });
 
-test("NetEase host quality failure converges to a playable final script instead of looping", async (context) => {
+test("NetEase host quality failure never enables confirmation with template copy", async (context) => {
   const songs = Array.from({ length: 5 }, (_, index) => ({
     id: String(9_180 + index),
     title: `最终歌曲 ${index + 1}`,
@@ -2199,21 +2270,23 @@ test("NetEase host quality failure converges to a playable final script instead 
     headers,
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(createdResponse.status, 201);
-  const created = (await json(createdResponse)).program;
+  assert.equal(createdResponse.status, 202);
+  const createdPayload = await json(createdResponse);
+  assert.equal(createdPayload.hostRetryRequired, true);
+  const created = createdPayload.program;
   const originalIds = created.rundown.map((track: { id: string }) => track.id);
 
   assert.deepEqual(created.rundown.map((track: { id: string }) => track.id), originalIds);
-  assert.ok(created.rundown.some((track: { hostMoment?: string; hostScript?: { text?: string } }) => track.hostMoment === "opening" && /欢迎收听/.test(track.hostScript?.text ?? "")));
-  assert.ok(created.rundown.some((track: { hostScript?: { text?: string } }) => /最后一首/.test(track.hostScript?.text ?? "")));
+  assert.ok(created.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
 
   const confirm = await fetch(`${base}/programs/${created.id}/confirm`, {
     method: "POST",
     headers,
     body: JSON.stringify({ generation: created.generation, planRevision: created.planRevision, operationId: "confirm-final-host" }),
   });
-  assert.equal(confirm.status, 200);
-  assert.ok(ttsCalls > 0);
+  assert.equal(confirm.status, 409);
+  assert.equal((await json(confirm)).code, "HOST_PROVIDER_ERROR");
+  assert.equal(ttsCalls, 0);
 });
 
 test("host provider timeouts return a specific safe reason to the UI", async (context) => {
@@ -2317,9 +2390,9 @@ test("NetEase planning rejects on-air research disclaimers even when metadata is
     headers: { "content-type": "application/json", "x-one-radio-control-token": token },
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(response.status, 201);
+  assert.equal(response.status, 202);
   const payload = await json(response);
-  assert.equal(payload.hostRetryRequired, undefined);
+  assert.equal(payload.hostRetryRequired, true);
   const hostTexts = payload.program.rundown.map((track: { hostScript?: { text?: string } }) => track.hostScript?.text ?? "").join("\n");
   assert.doesNotMatch(hostTexts, /资料没有更多信息|不替它贴标签/);
 });
@@ -2354,9 +2427,9 @@ test("NetEase planning rejects a grounded citation with additional invented musi
     headers: { "content-type": "application/json", "x-one-radio-control-token": token },
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(response.status, 201);
+  assert.equal(response.status, 202);
   const payload = await json(response);
-  assert.equal(payload.hostRetryRequired, undefined);
+  assert.equal(payload.hostRetryRequired, true);
   const hostTexts = payload.program.rundown.map((track: { hostScript?: { text?: string } }) => track.hostScript?.text ?? "").join("\n");
   assert.doesNotMatch(hostTexts, /无疾而终的爱情|遗憾放下/);
   assert.equal((await json(await fetch(`${base}/program`, { headers: { "x-one-radio-control-token": token } }))).program.id, payload.program.id);
@@ -2425,7 +2498,7 @@ test("program creation reports real completed stages before returning the previe
   assert.deepEqual(await readProgress(4), { completedSteps: 4, status: "completed", updatedAt: (await readProgress(4)).updatedAt });
 });
 
-test("producer failure locks varied fact-safe host copy for the whole plan", async (context) => {
+test("producer failure preserves the plan without synthesizing template host copy", async (context) => {
   const songs = Array.from({ length: 8 }, (_, index) => ({
     id: String(9_900 + index),
     title: `备用歌曲 ${index + 1}`,
@@ -2455,21 +2528,15 @@ test("producer failure locks varied fact-safe host copy for the whole plan", asy
     headers: { "content-type": "application/json", "x-one-radio-control-token": token },
     body: JSON.stringify({ operationId: "fallback-create", spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "high", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(response.status, 201);
-  const payload = (await json(response)).program;
-  const hostScripts = payload.rundown.filter((item: { hostScript?: { text?: string } }) => Boolean(item.hostScript)).map((item: { hostScript: { text: string } }) => item.hostScript.text);
-  assert.ok(hostScripts.length > 0);
-  assert.ok(hostScripts.every((text: string) => text.length > 0));
-  assert.ok(new Set(hostScripts.map((text: string) => text.split("。")[0])).size >= 3);
-  assert.ok(hostScripts.every((text: string) => !/高赞评论|曲库标签/.test(text)));
-  assert.ok(hostScripts.some((text: string) => /备用专辑/.test(text)));
-  assert.ok(hostScripts.some((text: string) => /20\d{2}年/.test(text)));
-  assert.ok(hostScripts.some((text: string) => !/备用专辑|20\d{2}年/.test(text)));
-  assert.ok(hostScripts.filter((text: string) => /备用专辑/.test(text)).length <= 1);
-  assert.ok(hostScripts.filter((text: string) => /20\d{2}年/.test(text)).length <= 1);
-  assert.ok(hostScripts.filter((text: string) => /备用专辑|20\d{2}年/.test(text)).length <= 2);
-  assert.ok(hostScripts.every((text: string) => !/未知专辑|Unknown Album/i.test(text)));
-  assert.ok((await json(await fetch(`http://127.0.0.1:${service.port}/api/program`, { headers: { "x-one-radio-control-token": token } }))).program);
+  assert.equal(response.status, 202);
+  const responsePayload = await json(response);
+  assert.equal(responsePayload.hostRetryRequired, true);
+  const program = responsePayload.program;
+  assert.equal(program.rundown.length, songs.length);
+  assert.ok(program.rundown.every((item: { hostScript?: unknown }) => !item.hostScript));
+  const persisted = (await json(await fetch(`http://127.0.0.1:${service.port}/api/program`, { headers: { "x-one-radio-control-token": token } }))).program;
+  assert.equal(persisted.id, program.id);
+  assert.deepEqual(persisted.rundown.map((item: { id: string }) => item.id), program.rundown.map((item: { id: string }) => item.id));
 });
 
 test("NetEase confirmation fails closed when locked planning artifacts are missing", async (context) => {

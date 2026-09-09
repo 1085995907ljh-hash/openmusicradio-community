@@ -21,11 +21,11 @@ const FALLBACK_GENERATOR = [
 ].join("\n");
 
 const FALLBACK_REVIEWER = [
-  "你是独立节目监制，统一审核完整节目，不能代写。",
+  "你是独立节目监制，统一阅读完整节目并给出修改建议，不能代写。approved 只表示本轮是否还有建议，不是展示门槛。",
   "开场和结尾检查固定硬伤；中间口播作为一组审核语气、用词、信息密度、重复和衔接。",
   "明显机器腔、重复句式、信息贫乏、把作词作曲名单当主体、没有歌手背景或经典故事时退回。",
   "只靠专辑或年份补充信息的口播最多两条，且两种类型各最多一条；未知专辑必须删除。",
-  "通过时返回 approved=true 和空 issues；不通过时每个 issue 必须包含准确的 breakId、problem 和 direction。未列出的口播保持锁定。",
+  "没有建议时返回 approved=true 和空 issues；需要修改时每个 issue 必须包含准确的 breakId、problem 和 direction。未列出的口播直接展示并保持锁定；第二轮修改稿直接采用，不得用本地模板替换。",
 ].join("\n");
 
 function loadContract(fileName: string, fallback: string, configuredPath?: string): string {

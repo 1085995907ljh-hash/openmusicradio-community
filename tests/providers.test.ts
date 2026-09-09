@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import type { HostContextPack } from "../src/shared/contracts.js";
 import {
   buildHostPrompt,
-  createGuaranteedHostFallback,
   OpenAICompatibleHostProvider,
   QwenTtsProvider,
 } from "../src/providers/index.js";
@@ -265,7 +264,6 @@ test("whole-show copy accepts natural duration estimates and repairs unknown sou
 
   const result = await provider.generateShow({ scenePreset: "study", frequency: "low", openingGreeting: "下午好", tracks, skillInstruction: "整档撰稿契约", reviewInstruction: "整档监制契约" });
 
-  assert.equal(result.fallback, undefined);
   assert.match(result.breaks[0]?.text ?? "", /^下午好，欢迎收听 Open Music Radio 电台，我是主持人龙浩。/);
   assert.doesNotMatch(result.breaks[0]?.text ?? "", /晚上好/);
   assert.deepEqual(result.breaks.map((item) => item.targetSeconds), [15, 18, 27]);
@@ -275,7 +273,7 @@ test("whole-show copy accepts natural duration estimates and repairs unknown sou
   assert.deepEqual(result.breaks[2]?.sourceIds, ["track:3:metadata"]);
 });
 
-test("whole-show review rewrites only rejected break ids and keeps approved copy unchanged", async () => {
+test("whole-show review rewrites only rejected ids and uses the second revision without another approval gate", async () => {
   const placements = {
     frequency: "low",
     placements: [
@@ -297,7 +295,6 @@ test("whole-show review rewrites only rejected break ids and keeps approved copy
     { break: middle("第一次修改") },
     { approved: false, issues: [{ breakId: "break-02", problem: "中段信息仍少", direction: "保留一条清楚的音乐信息主线。" }], rationale: "还需要修改。" },
     { break: middle("第二次最终修改") },
-    { approved: true, issues: [], rationale: "整档可播。" },
   ];
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "unit-test-key",
@@ -322,13 +319,14 @@ test("whole-show review rewrites only rejected break ids and keeps approved copy
   assert.equal(result.breaks[0]?.text, "下午好，欢迎收听 Open Music Radio 电台，我是主持人龙浩。先从音乐人一的《歌曲一》开始。");
   assert.match(result.breaks[1]?.text ?? "", /第二次最终修改/);
   assert.equal(result.breaks[2]?.text, closing.text);
-  assert.equal(bodies.length, 9);
+  assert.equal(bodies.length, 8);
   assert.match(JSON.stringify(bodies[4]), /reviewScope/);
   const rewriteInput = bodies[5]?.input as Array<{ role: string; content: Array<{ text: string }> }>;
   const rewritePayload = JSON.parse(rewriteInput[1]!.content[0]!.text) as { currentBreak: { id: string }; completedBreaks: Array<{ id: string }> };
   assert.equal(rewritePayload.currentBreak.id, "break-02");
   assert.deepEqual(rewritePayload.completedBreaks.map((item) => item.id), ["break-01", "break-03"]);
   assert.match(JSON.stringify(bodies[7]), /attempt.*2/);
+  assert.doesNotMatch(JSON.stringify(bodies[7]), /reviewScope/);
 });
 
 test("whole-show quality floor rejects repeated album and release templates even when the model reviewer approves", async () => {
@@ -423,7 +421,6 @@ test("whole-show generation retries one malformed stage before returning the rev
 
   const result = await provider.generateShow({ scenePreset: "study", frequency: "low", openingGreeting: "晚上好", hostProfile: "anya", tracks, skillInstruction: "整档撰稿契约", reviewInstruction: "整档监制契约" });
 
-  assert.equal(result.fallback, undefined);
   assert.equal(result.breaks.length, 3);
   assert.match(result.breaks[0]?.text ?? "", /^晚上好，欢迎收听 Open Music Radio 电台，我是主持人龙安雅。/);
   assert.equal(calls, 6);
@@ -453,7 +450,6 @@ test("whole-show generation failure is explicit and never returns automatic fall
   assert.equal(result.success, false);
   assert.equal(result.status, "failed");
   assert.deepEqual(result.breaks, []);
-  assert.equal(result.fallback, undefined);
 });
 
 test("whole-show prompts bound profile and fact payloads", async () => {
@@ -489,7 +485,7 @@ test("whole-show prompts bound profile and fact payloads", async () => {
   assert.ok(payload.length < 45_000, `bounded sequential show payload was ${payload.length} bytes`);
 });
 
-test("an invalid final rewrite still returns a fact-safe local on-air script", async () => {
+test("an invalid final rewrite fails without substituting local template copy", async () => {
   let calls = 0;
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "unit-test-key",
@@ -507,76 +503,18 @@ test("an invalid final rewrite still returns a fact-safe local on-air script", a
 
   const result = await provider.generate(context({ skillInstruction: "主持人撰稿契约", reviewInstruction: "节目监制审核契约" }));
 
-  assert.equal(result.success, true);
-  assert.equal(result.status, "ready");
-  assert.match(result.text, /North Window|First Light/);
-  assert.deepEqual(result.factIds, ["track:fixture-01:title"]);
+  assert.equal(result.success, false);
+  assert.equal(result.status, "failed");
+  assert.equal(result.text, "");
+  assert.deepEqual(result.factIds, []);
   assert.equal(calls, 3);
-});
-
-test("reviewed host fallback stays concise and uses available music facts instead of filler", async () => {
-  const cases = [
-    { seconds: 10, isExploration: false, programPhase: "opening" as const, max: 67 },
-    { seconds: 20, isExploration: true, programPhase: "building" as const, max: 74 },
-    { seconds: 30, isExploration: true, programPhase: "closing" as const, max: 111 },
-  ];
-  for (const item of cases) {
-    const provider = new OpenAICompatibleHostProvider({
-      apiKey: "unit-test-key",
-      mode: "chat_completions",
-      fetchImpl: async () => { throw new Error("upstream unavailable"); },
-    });
-    const result = await provider.generate(context({
-      programPhase: item.programPhase,
-      hostLengthSeconds: item.seconds,
-      isExploration: item.isExploration,
-      skillInstruction: "主持人撰稿契约",
-      reviewInstruction: "节目监制审核契约",
-      currentTrack: { id: "track-1", title: "夜航信号", artist: "林澈", durationSeconds: 240, energy: 0.4, mood: [], color: "#000000" },
-      allowedFacts: [
-        { id: "track:track-1:metadata", value: "马上要播的歌曲《夜航信号》，艺术家是林澈。", source: "user" },
-        { id: "fact:story", value: "《夜航信号》的制作从一段深夜公交报站采样开始。", source: "web" },
-      ],
-    }));
-    const length = Array.from(result.text).length;
-    assert.equal(result.success, true);
-    assert.ok(length > 0 && length <= item.max, `${item.seconds}s fallback length ${length}`);
-    assert.match(result.text, /夜航信号|林澈/);
-    assert.doesNotMatch(result.text, /探索位|背景有点东西|先听完再说|下结论|合不合拍|顺手认识/);
-    if (item.isExploration) assert.ok(result.factIds.includes("fact:story"));
-    if (item.programPhase === "closing") assert.match(result.text, /最后一首/);
-  }
-});
-
-test("single-break fallback rotates openings and fact dimensions across a show", () => {
-  const scripts = Array.from({ length: 5 }, (_, index) => createGuaranteedHostFallback(context({
-    programPhase: "building",
-    hostLengthSeconds: 30,
-    isExploration: true,
-    recentHostLines: [],
-    currentTrack: { id: `track-${index}`, title: `夜航信号${index}`, artist: `林澈${index}`, durationSeconds: 240, energy: 0.4, mood: [], color: "#000000" },
-    allowedFacts: [
-      { id: `track:${index}:metadata`, value: `马上要播的歌曲《夜航信号${index}》，艺术家是林澈${index}。`, source: "user" },
-      { id: `fact:${index}:artist`, value: `林澈${index}是一位独立音乐人。`, source: "web" },
-      { id: `fact:${index}:award`, value: `这首歌获得2024年度金曲奖提名。`, source: "web" },
-      { id: `fact:${index}:story`, value: `创作从一段公交采样开始。`, source: "web" },
-      { id: `fact:${index}:style`, value: `作品风格结合民谣和电子。`, source: "web" },
-    ],
-  })));
-
-  assert.ok(new Set(scripts.map((script) => script.text.split("。")[0])).size >= 3);
-  const usedFactKinds = new Set(scripts.flatMap((script) => script.factIds.map((id) => id.split(":").at(-1))));
-  assert.ok(usedFactKinds.has("artist"));
-  assert.ok(usedFactKinds.has("award"));
-  assert.ok(usedFactKinds.has("story"));
-  assert.ok(usedFactKinds.has("style"));
 });
 
 test("OpenAI Responses host uses the requested Sol model without repeating program research", async () => {
   let body: Record<string, unknown> | undefined;
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "relay-key",
-    baseUrl: "http://198.51.100.10:8080/v1",
+    baseUrl: "http://152.70.196.2:8080/v1",
     model: "gpt-5.6-sol",
     mode: "responses",
     enableWebSearch: true,
@@ -599,7 +537,7 @@ test("OpenAI Responses host does not retry a failed script request with a duplic
   let calls = 0;
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "relay-key",
-    baseUrl: "http://198.51.100.10:8080/v1",
+    baseUrl: "http://152.70.196.2:8080/v1",
     model: "gpt-5.6-sol",
     mode: "responses",
     enableWebSearch: true,
@@ -746,7 +684,7 @@ test("valid allowedFacts survive response parsing and duplicate fact ids are rej
 });
 
 test("HTTP 200 business failures are failures, not transport successes", async () => {
-  const secret = "unit-test-secret-do-not-leak";
+  const secret = "sk-test-do-not-leak";
   const provider = new OpenAICompatibleHostProvider({
     apiKey: secret,
     mode: "chat_completions",
@@ -1056,7 +994,7 @@ test("HTTP status mapping distinguishes auth and rate-limit failures", () => {
 });
 
 test("upstream messages redact URLs and common secret fields", () => {
-  const secret = "unit-test-secret-redact-me";
+  const secret = "sk-redact-me";
   const message = safeUpstreamMessage(
     `Request rejected api_key=${secret} authorization=Bearer-${secret} https://provider.test/token`,
     "fallback",
@@ -1073,7 +1011,7 @@ test("upstream messages redact URLs and common secret fields", () => {
 });
 
 test("authorization bearer values are fully redacted", () => {
-  const secret = "unit-test-secret-bearer-must-not-leak";
+  const secret = "sk-bearer-must-not-leak";
   const message = safeUpstreamMessage(`Authorization: Bearer ${secret} password=${secret}`, "fallback");
   assert.equal(message.includes(secret), false);
   assert.match(message, /authorization=\[redacted\]/i);

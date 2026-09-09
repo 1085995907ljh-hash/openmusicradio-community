@@ -1,5 +1,5 @@
 import type { HostContextPack } from "../shared/contracts.js";
-import { hostCharacterBounds, middleHostBreakCountIsAcceptable, normalizeSpokenEnglishCase, normalizeSpokenYearDigits, radioGreetingAt } from "../core/host-script-planning.js";
+import { hostCharacterBounds, middleHostBreakCountIsAcceptable, normalizeSpokenEnglishCase, normalizeSpokenYearDigits } from "../core/host-script-planning.js";
 import { getSceneConfig } from "../core/scenes.js";
 import { DEFAULT_HOST_PROFILE, HOST_PROFILES, hostOpeningIdentity, type HostProfileId } from "../shared/program-options.js";
 import {
@@ -226,11 +226,6 @@ export class OpenAICompatibleHostProvider implements HostProvider {
       throw lastError ?? new ProviderError(providerErrorInfo(PROVIDER_NAME, "network_error", "provider request failed", { retryable: true }));
     } catch (error) {
       const failure = asProviderError(error).toInfo();
-      if (context.reviewInstruction?.trim() && context.currentTrack) {
-        this.runtimeState = "ready_with_fallback";
-        const fallback = createGuaranteedHostFallback(context);
-        return readyHostResult(fallback, safeInstruction(context), generatedAt, this.model, this.apiKey ? this.mode : "mock", true);
-      }
       if (failure.code === "unauthorized") this.runtimeState = "blocked_by_credentials";
       else if (this.apiKey && !this.secureTransport) this.runtimeState = "blocked_by_insecure_transport";
       else if (this.apiKey) this.runtimeState = "failed_technical";
@@ -296,13 +291,11 @@ export class OpenAICompatibleHostProvider implements HostProvider {
         ));
         breaks.push(parseHostShowSingleBreakPayload(payload, request, placement));
       }
-      for (let reviewRound = 0; reviewRound <= WHOLE_SHOW_MAX_REWRITES; reviewRound += 1) {
-        const review = await runStage(async (timeoutMs) => {
-          const payload = await this.request(mode, buildHostShowReviewPrompt(request, breaks), options.signal, false, 2_400, timeoutMs, this.reviewModel);
-          return applyHostShowQualityFloor(request, breaks, parseHostShowReviewPayload(payload, breaks));
-        }, WHOLE_SHOW_REVIEW_TIMEOUT_MS);
-        if (review.approved) break;
-        if (reviewRound >= WHOLE_SHOW_MAX_REWRITES) break;
+      let review = await runStage(async (timeoutMs) => {
+        const payload = await this.request(mode, buildHostShowReviewPrompt(request, breaks), options.signal, false, 2_400, timeoutMs, this.reviewModel);
+        return applyHostShowQualityFloor(request, breaks, parseHostShowReviewPayload(payload, breaks));
+      }, WHOLE_SHOW_REVIEW_TIMEOUT_MS);
+      for (let rewriteRound = 1; !review.approved && rewriteRound <= WHOLE_SHOW_MAX_REWRITES; rewriteRound += 1) {
         for (const issue of review.issues) {
           const breakIndex = breaks.findIndex((item) => item.id === issue.breakId);
           const current = breaks[breakIndex];
@@ -310,7 +303,7 @@ export class OpenAICompatibleHostProvider implements HostProvider {
           if (!current || !placement) continue;
           const payload = await runStage(async (timeoutMs) => this.request(
             mode,
-            buildHostShowBreakRewritePrompt(request, placements, current, breaks, issue, reviewRound + 1),
+            buildHostShowBreakRewritePrompt(request, placements, current, breaks, issue, rewriteRound),
             options.signal,
             false,
             1_600,
@@ -318,9 +311,12 @@ export class OpenAICompatibleHostProvider implements HostProvider {
           ), WHOLE_SHOW_REWRITE_TIMEOUT_MS);
           breaks[breakIndex] = parseHostShowSingleBreakPayload(payload, request, placement);
         }
-      }
-      if (metadataTemplateIssues(request, breaks).length > 0) {
-        throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "whole-show copy still repeats album or release metadata after review", { retryable: false }));
+        if (rewriteRound < WHOLE_SHOW_MAX_REWRITES) {
+          review = await runStage(async (timeoutMs) => {
+            const payload = await this.request(mode, buildHostShowReviewPrompt(request, breaks), options.signal, false, 2_400, timeoutMs, this.reviewModel);
+            return applyHostShowQualityFloor(request, breaks, parseHostShowReviewPayload(payload, breaks));
+          }, WHOLE_SHOW_REVIEW_TIMEOUT_MS);
+        }
       }
       this.runtimeState = "ready";
       return { success: true, provider: PROVIDER_NAME, status: "ready", model: this.model, reviewModel: this.reviewModel, apiMode: mode, breaks, generatedAt };
@@ -692,7 +688,7 @@ function buildHostShowReviewPrompt(request: HostShowGenerationRequest, breaks: H
     system: request.reviewInstruction.slice(0, 48_000),
     user: JSON.stringify({
       context: safeHostShowRequest(request),
-      reviewScope: "统一审核完整节目。检查整档重复和衔接；只靠专辑或发行年份补充信息的口播最多两条，且专辑和年份各最多一条，未知专辑必须删除。只列出确实不合格的具体 breakId；未列出的口播视为通过并锁定。",
+      reviewScope: "统一阅读完整节目并给出修改建议。检查整档重复和衔接；只靠专辑或发行年份补充信息的口播最多两条，且专辑和年份各最多一条，未知专辑必须删除。只列出确实需要修改的具体 breakId；未列出的口播直接展示并锁定。approved 只表示本轮是否仍有修改建议，不是展示门槛。",
       completeShowDraft: { frequency: request.frequency, breaks },
     }),
   };
@@ -970,7 +966,6 @@ function readyHostResult(
   generatedAt: string,
   model: string,
   apiMode: OpenAIApiMode | "mock",
-  fallback = false,
 ): HostGenerationResult {
   return {
     provider: PROVIDER_NAME,
@@ -985,69 +980,6 @@ function readyHostResult(
     generatedAt,
     model,
     apiMode,
-    ...(fallback ? { fallback: true } : {}),
-  };
-}
-
-export function createGuaranteedHostFallback(context: HostContextPack): ParsedHostPayload {
-  const requestedTargetSeconds = context.hostLengthSeconds ?? (context.isExploration ? 28 : 22);
-  const targetSeconds = context.programPhase === "opening" ? Math.max(18, requestedTargetSeconds) : requestedTargetSeconds;
-  const bounds = hostCharacterBounds(targetSeconds);
-  const metadataFact = context.allowedFacts.find((fact) => /《[^》]+》.*艺术家是/.test(fact.value)) ?? context.allowedFacts[0];
-  const metadata = metadataFact?.value.match(/《([^》]+)》.*?艺术家是([^。；]+)/);
-  const title = metadata?.[1]?.trim() || context.currentTrack?.title || "这首歌";
-  const artist = metadata?.[2]?.trim() || context.currentTrack?.artist || "这位音乐人";
-  const isExploration = context.isExploration === true;
-  const factIds = metadataFact ? [metadataFact.id] : [];
-  const backgroundFacts = context.allowedFacts.filter((fact) => fact.id !== metadataFact?.id && !fact.id.startsWith("profile:") && fact.value.length >= 12);
-  const variant = Array.from(`${context.currentTrack?.id ?? title}:${context.recentHostLines.length}`)
-    .reduce((total, character) => total + character.codePointAt(0)!, 0) % 5;
-  let text: string;
-  if (context.programPhase === "opening") {
-    text = `${radioGreetingAt(new Date())}，${hostOpeningIdentity(normalizeHostProfile(context.hostProfile))}今天的第一首是${artist}的《${title}》。`;
-  } else if (context.programPhase === "closing") {
-    text = `接下来是今天的最后一首，${artist}的《${title}》。`;
-  } else {
-    const leads = [
-      `接下来听${artist}的《${title}》。`,
-      `下一首来自${artist}，歌名是《${title}》。`,
-      `继续听${artist}，这首是《${title}》。`,
-      `下面这首《${title}》，由${artist}演唱。`,
-      `${artist}带来的下一首歌是《${title}》。`,
-    ];
-    text = leads[variant]!;
-  }
-  const factLimit = isExploration ? (targetSeconds >= 30 ? 3 : 2) : (targetSeconds >= 20 ? 1 : 0);
-  const preferredKinds = ["artist", "award", "story", "style", "album", "release", "other"];
-  const category = (value: string): string => /奖|获奖|提名|榜单|冠军|金曲|格莱美/.test(value)
-    ? "award"
-    : /风格|曲风|爵士|摇滚|民谣|流行|电子|说唱|灵魂乐|R&B/i.test(value)
-      ? "style"
-      : /出生|出道|歌手|音乐人|乐队|组合|职业生涯/.test(value)
-        ? "artist"
-        : /专辑|收录/.test(value)
-          ? "album"
-          : /发行于|发行时间|首发/.test(value)
-            ? "release"
-            : /创作|制作|灵感|采样|写给|巡演|故事/.test(value)
-              ? "story"
-              : "other";
-  const orderedFacts = [...backgroundFacts].sort((left, right) => {
-    const leftRank = (preferredKinds.indexOf(category(left.value)) - variant + preferredKinds.length) % preferredKinds.length;
-    const rightRank = (preferredKinds.indexOf(category(right.value)) - variant + preferredKinds.length) % preferredKinds.length;
-    return leftRank - rightRank;
-  });
-  for (const fact of orderedFacts.slice(0, factLimit)) {
-    const sentence = `${fact.value.replace(/[。！？]+$/, "")}。`;
-    if (Array.from(`${text}${sentence}`).length > bounds.max) continue;
-    text += sentence;
-    factIds.push(fact.id);
-  }
-  if (Array.from(text).length > bounds.max) text = `${Array.from(text).slice(0, bounds.max - 1).join("")}。`;
-  return {
-    text,
-    factIds,
-    deliveryInstruction: "自然口语，中速，音乐人和歌名说清楚；背景信息按正常叙述处理，不用播音腔。",
   };
 }
 

@@ -24,7 +24,6 @@ import {
   DEFAULT_HOST_PROFILE,
   HOST_PROFILES,
   HOST_PROFILE_IDS,
-  hostOpeningIdentity,
   hostTtsInstruction,
   MAX_MUSIC_GENRES,
   MUSIC_GENRE_IDS,
@@ -70,7 +69,6 @@ import {
   type DesktopProgramResult,
 } from "./desktop-program.js";
 import { LocalHostProvider } from "../providers/local-host.js";
-import { createGuaranteedHostFallback } from "../providers/openai-compatible.js";
 import { QwenTtsProvider } from "../providers/qwen-tts.js";
 import { ProviderError } from "../providers/types.js";
 import { LocalAiConfigStore, LLM_PROVIDER_IDS, TTS_PROVIDER_IDS, type LocalAiSettings } from "./local-ai-config.js";
@@ -449,6 +447,7 @@ export interface LocalServiceOptions {
   lockedTtsTimeoutMs?: number;
   aiConfigStore?: LocalAiConfigStore;
   cloudAccessStore?: CloudAccessStore;
+  adminFetch?: typeof globalThis.fetch;
 }
 
 export interface LocalService {
@@ -594,12 +593,6 @@ function hostProviderFailure(error: unknown, stage: string): ServiceError {
   };
   const status = error.code === "timeout" ? 504 : error.code === "rate_limited" ? 429 : 502;
   return new ServiceError("HOST_PROVIDER_ERROR", status, messages[error.code]);
-}
-
-function isHostScriptQualityFailure(error: unknown): error is ServiceError {
-  return error instanceof ServiceError
-    && error.code === "HOST_PROVIDER_ERROR"
-    && /口播未通过|主持词未通过|主持词与本档前文重复|整档文案未展示/.test(error.message);
 }
 
 function unwrapEngineResult(value: unknown): unknown {
@@ -1622,6 +1615,20 @@ function asRequestPath(req: IncomingMessage): URL {
   }
 }
 
+function adminUsageBaseUrl(baseUrl: string | undefined): string {
+  if (!baseUrl) throw new ServiceError("ADMIN_USAGE_UNAVAILABLE", 503, "管理员统计服务尚未配置。");
+  try {
+    const parsed = new URL(baseUrl);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash || !/\/v1\/?$/.test(parsed.pathname)) {
+      throw new Error("invalid admin endpoint");
+    }
+    parsed.pathname = parsed.pathname.replace(/\/v1\/?$/, "");
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    throw new ServiceError("ADMIN_USAGE_UNAVAILABLE", 503, "管理员统计服务地址无效。");
+  }
+}
+
 function operationKey(programId: string, operationId: string): string {
   return `${programId}:${operationId}`;
 }
@@ -1642,6 +1649,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
   const cloudAccessStore = options.cloudAccessStore ?? new CloudAccessStore();
   const aiConfigStore = options.aiConfigStore
     ?? (process.env.ONE_RADIO_AI_MODE === "local" ? new LocalAiConfigStore() : new ManagedAiConfigStore(cloudAccessStore));
+  const adminFetch = options.adminFetch ?? globalThis.fetch;
   const hostProvider = options.hostProvider ?? new LocalConfiguredHostProvider(aiConfigStore);
   const ttsProvider = options.ttsProvider ?? new LocalConfiguredTtsProvider(aiConfigStore);
   const neteaseProvider = options.neteaseProvider ?? loadedProviders.netease;
@@ -2965,90 +2973,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     return { items, replacedIndexes: invalidIndexes };
   };
 
-  const createFinalHostScriptVersion = async (
-    spec: ProgramSpec,
-    sourceItems: ProgramRundownItem[],
-    supplementalFacts: Array<{ id: string; value: string; sourceUrl?: string }> = [],
-    signal?: AbortSignal,
-  ): Promise<ProgramRundownItem[]> => {
-    const positions = new Set(evenlySpacedHostBreakIndices(sourceItems.length, spec.hostDensity));
-    const profileId = spec.hostProfile ?? DEFAULT_HOST_PROFILE;
-    const greeting = radioGreetingAt(new Date());
-    const middleLeads = [
-      (artist: string, title: string) => `接下来听${artist}的${title}。`,
-      (artist: string, title: string) => `下一首来自${artist}，歌名是${title}。`,
-      (artist: string, title: string) => `继续听${artist}，这首是${title}。`,
-      (artist: string, title: string) => `下面这首${title}，由${artist}演唱。`,
-      (artist: string, title: string) => `${artist}带来的下一首歌是${title}。`,
-    ];
-    const usedMetadataDimensions = new Set<"album" | "release">();
-    return sourceItems.map(({ hostMoment: _hostMoment, hostScript: _hostScript, ...item }, index) => {
-      if (!positions.has(index)) return item;
-      const artist = normalizeSpokenEnglishCase(spokenArtistName(item.artist));
-      const title = `《${normalizeSpokenEnglishCase(item.title)}》`;
-      const isOpening = index === 0;
-      const isClosing = index === sourceItems.length - 1;
-      const hostMoment: NonNullable<ProgramRundownItem["hostMoment"]> = isOpening ? "opening" : isClosing ? "song_note" : "next_preview";
-      const lead = isOpening
-        ? `${greeting}，${hostOpeningIdentity(profileId)}今天先从${artist}的${title}开始。`
-        : isClosing
-          ? `今天的最后一首，留给${artist}的${title}。`
-          : middleLeads[index % middleLeads.length]!(artist, title);
-      const dimensions: Array<{ kind: string; text: string; factIds: string[] }> = [];
-      const album = item.album && isUsableAlbumTitle(item.album) && !releaseTitlesMatch(item.title, item.album) ? normalizeSpokenEnglishCase(item.album) : "";
-      if (album) dimensions.push({ kind: "album", text: `${title}收录在专辑《${album}》中。`, factIds: [`track:${item.id}:album`] });
-      if (item.releaseYear) dimensions.push({ kind: "release", text: `这首作品发行于${item.releaseYear}年。`, factIds: [`track:${item.id}:year`] });
-      const relevantFacts = supplementalFacts
-        .filter((fact) => musicFactMatchesTrack(fact.value, item, sourceItems))
-        .filter((fact) => /[\u3400-\u9fff]/.test(fact.value))
-        .map((fact) => {
-          const sentence = fact.value.replace(/^《[^》]+》\s*\/\s*[^：:]+[：:]\s*/, "").split(/(?<=[。！？])/)[0]?.trim() ?? "";
-          const kind = /奖|获奖|提名|榜单|冠军|金曲|格莱美/.test(sentence)
-            ? "award"
-            : /风格|音乐类型|曲风|爵士|摇滚|民谣|流行|电子|说唱|灵魂乐|R&B/i.test(sentence)
-              ? "style"
-              : /出生|出道|歌手|音乐人|乐队|组合|职业生涯/.test(sentence)
-                ? "artist"
-                : "story";
-          return { kind, text: sentence.replace(/[。！？]+$/, "") + "。", factIds: [fact.id] };
-        })
-        .filter((fact) => fact.text.length >= 12 && fact.text.length <= 120);
-      dimensions.push(...relevantFacts.slice(0, 2));
-      const preferredKinds = [
-        ["artist", "style", "award", "story", "album", "release"],
-        ["story", "artist", "style", "award", "release", "album"],
-        ["style", "artist", "award", "story", "album", "release"],
-        ["award", "story", "artist", "style", "release", "album"],
-      ][index % 4]!;
-      const selected: typeof dimensions = [];
-      const plannedDurationSeconds = item.liked !== true ? 24 : 18;
-      const maxCharacters = hostCharacterBounds(plannedDurationSeconds).max;
-      const targetDimensionCount = item.liked === true || !dimensions.some((entry) => ["artist", "award", "story", "style"].includes(entry.kind)) ? 1 : 2;
-      for (const kind of preferredKinds) {
-        if ((kind === "album" || kind === "release") && usedMetadataDimensions.has(kind)) continue;
-        const dimension = dimensions.find((entry) => entry.kind === kind && !selected.includes(entry));
-        if (dimension && Array.from(`${lead}${selected.map((entry) => entry.text).join("")}${dimension.text}`).length <= maxCharacters) {
-          selected.push(dimension);
-          if (kind === "album" || kind === "release") usedMetadataDimensions.add(kind);
-        }
-        if (selected.length >= targetDimensionCount) break;
-      }
-      const text = `${lead}${selected.map((entry) => entry.text).join("")}`;
-      const hostScript: ProgramHostScript = {
-        id: randomUUID(),
-        text: normalizeSpokenEnglishCase(text).slice(0, 600),
-        factIds: [`track:${item.id}:metadata`, ...new Set(selected.flatMap((entry) => entry.factIds))],
-        instruction: "final playable host version after producer rewrite limit",
-        deliveryInstruction: "自然口语，歌名和音乐人说清楚，句尾收稳。",
-        hostMoment,
-        generatedAt: nowIso(),
-        plannedDurationSeconds,
-        musicBedDelaySeconds: HOST_MUSIC_START_DELAY_SECONDS,
-      };
-      return { ...item, hostMoment, hostScript };
-    });
-  };
-
   const lockNeteaseHostScripts = async (
     spec: ProgramSpec,
     items: ProgramRundownItem[],
@@ -3140,45 +3064,42 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       }
       const result = isRecord(raw) ? raw : {};
       const breaks = Array.isArray(result.breaks) ? result.breaks.filter(isRecord) : [];
-      if (result.success === true && result.fallback !== true && breaks.length > 0) {
-        const byTrack = new Map<number, UnknownRecord>();
-        for (const hostBreak of breaks) {
-          const beforeTrackIndex = Number(hostBreak.beforeTrackIndex);
-          if (Number.isInteger(beforeTrackIndex) && beforeTrackIndex >= 1 && beforeTrackIndex <= items.length) byTrack.set(beforeTrackIndex - 1, hostBreak);
-        }
-        const fallbackItems = await createFinalHostScriptVersion(spec, items, webFacts, signal);
-        return items.map((item, index) => {
-          const hostBreak = byTrack.get(index);
-          const fallbackItem = fallbackItems[index];
-          const fallbackScript = fallbackItem?.hostScript;
-          const required = index === 0 || index === items.length - 1;
-          if (!hostBreak && (!required || !fallbackScript)) return { ...item, hostMoment: undefined, hostScript: undefined };
-          const hostMoment: NonNullable<ProgramRundownItem["hostMoment"]> = index === 0 ? "opening" : index === items.length - 1 ? "song_note" : "next_preview";
-          if (!hostBreak && fallbackScript) return { ...item, hostMoment, hostScript: fallbackScript };
-          let text = typeof hostBreak?.text === "string" ? normalizeSpokenYearDigits(normalizeSpokenEnglishCase(hostBreak.text.trim())).slice(0, 600) : "";
-          if (!text && fallbackScript) text = fallbackScript.text;
-          if (index === items.length - 1 && !/最后一首|最后一曲|收官曲|收尾曲/.test(text)) text = `这是本档节目的最后一首。${text}`;
-          const targetSeconds = typeof hostBreak?.targetSeconds === "number" && Number.isFinite(hostBreak.targetSeconds)
-            ? Math.min(35, Math.max(5, Math.round(hostBreak.targetSeconds)))
-            : (fallbackScript?.plannedDurationSeconds ?? (item.liked !== true ? 28 : 22));
-          const factIds = Array.isArray(hostBreak?.sourceIds)
-            ? hostBreak.sourceIds.filter((id): id is string => typeof id === "string")
-            : (fallbackScript?.factIds ?? [`track:${item.id}:metadata`]);
-          const hostScript: ProgramHostScript = {
-            id: typeof hostBreak?.id === "string" ? hostBreak.id : randomUUID(),
-            text,
-            factIds,
-            instruction: "whole-show writer and producer finalized",
-            ...(typeof hostBreak?.deliveryInstruction === "string" ? { deliveryInstruction: hostBreak.deliveryInstruction.slice(0, 160) } : { deliveryInstruction: fallbackScript?.deliveryInstruction ?? "自然口语，音乐人和歌名说清楚。" }),
-            hostMoment,
-            generatedAt: typeof result.generatedAt === "string" ? result.generatedAt : nowIso(),
-            plannedDurationSeconds: targetSeconds,
-            musicBedDelaySeconds: HOST_MUSIC_START_DELAY_SECONDS,
-          };
-          return { ...item, hostMoment, hostScript };
-        });
+      if (result.success !== true || breaks.length === 0) {
+        throw new ServiceError("HOST_PROVIDER_ERROR", 502, "整档主持文案生成失败：模型没有返回可用的最终稿。");
       }
-      return createFinalHostScriptVersion(spec, items, webFacts, signal);
+      const byTrack = new Map<number, UnknownRecord>();
+      for (const hostBreak of breaks) {
+        const beforeTrackIndex = Number(hostBreak.beforeTrackIndex);
+        if (Number.isInteger(beforeTrackIndex) && beforeTrackIndex >= 1 && beforeTrackIndex <= items.length) byTrack.set(beforeTrackIndex - 1, hostBreak);
+      }
+      if (!byTrack.has(0) || !byTrack.has(items.length - 1)) {
+        throw new ServiceError("HOST_PROVIDER_ERROR", 502, "整档主持文案生成失败：模型没有返回开场或最后一首口播。");
+      }
+      return items.map((item, index) => {
+        const hostBreak = byTrack.get(index);
+        if (!hostBreak) return { ...item, hostMoment: undefined, hostScript: undefined };
+        const text = typeof hostBreak.text === "string" ? normalizeSpokenYearDigits(normalizeSpokenEnglishCase(hostBreak.text.trim())).slice(0, 600) : "";
+        if (!text) throw new ServiceError("HOST_PROVIDER_ERROR", 502, `整档主持文案生成失败：第 ${index + 1} 首前的口播为空。`);
+        const hostMoment: NonNullable<ProgramRundownItem["hostMoment"]> = index === 0 ? "opening" : index === items.length - 1 ? "song_note" : "next_preview";
+        const targetSeconds = typeof hostBreak.targetSeconds === "number" && Number.isFinite(hostBreak.targetSeconds)
+          ? Math.min(35, Math.max(5, Math.round(hostBreak.targetSeconds)))
+          : (item.liked !== true ? 28 : 22);
+        const factIds = Array.isArray(hostBreak.sourceIds)
+          ? hostBreak.sourceIds.filter((id): id is string => typeof id === "string")
+          : [`track:${item.id}:metadata`];
+        const hostScript: ProgramHostScript = {
+          id: typeof hostBreak.id === "string" ? hostBreak.id : randomUUID(),
+          text,
+          factIds,
+          instruction: "whole-show writer finalized after producer feedback",
+          deliveryInstruction: typeof hostBreak.deliveryInstruction === "string" ? hostBreak.deliveryInstruction.slice(0, 160) : "自然口语，音乐人和歌名说清楚。",
+          hostMoment,
+          generatedAt: typeof result.generatedAt === "string" ? result.generatedAt : nowIso(),
+          plannedDurationSeconds: targetSeconds,
+          musicBedDelaySeconds: HOST_MUSIC_START_DELAY_SECONDS,
+        };
+        return { ...item, hostMoment, hostScript };
+      });
     }
     const legacyMoments = new Set(evenlySpacedHostBreakIndices(items.length, spec.hostDensity));
     items = items.map((item, index) => ({
@@ -3312,15 +3233,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           || /[:：—]|不是.{0,24}而是/.test(text)
           || (result.provider === "openai-compatible" && isFinalTrack && !/最后一首|最后一曲|收官曲|收尾曲/.test(text))
           || (result.provider === "openai-compatible" && hostScriptRepeats(text, recentHostLines));
-        if (rejected && result.provider === "openai-compatible") {
-          const fallback = createGuaranteedHostFallback(hostContext);
-          accepted = {
-            result: { ...result, success: true, status: "ready", fallback: true, deliveryInstruction: fallback.deliveryInstruction },
-            text: fallback.text,
-            factIds: fallback.factIds,
-          };
-          break;
-        }
         if (!rejected) {
           accepted = { result, text, factIds };
           break;
@@ -3331,13 +3243,13 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         if (text) hostContext.recentHostLines = [...recentHostLines, text].slice(-8);
       }
       if (!accepted) {
-        throw new ServiceError("HOST_PROVIDER_ERROR", 502, `第 ${index + 1} 首前的口播未通过节目监制审核，整档文案未展示。`);
+        throw new ServiceError("HOST_PROVIDER_ERROR", 502, `第 ${index + 1} 首前的口播没有生成可用结果，整档文案未展示。`);
       }
       const { result, text, factIds } = accepted;
       const lockedText = normalizeSpokenYearDigits(normalizeSpokenEnglishCase(result.provider !== "openai-compatible" && isFinalTrack && !/最后一首|最后一曲|收官曲|收尾曲/.test(text)
         ? `这是本档节目的最后一首。${text}`
         : text));
-      if (result.provider === "openai-compatible" && result.fallback !== true && hostScriptRepeats(lockedText, recentHostLines)) {
+      if (result.provider === "openai-compatible" && hostScriptRepeats(lockedText, recentHostLines)) {
         throw new ServiceError("HOST_PROVIDER_ERROR", 502, `主持词与本档前文重复（第 ${index + 1} 首前）。`);
       }
       const hostScript: ProgramHostScript = {
@@ -4011,6 +3923,40 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       writeJson(res, 200, { config: await aiConfigStore.status() });
       return;
     }
+    if (method === "GET" && pathname === "/api/admin/usage") {
+      assertPlayerControlAuthorized(req);
+      const rawDays = parsedUrl.searchParams.get("days") ?? "30";
+      if (!/^\d{1,3}$/.test(rawDays)) throw new ServiceError("INVALID_INPUT", 400, "统计周期必须是 1 到 365 天。");
+      const days = Number(rawDays);
+      if (days < 1 || days > 365) throw new ServiceError("INVALID_INPUT", 400, "统计周期必须是 1 到 365 天。");
+      const settings = await aiConfigStore.read();
+      const token = await aiConfigStore.llmSecret(settings.llm.provider);
+      if (!token) throw new ServiceError("ADMIN_ACCESS_DENIED", 403, "当前电脑没有管理员统计权限。");
+      let upstream: Response;
+      try {
+        upstream = await adminFetch(`${adminUsageBaseUrl(settings.llm.baseUrl)}/admin/usage?days=${days}`, {
+          headers: { accept: "application/json", authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(15_000),
+        });
+      } catch {
+        throw new ServiceError("ADMIN_USAGE_UNAVAILABLE", 502, "暂时无法连接使用量统计服务。");
+      }
+      if (upstream.status === 401 || upstream.status === 403) {
+        throw new ServiceError("ADMIN_ACCESS_DENIED", 403, "当前电脑没有管理员统计权限。");
+      }
+      if (!upstream.ok) throw new ServiceError("ADMIN_USAGE_UNAVAILABLE", 502, "使用量统计服务暂时不可用。");
+      let report: unknown;
+      try {
+        report = await upstream.json();
+      } catch {
+        throw new ServiceError("ADMIN_USAGE_UNAVAILABLE", 502, "使用量统计服务返回了无效数据。");
+      }
+      if (!isRecord(report) || !isRecord(report.totals) || !Array.isArray(report.users)) {
+        throw new ServiceError("ADMIN_USAGE_UNAVAILABLE", 502, "使用量统计服务返回了无效数据。");
+      }
+      writeJson(res, 200, report);
+      return;
+    }
     if (method === "GET" && pathname === "/api/access/status") {
       assertPlayerControlAuthorized(req);
       writeJson(res, 200, { access: await cloudAccessStore.status({ verify: parsedUrl.searchParams.get("verify") === "1" }) });
@@ -4474,7 +4420,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       const hostRetryPayload = (state: ProgramState, message?: string) => ({
         state,
         hostRetryRequired: true,
-        message: message || "口播审核没有通过，歌单已保留。请确认后单独重新生成口播。",
+        message: message || "口播生成未完成，歌单已保留。请单独重新生成口播。",
       });
       const rememberCreateResult = (state: ProgramState): void => {
         if (!operationId) return;
@@ -4530,16 +4476,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               artifact.hostAudio.clear();
             }
           } catch (error) {
-            if (isHostScriptQualityFailure(error)) {
-              const locked = await createFinalHostScriptVersion(spec, plannedAccountRundown, [], createController!.signal);
-              const artifact = accountRundowns.get(state.id);
-              if (artifact) {
-                artifact.items = locked;
-                artifact.hostScriptsPending = false;
-                artifact.hostScriptsFinalized = true;
-                artifact.hostAudio.clear();
-              }
-            } else if (error instanceof ServiceError && error.code === "HOST_PROVIDER_ERROR") {
+            if (error instanceof ServiceError && error.code === "HOST_PROVIDER_ERROR") {
               const artifact = accountRundowns.get(state.id);
               if (artifact) {
                 artifact.hostScriptsPending = true;
@@ -4892,13 +4829,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               if (replay.action !== "regenerate-host" || replay.baseRevision !== baseRevision) throw new ServiceError("OPERATION_REUSED", 409, publicMessage("OPERATION_REUSED"));
               return lockedState;
             }
-            let locked: ProgramRundownItem[];
-            try {
-              locked = await lockNeteaseHostScripts(lockedState.spec, artifact.items, artifact.listenerProfile, controller.signal, "上一轮口播未通过节目监制审核。请只重写主持口播，保留本次歌单和歌曲顺序。中间口播作为一组整体优化：减少重复句式，提升语气、用词和音乐信息密度。开场和结尾只修正固定硬伤。");
-            } catch (error) {
-              if (!(error instanceof ServiceError) || error.code !== "HOST_PROVIDER_ERROR") throw error;
-              locked = await createFinalHostScriptVersion(lockedState.spec, artifact.items, [], controller.signal);
-            }
+            const locked = await lockNeteaseHostScripts(lockedState.spec, artifact.items, artifact.listenerProfile, controller.signal, "上一轮口播生成失败。请只重写主持口播，保留本次歌单和歌曲顺序。中间口播作为一组整体优化：减少重复句式，提升语气、用词和音乐信息密度。开场和结尾只修正固定硬伤。");
             artifact.items = locked;
             artifact.hostAudio.clear();
             artifact.hostScriptsPending = false;
@@ -4958,7 +4889,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               throw new ServiceError("GENERATION_MISMATCH", 409, "节目单已经变化，请先查看最新计划再确认。");
             }
             const hostTracks = exactAccountRundown.filter((item) => Boolean(item.hostScript));
-            if (accountArtifact.hostScriptsPending || hostTracks.length === 0) throw new ServiceError("HOST_PROVIDER_ERROR", 409, "本次节目口播还没有通过审核，请先重新生成口播。");
+            if (accountArtifact.hostScriptsPending || hostTracks.length === 0) throw new ServiceError("HOST_PROVIDER_ERROR", 409, "本次节目口播还没有生成完成，请先重新生成口播。");
             try {
               const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
               const provider = providerId === "qq" ? await requireQq() : await requireNetease();

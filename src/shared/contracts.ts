@@ -94,8 +94,6 @@ export interface ProgramHostScript {
   generatedAt: string;
   plannedDurationSeconds?: number;
   musicBedDelaySeconds?: number;
-  fallback?: boolean;
-  fallbackReason?: string;
   audioReady?: boolean;
   audioPreparedAt?: string;
 }
