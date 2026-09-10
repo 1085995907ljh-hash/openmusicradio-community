@@ -1599,6 +1599,14 @@ function App() {
   }, [refreshAiConfig, refreshHealth, refreshInvitationAccess, refreshMusicStatus, refreshSources]);
 
   useEffect(() => {
+    if (view !== "confirm") return;
+    void refreshSources();
+    void refreshHealth();
+    void refreshMusicStatus();
+    void refreshInvitationAccess(true);
+  }, [program?.id, refreshHealth, refreshInvitationAccess, refreshMusicStatus, refreshSources, view]);
+
+  useEffect(() => {
     if (program || view !== "setup" || setupPhase !== "connect" || connectionReviewOpen || !localOnboardingComplete || aiConfigPending || sourceTransport === "loading" || !initializationReady) return;
     setSetupPhase("settings");
   }, [aiConfigPending, connectionReviewOpen, initializationReady, localOnboardingComplete, program, setupPhase, sourceTransport, view]);
@@ -2193,7 +2201,7 @@ function App() {
       && (apiMusic ? invitationAccess?.connected === true : health.providers?.tts?.configured)
       && (apiMusic ? musicApiStatus[program.spec.sourceId as ApiMusicSource]?.authenticated === true : playerControllable),
     );
-    if (!program.localOnly && !readyToConfirm) {
+    if (!program.localOnly && !apiMusic && !readyToConfirm) {
       setLastError("开播检查尚未全部通过，请刷新诊断后重试。");
       return;
     }
@@ -3734,7 +3742,18 @@ function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, 
     ? draftOrder.map((id) => rundown.find((track) => track.id === id)).filter((track): track is ProgramRundownItem => Boolean(track))
     : rundown;
   const hasPendingOrder = editorMode === "order" && draftOrder.some((id, index) => id !== rundown[index]?.id);
-  const canConfirm = checks.source && checks.player && checks.service && checks.host && checks.tts && (!apiMusic || (rundown.length > 0 && Boolean(program.listenerProfile)));
+  const connectionChecksReady = checks.source && checks.player && checks.service && checks.host && checks.tts;
+  const planArtifactsReady = rundown.length > 0 && Boolean(program.listenerProfile);
+  const canConfirm = apiMusic ? planArtifactsReady : connectionChecksReady;
+  const confirmationStatusMessage = hasPendingOrder
+    ? "顺序尚未保存，保存后才能启动节目。"
+    : !canConfirm
+      ? "节目资料不完整，请退出本次节目后重新创建。"
+      : apiMusic && !connectionChecksReady
+        ? "连接状态尚未确认；点击启动后会实时核对并返回具体结果。"
+        : apiMusic
+          ? `已修改 ${modifiedCount} 首；口播将在确认后生成。`
+          : "确认后才会控制音乐客户端并开始播放。";
   const selectMode = (mode: PlanEditorMode) => {
     if (updating) return;
     if (mode === "order") setDraftOrder(rundown.map((track) => track.id));
@@ -3858,7 +3877,7 @@ function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, 
           </section>
         </div>
       )}
-      <div className="confirm-actions"><div className="plan-history-actions"><button className="secondary-button" type="button" onClick={() => void undoLastChange()} disabled={updating || !program.canUndoPlan}><Undo2 size={15} />撤销</button></div><p className={`confirm-commit-summary ${canConfirm ? "" : "is-blocked"}`}><Info size={14} />{actionMessage ?? (hasPendingOrder ? "顺序尚未保存，保存后才能启动节目。" : canConfirm ? apiMusic ? `已修改 ${modifiedCount} 首；口播将在确认后生成。` : "确认后才会控制音乐客户端并开始播放。" : "开播检查尚未通过，请检查音源、账号、本地服务与语音配置。")}</p><button className="primary-button primary-button-wide" type="button" onClick={hasPendingOrder ? () => void saveOrder() : onConfirm} disabled={confirming || exiting || updating || !canConfirm}>{confirming ? <LoaderCircle size={16} className="spin" /> : hasPendingOrder ? <Check size={16} /> : <Play size={16} />}{confirming ? "正在生成口播" : updating ? "计划更新中" : hasPendingOrder ? "保存顺序" : "完成选歌并生成口播"}</button></div>
+      <div className="confirm-actions"><div className="plan-history-actions"><button className="secondary-button" type="button" onClick={() => void undoLastChange()} disabled={updating || !program.canUndoPlan}><Undo2 size={15} />撤销</button></div><p className={`confirm-commit-summary ${canConfirm ? "" : "is-blocked"}`}><Info size={14} />{actionMessage ?? confirmationStatusMessage}</p><button className="primary-button primary-button-wide" type="button" onClick={hasPendingOrder ? () => void saveOrder() : onConfirm} disabled={confirming || exiting || updating || !canConfirm}>{confirming ? <LoaderCircle size={16} className="spin" /> : hasPendingOrder ? <Check size={16} /> : <Play size={16} />}{confirming ? "正在生成口播" : updating ? "计划更新中" : hasPendingOrder ? "保存顺序" : "完成选歌并生成口播"}</button></div>
     </div>
   );
 }

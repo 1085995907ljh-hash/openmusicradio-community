@@ -21,6 +21,11 @@ test("confirmation keeps host generation private and exposes explicit playlist e
   assert.match(source, /is-replacing/);
   assert.match(source, /替换中/);
   assert.match(source, /顺序尚未保存，保存后才能启动节目/);
+  assert.match(source, /if \(view !== "confirm"\) return/);
+  assert.match(source, /if \(!program\.localOnly && !apiMusic && !readyToConfirm\)/);
+  assert.match(source, /连接状态尚未确认；点击启动后会实时核对并返回具体结果/);
+  assert.match(source, /节目资料不完整，请退出本次节目后重新创建/);
+  assert.doesNotMatch(source, /开播检查尚未通过，请检查音源、账号、本地服务与语音配置/);
   assert.match(source, /__openMusicRadioVisualizerV2/);
   assert.match(source, /meyda-audio-graph-v2/);
   assert.match(source, /analyserError/);
