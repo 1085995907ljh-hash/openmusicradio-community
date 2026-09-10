@@ -15,15 +15,27 @@
 
 ## 界面预览
 
-### 进入私人电台
+### 主页
 
 ![OpenMusicRadio 开屏与进入按钮](docs/screenshots/openmusicradio-landing.png)
+
+### 设置节目
+
+![OpenMusicRadio 主持人与节目参数设置页](docs/screenshots/openmusicradio-settings.png)
+
+选择主持人、节目时长、口播频率、推荐方式、音乐氛围或风格，以及熟悉歌曲的比例。
 
 ### 确认节目计划
 
 ![OpenMusicRadio 节目参数与最终歌单确认页](docs/screenshots/openmusicradio-program.png)
 
 确认页只显示本次节目参数和最终歌单。可以单独替换不满意的歌曲，也可以按当前条件重新推荐整份歌单；替换歌曲时会保留原有位置。
+
+### 播出中
+
+![OpenMusicRadio 音乐可视化与主持人口播页](docs/screenshots/openmusicradio-onair.png)
+
+播出页跟随真实音频显示动态频谱，同时呈现当前歌曲、主持人口播、剩余时间和下一首歌曲。
 
 ## 为此刻选一档音乐
 
