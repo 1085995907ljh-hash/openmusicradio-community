@@ -370,6 +370,7 @@ interface NeteaseProviderLike {
   similarSongs?(id: string, options?: { limit?: number; offset?: number; signal?: AbortSignal }): unknown;
   createPlaylist?(name: string, signal?: AbortSignal): unknown;
   addSongsToPlaylist?(playlistId: string, trackIds: string[], signal?: AbortSignal): unknown;
+  reorderPlaylistTracks?(playlistId: string, trackIds: string[], signal?: AbortSignal): unknown;
   deletePlaylist?(playlistId: string, signal?: AbortSignal): unknown;
   setSongLiked?(id: string, liked: boolean, signal?: AbortSignal): unknown;
   logout?(): unknown;
@@ -426,6 +427,12 @@ interface LockedHostAudio {
   preparedAt: string;
 }
 
+interface AccountRundownSnapshot {
+  items: ProgramRundownItem[];
+  excludedTrackIds: Set<string>;
+  preferences?: UnknownRecord;
+}
+
 interface AccountRundown {
   items: ProgramRundownItem[];
   index: number;
@@ -436,7 +443,28 @@ interface AccountRundown {
   hostAudio: Map<string, LockedHostAudio>;
   preferences?: UnknownRecord;
   hostScriptsPending?: boolean;
-  hostScriptsFinalized?: boolean;
+  history: AccountRundownSnapshot[];
+  future: AccountRundownSnapshot[];
+}
+
+function snapshotAccountRundown(artifact: AccountRundown): AccountRundownSnapshot {
+  return {
+    items: structuredClone(artifact.items),
+    excludedTrackIds: new Set(artifact.excludedTrackIds),
+    ...(artifact.preferences ? { preferences: structuredClone(artifact.preferences) } : {}),
+  };
+}
+
+function restoreAccountRundown(artifact: AccountRundown, snapshot: AccountRundownSnapshot): void {
+  artifact.items = structuredClone(snapshot.items);
+  artifact.excludedTrackIds = new Set(snapshot.excludedTrackIds);
+  artifact.preferences = snapshot.preferences ? structuredClone(snapshot.preferences) : undefined;
+}
+
+function rememberRundownHistory(artifact: AccountRundown, snapshot: AccountRundownSnapshot): void {
+  artifact.history.push(snapshot);
+  if (artifact.history.length > 20) artifact.history.shift();
+  artifact.future = [];
 }
 
 export interface LocalServiceOptions {
@@ -1737,7 +1765,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
   const startedAt = Date.now();
   const version = options.version ?? process.env.APP_VERSION ?? "0.1.0";
   const operationResults = new Map<string, { action: "confirm" | "next" | "stop"; generation?: number; state: ProgramState }>();
-  type PlanOperationAction = "reorder" | "regenerate" | "adjust" | "replace" | "regenerate-host";
+  type PlanOperationAction = "reorder" | "regenerate" | "adjust" | "replace" | "undo" | "redo" | "regenerate-host";
   type CreateProgressStatus = "running" | "completed" | "failed" | "action_required";
   const planOperationResults = new Map<string, { action: PlanOperationAction; baseRevision: number; revision: number; message?: string }>();
   const rememberPlanOperation = (key: string, value: { action: PlanOperationAction; baseRevision: number; revision: number; message?: string }) => {
@@ -1939,6 +1967,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const plannedPlaylistName = accountPlaylistNames.get(response.id);
     return {
       ...response,
+      ...(rundown ? { canUndoPlan: rundown.history.length > 0, canRedoPlan: rundown.future.length > 0 } : {}),
       ...(rundown?.listenerProfile ? { listenerProfile: rundown.listenerProfile } : {}),
       ...(plannedPlaylistName ? { plannedPlaylistName } : {}),
     };
@@ -3358,13 +3387,11 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         const text = typeof result.text === "string" ? result.text.trim() : "";
         const factIds = Array.isArray(result.factIds) ? result.factIds.filter((id): id is string => typeof id === "string").slice(0, 32) : [];
         const selectedFacts = factIds.map((id) => allowedFacts.find((fact) => fact.id === id)).filter((fact): fact is NonNullable<typeof fact> => Boolean(fact));
-        const characterCount = Array.from(text).length;
         const cloudTextUsesOnlySelectedFacts = result.provider !== "openai-compatible" || textUsesOnlySelectedFacts(text, selectedFacts);
         const grounded = Boolean(selectedFacts.length > 0 && (text.includes(groundedTrack.title) || text.includes(spokenArtist)));
         const rejected = result.success !== true
           || !["generated", "ready", "playing"].includes(status)
           || !text
-          || (result.provider === "openai-compatible" && (characterCount < characterBounds.min || characterCount > characterBounds.max))
           || !grounded
           || !cloudTextUsesOnlySelectedFacts
           || hasOnAirResearchDisclaimer(text)
@@ -3592,16 +3619,31 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     }
     if (receipt.status === "ready") return receipt;
     const trackIds = items.map((item) => item.id);
+    const readbackTrackIds = (detail: unknown): string[] => isRecord(detail) && Array.isArray(detail.tracks)
+      ? detail.tracks.flatMap((track) => isRecord(track) && (typeof track.id === "string" || typeof track.id === "number") ? [String(track.id)] : [])
+      : [];
+    const hasExactTrackOrder = (detail: unknown): boolean => {
+      const actualIds = readbackTrackIds(detail);
+      return actualIds.length === trackIds.length && actualIds.every((id, index) => id === trackIds[index]);
+    };
+    const repairTrackOrder = async (detail: unknown): Promise<void> => {
+      if (hasExactTrackOrder(detail)) return;
+      if (typeof provider.reorderPlaylistTracks !== "function") {
+        throw new ServiceError("NETEASE_PROVIDER_ERROR", 502, "网易云节目歌单的歌曲顺序与已确认计划不一致。");
+      }
+      await invokeNeteaseStage("修复节目歌单顺序", () => provider.reorderPlaylistTracks!(receipt!.id, trackIds, signal));
+      const repaired = await invokeNeteaseStage("验证节目歌单顺序", () => provider.playlistDetail!(receipt!.id, signal));
+      if (!hasExactTrackOrder(repaired)) {
+        throw new ServiceError("NETEASE_PROVIDER_ERROR", 502, "网易云节目歌单的歌曲顺序修复失败。");
+      }
+    };
     let missingTrackIds = trackIds;
     if (existingReceipt) {
       const detail = await invokeNeteaseStage("读取节目歌单", () => provider.playlistDetail!(receipt!.id, signal));
-      const existingIds = new Set(
-        isRecord(detail) && Array.isArray(detail.tracks)
-          ? detail.tracks.flatMap((track) => isRecord(track) && typeof track.id === "string" ? [track.id] : [])
-          : [],
-      );
+      const existingIds = new Set(readbackTrackIds(detail));
       missingTrackIds = trackIds.filter((id) => !existingIds.has(id));
       if (missingTrackIds.length === 0) {
+        await repairTrackOrder(detail);
         receipt = { ...receipt, trackCount: trackIds.length, status: "ready" };
         neteasePlaylists.set(programId, receipt);
         return receipt;
@@ -3614,17 +3656,14 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       let verifiedTrackCount = trackIds.length;
       const detail = await invokeNeteaseStage("验证节目歌曲", () => provider.playlistDetail!(receipt!.id, signal));
       assertNotAborted();
-      const actualIds = new Set(
-        isRecord(detail) && Array.isArray(detail.tracks)
-          ? detail.tracks.flatMap((track) => isRecord(track) && typeof track.id === "string" ? [track.id] : [])
-          : [],
-      );
+      const actualIds = new Set(readbackTrackIds(detail));
       verifiedTrackCount = trackIds.filter((id) => actualIds.has(id)).length;
       if (verifiedTrackCount !== trackIds.length) {
         receipt = { ...receipt, trackCount: verifiedTrackCount, status: "partial" };
         neteasePlaylists.set(programId, receipt);
         throw new ServiceError("NETEASE_PROVIDER_ERROR", 502, `网易云歌单只确认写入 ${verifiedTrackCount}/${trackIds.length} 首歌曲。`);
       }
+      await repairTrackOrder(detail);
       receipt = { ...receipt, trackCount: verifiedTrackCount, status: "ready" };
       neteasePlaylists.set(programId, receipt);
       return receipt;
@@ -4557,11 +4596,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         }
       };
       updateCreateProgress(0);
-      const hostRetryPayload = (state: ProgramState, message?: string) => ({
-        state,
-        hostRetryRequired: true,
-        message: message || "口播生成未完成，歌单已保留。请单独重新生成口播。",
-      });
       const rememberCreateResult = (state: ProgramState): void => {
         if (!operationId) return;
         createResults.set(operationId, { spec, state });
@@ -4571,7 +4605,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           else break;
         }
       };
-      const createProgram = async (): Promise<{ state: ProgramState; hostRetryRequired?: boolean; message?: string }> => {
+      const createProgram = async (): Promise<{ state: ProgramState }> => {
         if (createController?.signal.aborted) throw new ServiceError("REQUEST_ABORTED", 499, "请求已取消。");
         const current = stateNow();
         if (current && ACTIVE_STATUSES.has(current.status)) throw new ServiceError("PROGRAM_ALREADY_ACTIVE", 409, publicMessage("PROGRAM_ALREADY_ACTIVE"));
@@ -4605,37 +4639,14 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           for (const previousId of accountRundowns.keys()) {
             if (previousId !== state.id) accountRundowns.delete(previousId);
           }
-          accountRundowns.set(state.id, { items: plannedAccountRundown, index: 0, revision: 0, excludedTrackIds: new Set(), hostAudio: new Map(), hostScriptsPending: true, hostScriptsFinalized: false, ...(accountPreferences ? { preferences: accountPreferences } : {}), ...(listenerProfile ? { listenerProfile } : {}), ...(accountUid ? { accountUid } : {}) });
-          try {
-            const locked = await lockNeteaseHostScripts(spec, plannedAccountRundown, listenerProfile, createController!.signal);
-            const artifact = accountRundowns.get(state.id);
-            if (artifact) {
-              artifact.items = locked;
-              artifact.hostScriptsPending = false;
-              artifact.hostScriptsFinalized = true;
-              artifact.hostAudio.clear();
-            }
-          } catch (error) {
-            if (error instanceof ServiceError && error.code === "HOST_PROVIDER_ERROR") {
-              const artifact = accountRundowns.get(state.id);
-              if (artifact) {
-                artifact.hostScriptsPending = true;
-                artifact.hostScriptsFinalized = false;
-              }
-              updateCreateProgress(3, "action_required");
-              rememberCreateResult(state);
-              return hostRetryPayload(state, `${error.message} 请确认后单独重新生成口播。`);
-            } else {
-              throw error;
-            }
-          }
+          accountRundowns.set(state.id, { items: plannedAccountRundown, index: 0, revision: 0, excludedTrackIds: new Set(), hostAudio: new Map(), hostScriptsPending: true, history: [], future: [], ...(accountPreferences ? { preferences: accountPreferences } : {}), ...(listenerProfile ? { listenerProfile } : {}), ...(accountUid ? { accountUid } : {}) });
         }
         rememberCreateResult(state);
         updateCreateProgress(4, "completed");
         return { state };
       };
       let replayed = false;
-      let result: { state: ProgramState; hostRetryRequired?: boolean; message?: string };
+      let result: { state: ProgramState };
       try {
         result = await serializeCreateAction(async () => {
           if (createController?.signal.aborted) throw new ServiceError("REQUEST_ABORTED", 499, "请求已取消。");
@@ -4646,13 +4657,12 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               const current = stateNow();
               if (!current || current.id !== previous.state.id) throw new ServiceError("OPERATION_REUSED", 409, publicMessage("OPERATION_REUSED"));
               replayed = true;
-              const artifact = accountRundowns.get(current.id);
-              return artifact?.hostScriptsPending ? hostRetryPayload(current) : { state: current };
+              return { state: current };
             }
           }
           return createProgram();
         });
-        if (!result.hostRetryRequired) updateCreateProgress(4, "completed");
+        updateCreateProgress(4, "completed");
       } catch (error) {
         updateCreateProgress(createProgress.get(operationId ?? "")?.completedSteps ?? 0, "failed");
         throw error;
@@ -4661,10 +4671,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         res.off("close", abortCreate);
       }
       if (result.state.spec.desktopPetEnabled === true) updateDesktopPet(result.state);
-      writeJson(res, result.hostRetryRequired ? 202 : replayed ? 200 : 201, {
+      writeJson(res, replayed ? 200 : 201, {
         program: responseProgram(result.state),
         replayed,
-        ...(result.hostRetryRequired ? { hostRetryRequired: true, message: result.message } : {}),
       });
       return;
     }
@@ -4796,9 +4805,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       const programId = validateProgramId(segments[2]);
       const action = segments[3];
       const state = assertProgram(programId);
-      if (["reorder", "regenerate", "adjust", "replace"].includes(action)) {
+      if (["reorder", "regenerate", "adjust", "replace", "undo", "redo"].includes(action)) {
         assertPlayerControlAuthorized(req);
-        const typedAction = action as "reorder" | "regenerate" | "adjust" | "replace";
+        const typedAction = action as "reorder" | "regenerate" | "adjust" | "replace" | "undo" | "redo";
         const operationId = operationIdFromBody(body, true)!;
         const baseRevision = typeof body.planRevision === "number" && Number.isSafeInteger(body.planRevision) && body.planRevision >= 0 ? body.planRevision : null;
         if (baseRevision === null) throw new ServiceError("INVALID_INPUT", 400, "节目计划版本无效，请刷新后重试。");
@@ -4821,22 +4830,67 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               return { state: lockedState, message: replay.message ?? null };
             }
             if (artifact.revision !== baseRevision) throw new ServiceError("GENERATION_MISMATCH", 409, "节目单已经变化，请刷新后再调整。");
+            if (typedAction === "undo" || typedAction === "redo") {
+              const source = typedAction === "undo" ? artifact.history : artifact.future;
+              const target = source.pop();
+              if (!target) {
+                const message = typedAction === "undo" ? "没有可以撤销的修改。" : "没有可以重做的修改。";
+                rememberPlanOperation(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision, message });
+                return { state: lockedState, message };
+              }
+              const destination = typedAction === "undo" ? artifact.future : artifact.history;
+              destination.push(snapshotAccountRundown(artifact));
+              restoreAccountRundown(artifact, target);
+              artifact.hostAudio.clear();
+              artifact.hostScriptsPending = true;
+              artifact.revision += 1;
+              const message = typedAction === "undo" ? "已撤销上一步歌单修改。" : "已重做上一步歌单修改。";
+              rememberPlanOperation(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision, message });
+              return { state: lockedState, message };
+            }
+            const lockedTrackIds = new Set(Array.isArray(body.lockedTrackIds) ? body.lockedTrackIds : []);
+            if ([...lockedTrackIds].some((id) => typeof id !== "string" || !artifact.items.some((track) => track.id === id))) {
+              throw new ServiceError("INVALID_INPUT", 400, "锁定歌曲必须来自当前节目单。");
+            }
+            const previousSnapshot = snapshotAccountRundown(artifact);
             let actionMessage: string | null = null;
             let ordered: ProgramRundownItem[];
             const excludedTrackIds: string[] = [];
             let preferenceAdditions: ProgramRundownItem[] = [];
             if (typedAction === "regenerate") {
               if (!artifact.preferences) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "选歌画像已丢失，请重新创建。");
+              let replaceTrackIds: Set<unknown> | null = null;
+              if (body.replaceTrackIds !== undefined) {
+                if (!Array.isArray(body.replaceTrackIds) || body.replaceTrackIds.length === 0) {
+                  throw new ServiceError("INVALID_INPUT", 400, "请至少选择一首要替换的歌曲。");
+                }
+                replaceTrackIds = new Set(body.replaceTrackIds);
+                if (replaceTrackIds.size !== body.replaceTrackIds.length || [...replaceTrackIds].some((id) => typeof id !== "string" || !artifact.items.some((track) => track.id === id))) {
+                  throw new ServiceError("INVALID_INPUT", 400, "所选歌曲必须来自当前节目单且不能重复。");
+                }
+              }
+              const replaceIndexes = artifact.items.flatMap((track, index) => replaceTrackIds === null || replaceTrackIds.has(track.id) ? [index] : []);
+              if (replaceIndexes.length === 0) {
+                const message = "没有选择需要替换的歌曲，节目单未修改。";
+                rememberPlanOperation(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision, message });
+                return { state: lockedState, message };
+              }
               const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
               const currentIds = new Set(artifact.items.map((track) => track.id));
               const programPlan = Array.isArray(artifact.preferences.programPlan) ? artifact.preferences.programPlan : [];
               const retainedPlan = programPlan.filter((track) => !isRecord(track) || !artifact.excludedTrackIds.has(String(track.id)));
               const freshPreferences = { ...artifact.preferences, programPlan: retainedPlan.filter((track) => !isRecord(track) || !currentIds.has(String(track.id))) };
-              const fresh = await prepareAccountRundown(providerId, lockedState.spec, freshPreferences, controller.signal);
-              const freshSeconds = fresh.reduce((total, track) => total + track.durationSeconds, 0);
-              ordered = freshSeconds >= minimumProgramDurationSeconds(lockedState.spec.durationMinutes)
-                ? fresh
-                : await prepareAccountRundown(providerId, lockedState.spec, { ...artifact.preferences, programPlan: retainedPlan }, controller.signal);
+              let fresh = await prepareAccountRundown(providerId, lockedState.spec, freshPreferences, controller.signal, undefined, 1, replaceIndexes.length);
+              if (fresh.length < replaceIndexes.length) {
+                const fallback = await prepareAccountRundown(providerId, lockedState.spec, { ...artifact.preferences, programPlan: retainedPlan }, controller.signal, undefined, 1, replaceIndexes.length);
+                const freshIds = new Set(fresh.map((track) => track.id));
+                fresh = [...fresh, ...fallback.filter((track) => !currentIds.has(track.id) && !freshIds.has(track.id))].slice(0, replaceIndexes.length);
+              }
+              if (fresh.length < replaceIndexes.length) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "没有足够的新推荐完成替换，节目单没有修改。");
+              const replacementByIndex = new Map(replaceIndexes.map((index, additionIndex) => [index, fresh[additionIndex]!]));
+              ordered = artifact.items.map((track, index) => replacementByIndex.get(index) ?? track);
+              excludedTrackIds.push(...replaceIndexes.map((index) => artifact.items[index]!.id));
+              actionMessage = replaceTrackIds === null ? "已按当前节目条件重新推荐全部歌曲。" : `已替换所选 ${replaceIndexes.length} 首歌曲。`;
             } else if (typedAction === "replace") {
               if (!artifact.preferences) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "选歌画像已丢失，请重新创建。");
               const trackId = nonEmptyString(body.trackId, "trackId", 200);
@@ -4870,30 +4924,28 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                 return { state: lockedState, message: semanticIntent.message };
               }
               if (semanticIntent?.decision === "execute" && semanticIntent.action === "replace") {
-                if (semanticIntent.count === 0) {
+                const candidateIndexes = semanticIntent.selection === "specified_tracks"
+                  ? semanticIntent.trackIds.map((id) => artifact.items.findIndex((track) => track.id === id)).filter((index) => index >= 0 && !lockedTrackIds.has(artifact.items[index]!.id))
+                  : [
+                      ...artifact.items.flatMap((track, index) => track.liked === true || lockedTrackIds.has(track.id) ? [] : [index]),
+                      ...artifact.items.flatMap((track, index) => track.liked === true && !lockedTrackIds.has(track.id) ? [index] : []),
+                    ];
+                const replaceIndexes = candidateIndexes.slice(0, semanticIntent.count);
+                if (semanticIntent.count === 0 || replaceIndexes.length === 0) {
                   const message = semanticIntent.message || "当前节目单已经符合这个要求，不需要替换。";
                   rememberPlanOperation(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision, message });
                   return { state: lockedState, message };
                 }
                 if (!artifact.preferences) throw new ServiceError("PROGRAM_ARTIFACT_MISSING", 409, "选歌画像已丢失，请重新创建。");
                 const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
-                const additions = await findSemanticReplacementCandidates(providerId, lockedState.spec, artifact, semanticIntent.criteria, semanticIntent.count, controller.signal);
-                if (additions.length < semanticIntent.count) {
+                const additions = await findSemanticReplacementCandidates(providerId, lockedState.spec, artifact, semanticIntent.criteria, replaceIndexes.length, controller.signal);
+                if (additions.length < replaceIndexes.length) {
                   const target = semanticIntent.criteria.artist
                     ? `歌手“${semanticIntent.criteria.artist}”`
                     : semanticIntent.criteria.genre ? `“${semanticIntent.criteria.genre}”风格` : "英文歌曲";
                   const message = `没有找到足够的${target}可完整播放曲目，节目单没有修改。你可以减少替换数量或换一个条件。`;
                   rememberPlanOperation(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision, message });
                   return { state: lockedState, message };
-                }
-                const replaceIndexes = semanticIntent.selection === "specified_tracks"
-                  ? semanticIntent.trackIds.map((id) => artifact.items.findIndex((track) => track.id === id))
-                  : [
-                      ...artifact.items.flatMap((track, index) => track.liked === true ? [] : [index]),
-                      ...artifact.items.flatMap((track, index) => track.liked === true ? [index] : []),
-                    ].slice(0, semanticIntent.count);
-                if (replaceIndexes.length !== semanticIntent.count || replaceIndexes.some((index) => index < 0)) {
-                  throw new ServiceError("INVALID_INPUT", 400, "模型返回的替换范围不在当前节目单中。");
                 }
                 const replacementByIndex = new Map(replaceIndexes.map((index, additionIndex) => [index, additions[additionIndex]!]));
                 ordered = artifact.items.map(({ hostScript: _hostScript, ...track }, index) => {
@@ -4902,7 +4954,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                 });
                 excludedTrackIds.push(...replaceIndexes.map((index) => artifact.items[index]!.id));
                 preferenceAdditions = additions;
-                actionMessage = semanticIntent.message || `已替换 ${additions.length} 首歌曲，其他符合要求的歌曲保持不变。`;
+                actionMessage = lockedTrackIds.size > 0
+                  ? `已替换 ${additions.length} 首歌曲，并保留 ${lockedTrackIds.size} 首锁定歌曲。`
+                  : semanticIntent.message || `已替换 ${additions.length} 首歌曲，其他符合要求的歌曲保持不变。`;
               } else {
                 const searchAdjustment = typedAction === "adjust" && !semanticIntent ? parseMusicSearchAdjustment(instruction) : null;
                 if (searchAdjustment) {
@@ -4947,11 +5001,17 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                 if (candidates.length === 0 && searchAdjustment.count > 1) {
                   candidates = await prepareAccountRundown(providerId, lockedState.spec, searchPreferences, controller.signal, undefined, 1, 1);
                 }
-                const additions = candidates.filter((track) => !currentIds.has(track.id)).slice(0, searchAdjustment.count);
+                let additions = candidates.filter((track) => !currentIds.has(track.id)).slice(0, searchAdjustment.count);
                 if (additions.length === 0) throw new ServiceError("MUSIC_SEARCH_NOT_PLAYABLE", 409, `找到了“${searchAdjustment.query}”的相关歌曲，但当前账号没有可完整播放的新曲目。`);
-                const preferredIndexes = artifact.items.flatMap((track, index) => track.liked === true ? [] : [index]);
-                const fallbackIndexes = artifact.items.map((_, index) => index).filter((index) => !preferredIndexes.includes(index));
+                const preferredIndexes = artifact.items.flatMap((track, index) => track.liked === true || lockedTrackIds.has(track.id) ? [] : [index]);
+                const fallbackIndexes = artifact.items.map((_, index) => index).filter((index) => !lockedTrackIds.has(artifact.items[index]!.id) && !preferredIndexes.includes(index));
                 const replaceIndexes = [...preferredIndexes, ...fallbackIndexes].slice(0, additions.length);
+                if (replaceIndexes.length === 0) {
+                  const message = "全部歌曲都已锁定，批量调整没有修改节目单。";
+                  rememberPlanOperation(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision, message });
+                  return { state: lockedState, message };
+                }
+                additions = additions.slice(0, replaceIndexes.length);
                 const replacementByIndex = new Map(replaceIndexes.map((index, additionIndex) => [index, additions[additionIndex]!]));
                 ordered = artifact.items.map(({ hostScript: _hostScript, ...track }, index) => {
                   const replacement = replacementByIndex.get(index);
@@ -4979,24 +5039,21 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                 }
               }
             }
-            if (typedAction === "regenerate") ordered = ordered.map(({ hostScript: _hostScript, ...track }) => track);
-            else if (typedAction !== "replace") {
-              const moments = artifact.items.map((track) => track.hostMoment);
-              ordered = ordered.map(({ hostScript: _hostScript, ...track }, index) => ({ ...track, hostMoment: moments[index] }));
-            }
-            const locked = await lockNeteaseHostScripts(lockedState.spec, ordered, artifact.listenerProfile, controller.signal);
-            artifact.items = locked;
+            ordered = ordered.map(({ hostMoment: _hostMoment, hostScript: _hostScript, ...track }) => track);
+            rememberRundownHistory(artifact, previousSnapshot);
+            artifact.items = ordered;
             for (const trackId of excludedTrackIds) artifact.excludedTrackIds.add(trackId);
             if (preferenceAdditions.length > 0 && artifact.preferences) {
               const existingPlan = Array.isArray(artifact.preferences.programPlan) ? artifact.preferences.programPlan : [];
               artifact.preferences = { ...artifact.preferences, programPlan: [...preferenceAdditions, ...existingPlan] };
             }
             artifact.hostAudio.clear();
+            artifact.hostScriptsPending = true;
             artifact.revision += 1;
             rememberPlanOperation(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision, ...(actionMessage ? { message: actionMessage } : {}) });
             return { state: lockedState, message: actionMessage };
           });
-          writeJson(res, 200, { program: responseProgram(result.state), message: result.message ?? (typedAction === "adjust" ? "AI 已按要求调整节目单并重写口播。" : typedAction === "replace" ? "已在原位置补入一首新歌，并重写口播。" : typedAction === "regenerate" ? "已重新生成节目单和主持词。" : "已更新曲序并重写相邻口播。") });
+          writeJson(res, 200, { program: responseProgram(result.state), message: result.message ?? (typedAction === "adjust" ? "已按要求调整节目单。" : typedAction === "replace" ? "已在原位置补入一首新歌。" : typedAction === "regenerate" ? "已重新生成歌曲推荐。" : "已更新曲序。") });
         } finally {
           req.off("aborted", abort);
           res.off("close", abort);
@@ -5031,7 +5088,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             artifact.items = locked;
             artifact.hostAudio.clear();
             artifact.hostScriptsPending = false;
-            artifact.hostScriptsFinalized = true;
             artifact.revision += 1;
             rememberPlanOperation(operationKeyValue, { action: "regenerate-host", baseRevision, revision: artifact.revision });
             return lockedState;
@@ -5082,8 +5138,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             if (expectedPlanRevision === null || accountArtifact?.revision !== expectedPlanRevision) {
               throw new ServiceError("GENERATION_MISMATCH", 409, "节目单已经变化，请先查看最新计划再确认。");
             }
-            const hostTracks = exactAccountRundown.filter((item) => Boolean(item.hostScript));
-            if (accountArtifact.hostScriptsPending || hostTracks.length === 0) throw new ServiceError("HOST_PROVIDER_ERROR", 409, "本次节目口播还没有生成完成，请先重新生成口播。");
             try {
               const providerId = lockedState.spec.sourceId === "qq_music" ? "qq" : "netease";
               const provider = providerId === "qq" ? await requireQq() : await requireNetease();
@@ -5094,19 +5148,27 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               const revalidated = await revalidateAccountRundown(providerId, lockedState.spec, accountArtifact, confirmController!.signal);
               if (revalidated.replacedIndexes.length > 0) {
                 const previousItems = exactAccountRundown;
-                const affectedIndexes = new Set(revalidated.replacedIndexes.flatMap((index) => index > 0 ? [index - 1, index] : [index]));
-                const relocked = await lockNeteaseHostScripts(lockedState.spec, revalidated.items, accountArtifact.listenerProfile, confirmController!.signal, "开播前发现个别歌曲无法由当前账号完整播放。请保持节目结构，只为替换后的免费可播歌曲修正相关衔接口播。");
-                exactAccountRundown = relocked.map((item, index) => affectedIndexes.has(index)
-                  ? item
-                  : { ...item, hostMoment: previousItems[index]?.hostMoment, hostScript: previousItems[index]?.hostScript });
+                exactAccountRundown = revalidated.items.map(({ hostMoment: _hostMoment, hostScript: _hostScript, ...item }) => item);
                 accountArtifact.items = exactAccountRundown;
-                for (const index of affectedIndexes) {
+                accountArtifact.hostScriptsPending = true;
+                for (const index of revalidated.replacedIndexes) {
                   const previousId = previousItems[index]?.id;
                   const replacementId = exactAccountRundown[index]?.id;
                   if (previousId) accountArtifact.hostAudio.delete(previousId);
                   if (replacementId) accountArtifact.hostAudio.delete(replacementId);
                 }
-                accountArtifact.revision += 1;
+              }
+              const hostTracks = exactAccountRundown.filter((item) => Boolean(item.hostScript));
+              if (accountArtifact.hostScriptsPending || hostTracks.length === 0) {
+                try {
+                  exactAccountRundown = await lockNeteaseHostScripts(lockedState.spec, exactAccountRundown, accountArtifact.listenerProfile, confirmController!.signal);
+                  accountArtifact.items = exactAccountRundown;
+                  accountArtifact.hostAudio.clear();
+                  accountArtifact.hostScriptsPending = false;
+                } catch (error) {
+                  accountArtifact.hostScriptsPending = true;
+                  throw error;
+                }
               }
               const revalidatedHostTracks = exactAccountRundown.filter((item) => Boolean(item.hostScript));
               if (revalidatedHostTracks.some((item) => item.hostScript?.audioReady !== true || !accountArtifact.hostAudio.has(item.id))) {

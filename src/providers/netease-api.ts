@@ -328,6 +328,22 @@ export class NeteaseApiProvider {
     return { playlistId: cleanPlaylistId, trackIds: cleanTrackIds };
   }
 
+  async reorderPlaylistTracks(
+    playlistId: string | number,
+    trackIds: readonly (string | number)[],
+    signal?: AbortSignal,
+  ): Promise<NeteasePlaylistTracksResult> {
+    const cleanPlaylistId = requireInputId(playlistId, "playlist id");
+    const cleanTrackIds = requireUniqueTrackIds(trackIds);
+    const root = await this.request("/song/order/update", {
+      pid: cleanPlaylistId,
+      ids: JSON.stringify(cleanTrackIds),
+      timestamp: String(Date.now()),
+    }, signal);
+    requireMutationSuccess(root, "reorder playlist songs");
+    return { playlistId: cleanPlaylistId, trackIds: cleanTrackIds };
+  }
+
   async deletePlaylist(playlistId: string | number, signal?: AbortSignal): Promise<NeteasePlaylistDeleteResult> {
     const cleanPlaylistId = requireInputId(playlistId, "playlist id");
     const root = await this.request("/playlist/delete", {

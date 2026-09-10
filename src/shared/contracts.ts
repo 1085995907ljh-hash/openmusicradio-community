@@ -199,6 +199,8 @@ export interface ProgramState {
   rundown?: ProgramRundownItem[];
   rundownIndex?: number;
   planRevision?: number;
+  canUndoPlan?: boolean;
+  canRedoPlan?: boolean;
   /** The unique account playlist name reserved for this draft before remote creation. */
   plannedPlaylistName?: string;
   playlist?: ProgramPlaylistReceipt;

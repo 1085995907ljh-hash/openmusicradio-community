@@ -530,6 +530,10 @@ test("playlist mutations validate and return normalized typed results", async ()
     playlistId: "123",
     trackIds: ["42", "43", "44"],
   });
+  assert.deepEqual(await provider.reorderPlaylistTracks("123", [44, "43", 42]), {
+    playlistId: "123",
+    trackIds: ["44", "43", "42"],
+  });
   assert.deepEqual(await provider.deletePlaylist("123"), { playlistId: "123", deleted: true });
   assert.deepEqual(await provider.setSongLiked(42, true), { trackId: "42", liked: true });
   assert.deepEqual(await provider.setSongLiked(42, false), { trackId: "42", liked: false });
@@ -541,15 +545,19 @@ test("playlist mutations validate and return normalized typed results", async ()
   assert.equal(requests[1]?.searchParams.get("pid"), "123");
   assert.equal(requests[1]?.searchParams.get("tracks"), "42,43,44");
   assert.ok(requests[1]?.searchParams.get("timestamp"));
-  assert.equal(requests[2]?.pathname, "/playlist/delete");
-  assert.equal(requests[2]?.searchParams.get("id"), "123");
-  assert.equal(requests[3]?.pathname, "/like");
-  assert.equal(requests[3]?.searchParams.get("id"), "42");
-  assert.equal(requests[3]?.searchParams.get("like"), "true");
+  assert.equal(requests[2]?.pathname, "/song/order/update");
+  assert.equal(requests[2]?.searchParams.get("pid"), "123");
+  assert.equal(requests[2]?.searchParams.get("ids"), JSON.stringify(["44", "43", "42"]));
+  assert.ok(requests[2]?.searchParams.get("timestamp"));
+  assert.equal(requests[3]?.pathname, "/playlist/delete");
+  assert.equal(requests[3]?.searchParams.get("id"), "123");
   assert.equal(requests[4]?.pathname, "/like");
   assert.equal(requests[4]?.searchParams.get("id"), "42");
-  assert.equal(requests[4]?.searchParams.get("like"), "false");
-  assert.ok(requests[2]?.searchParams.get("timestamp"));
+  assert.equal(requests[4]?.searchParams.get("like"), "true");
+  assert.equal(requests[5]?.pathname, "/like");
+  assert.equal(requests[5]?.searchParams.get("id"), "42");
+  assert.equal(requests[5]?.searchParams.get("like"), "false");
+  assert.ok(requests[3]?.searchParams.get("timestamp"));
 
   const playlistIdProvider = new NeteaseApiProvider({
     env: { NETEASE_API_BASE_URL: "http://127.0.0.1:3000" },

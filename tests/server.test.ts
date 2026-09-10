@@ -1628,7 +1628,7 @@ test("NetEase planning excludes played exploration tracks but still permits like
 });
 
 test("music atmosphere changes the account rundown arc without changing the candidate pool", async (context) => {
-  const songs = Array.from({ length: 10 }, (_, index) => ({
+  const songs = Array.from({ length: 16 }, (_, index) => ({
     id: String(4_150 + index),
     title: `氛围候选 ${index + 1}`,
     artists: [{ id: String(5_150 + index), name: `氛围艺术家 ${index + 1}` }],
@@ -2129,15 +2129,17 @@ test("planner chat classifies semantic requests before mutating the rundown", as
   }));
   const draft = created.program;
   const originalEnglishIds = draft.rundown.filter((track: { id: string }) => track.id.startsWith("current-en-")).map((track: { id: string }) => track.id);
-  const adjust = async (operationId: string, planRevision: number, message: string, conversation: Array<{ role: string; text: string }> = []) => json(await fetch(`${base}/programs/${draft.id}/adjust`, {
+  const adjust = async (operationId: string, planRevision: number, message: string, conversation: Array<{ role: string; text: string }> = [], lockedTrackIds: string[] = []) => json(await fetch(`${base}/programs/${draft.id}/adjust`, {
     method: "POST", headers,
-    body: JSON.stringify({ generation: draft.generation, planRevision, operationId, message, conversation }),
+    body: JSON.stringify({ generation: draft.generation, planRevision, operationId, message, conversation, lockedTrackIds }),
   }));
 
-  const englishResult = await adjust("semantic-english", 0, "换成英文歌");
+  const lockedChineseId = draft.rundown.find((track: { id: string }) => track.id.startsWith("current-zh-"))!.id;
+  const englishResult = await adjust("semantic-english", 0, "换成英文歌", [], [lockedChineseId]);
   assert.equal(englishResult.program.planRevision, 1);
   assert.deepEqual(englishResult.program.rundown.filter((track: { id: string }) => track.id.startsWith("current-en-")).map((track: { id: string }) => track.id), originalEnglishIds);
-  assert.equal(englishResult.program.rundown.filter((track: { id: string }) => track.id.startsWith("new-en-")).length, 3);
+  assert.ok(englishResult.program.rundown.some((track: { id: string }) => track.id === lockedChineseId));
+  assert.equal(englishResult.program.rundown.filter((track: { id: string }) => track.id.startsWith("new-en-")).length, 2);
 
   const idsAfterEnglish = englishResult.program.rundown.map((track: { id: string }) => track.id);
   const clarifyResult = await adjust("semantic-clarify", 1, "换三首爵士", [{ role: "user", text: "换三首爵士" }]);
@@ -2202,7 +2204,7 @@ test("NetEase confirmation replaces a song that becomes trial-only before broadc
   assert.equal(createdResponse.status, 201);
   const draft = (await json(createdResponse)).program;
   const revokedId = draft.rundown[0].id;
-  const preservedScripts = new Map(draft.rundown.slice(1).map((track: { id: string; hostScript?: { text: string } }) => [track.id, track.hostScript?.text]));
+  assert.ok(draft.rundown.every((track: { hostMoment?: string; hostScript?: unknown }) => !track.hostMoment && !track.hostScript));
   trialOnlyIds.add(revokedId);
 
   const confirmedResponse = await fetch(`${base}/programs/${draft.id}/confirm`, {
@@ -2215,7 +2217,7 @@ test("NetEase confirmation replaces a song that becomes trial-only before broadc
   assert.equal(confirmed.status, "on_air");
   assert.ok(confirmed.rundown.every((track: { id: string }) => track.id !== revokedId));
   assert.deepEqual(storedTracks, confirmed.rundown.map((track: { id: string }) => track.id));
-  assert.ok(confirmed.rundown.slice(1).every((track: { id: string; hostScript?: { text: string } }) => track.hostScript?.text === preservedScripts.get(track.id)));
+  assert.ok(confirmed.rundown.every((track: { hostMoment?: string; hostScript?: { text?: string } }) => !track.hostMoment || Boolean(track.hostScript?.text)));
 });
 
 test("NetEase planning covers 120-minute programs that need more than one hundred short tracks", async (context) => {
@@ -2248,12 +2250,7 @@ test("NetEase planning covers 120-minute programs that need more than one hundre
   assert.equal(program.planSummary.actualFamiliarityRatio, 0);
   assert.equal(new Set(program.rundown.map((track: { artist: string }) => track.artist)).size, program.planSummary.totalTracks);
   assert.ok(program.rundown.reduce((total: number, track: { durationSeconds: number }) => total + track.durationSeconds, 0) >= 115 * 60);
-  for (const track of program.rundown.filter((item: { hostScript?: { factIds?: string[] } }) => item.hostScript?.factIds?.length === 0)) {
-    assert.doesNotMatch(track.hostScript.text, new RegExp(track.title));
-    assert.doesNotMatch(track.hostScript.text, new RegExp(track.artist));
-  }
-  const mysteryScripts = program.rundown.flatMap((track: { hostScript?: { factIds?: string[]; text?: string } }) => track.hostScript?.factIds?.length === 0 ? [track.hostScript.text] : []);
-  assert.equal(new Set(mysteryScripts).size, mysteryScripts.length);
+  assert.ok(program.rundown.every((track: { hostMoment?: string; hostScript?: unknown }) => !track.hostMoment && !track.hostScript));
 });
 
 test("NetEase planning does not skip a feasible pair of long songs", async (context) => {
@@ -2364,7 +2361,7 @@ test("NetEase planning excludes alternate versions from exploration but keeps a 
   assert.ok(program.rundown.every((track: { id: string }) => track.id === likedLive.id || track.id.startsWith("original-")));
 });
 
-test("NetEase planning preserves the rundown and requests host retry when draft quality fails", async (context) => {
+test("NetEase planning preserves the rundown without generating host copy", async (context) => {
   const songs = Array.from({ length: 5 }, (_, index) => ({
     id: String(9_000 + index),
     title: `事实歌曲 ${index + 1}`,
@@ -2372,12 +2369,13 @@ test("NetEase planning preserves the rundown and requests host retry when draft 
     durationMs: 360_000,
   }));
   let ttsCalls = 0;
+  let hostCalls = 0;
   const token = "ungrounded-host-token";
   const service = await createLocalService({
     port: 0,
     localControlToken: token,
     neteaseProvider: planningProvider(songs, []),
-    hostProvider: { configured: true, state: "ready", generate() { return { success: true, status: "ready", text: "这是一段没有曲目引用的主持词。", factIds: [] }; } },
+    hostProvider: { configured: true, state: "ready", generate() { hostCalls += 1; return { success: true, status: "ready", text: "这是一段没有曲目引用的主持词。", factIds: [] }; } },
     ttsProvider: { configured: true, state: "ready", synthesize() { ttsCalls += 1; return { success: true, status: "ready", audio: Buffer.from("RIFF0000WAVE") }; } },
   });
   await service.start();
@@ -2388,17 +2386,17 @@ test("NetEase planning preserves the rundown and requests host retry when draft 
     headers: { "content-type": "application/json", "x-one-radio-control-token": token },
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(response.status, 202);
+  assert.equal(response.status, 201);
   const payload = await json(response);
-  assert.equal(payload.hostRetryRequired, true);
   assert.equal(payload.program.status, "awaiting_confirmation");
   assert.ok(payload.program.rundown.length > 0);
   assert.ok(payload.program.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
+  assert.equal(hostCalls, 0);
   assert.equal(ttsCalls, 0);
   assert.equal((await json(await fetch(`${base}/program`, { headers: { "x-one-radio-control-token": token } }))).program.id, payload.program.id);
 });
 
-test("NetEase host-only retry keeps the planned song order", async (context) => {
+test("NetEase confirmation generates host copy without changing the planned song order", async (context) => {
   const songs = Array.from({ length: 5 }, (_, index) => ({
     id: String(9_120 + index),
     title: `重写歌曲 ${index + 1}`,
@@ -2407,11 +2405,17 @@ test("NetEase host-only retry keeps the planned song order", async (context) => 
   }));
   let retryAllowed = false;
   let hostCalls = 0;
+  const storedTracks: string[] = [];
   const token = "host-review-retry-token";
   const service = await createLocalService({
     port: 0,
     localControlToken: token,
-    neteaseProvider: planningProvider(songs, []),
+    neteaseProvider: {
+      ...planningProvider(songs, []),
+      createPlaylist(name: string) { return { id: "deferred-host-playlist", name }; },
+      addSongsToPlaylist(playlistId: string, trackIds: string[]) { storedTracks.splice(0, storedTracks.length, ...trackIds); return { playlistId, trackIds }; },
+      playlistDetail() { return { id: "deferred-host-playlist", tracks: storedTracks.map((id) => ({ id })) }; },
+    },
     hostProvider: {
       configured: true,
       state: "ready",
@@ -2434,22 +2438,22 @@ test("NetEase host-only retry keeps the planned song order", async (context) => 
     headers,
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(createdResponse.status, 202);
+  assert.equal(createdResponse.status, 201);
   const createdPayload = await json(createdResponse);
-  assert.equal(createdPayload.hostRetryRequired, true);
   const created = createdPayload.program;
   const originalIds = created.rundown.map((track: { id: string }) => track.id);
   assert.ok(created.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
+  assert.equal(hostCalls, 0);
   retryAllowed = true;
-  const retryResponse = await fetch(`${base}/programs/${created.id}/regenerate-host`, {
+  const retryResponse = await fetch(`${base}/programs/${created.id}/confirm`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ generation: created.generation, planRevision: created.planRevision, operationId: "host-only-retry" }),
+    body: JSON.stringify({ generation: created.generation, planRevision: created.planRevision, operationId: "deferred-host-generation" }),
   });
   assert.equal(retryResponse.status, 200);
-  const retried = (await json(retryResponse)).program;
-  assert.deepEqual(retried.rundown.map((track: { id: string }) => track.id), originalIds);
-  assert.ok(retried.rundown.every((track: { hostMoment?: string; hostScript?: { text?: string } }) => !track.hostMoment || Boolean(track.hostScript?.text)));
+  const confirmed = (await json(retryResponse)).program;
+  assert.deepEqual(confirmed.rundown.map((track: { id: string }) => track.id), originalIds);
+  assert.ok(confirmed.rundown.every((track: { hostMoment?: string; hostScript?: { text?: string } }) => !track.hostMoment || Boolean(track.hostScript?.text)));
   assert.ok(hostCalls > 1);
 });
 
@@ -2499,9 +2503,8 @@ test("NetEase host quality failure never enables confirmation with template copy
     headers,
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(createdResponse.status, 202);
+  assert.equal(createdResponse.status, 201);
   const createdPayload = await json(createdResponse);
-  assert.equal(createdPayload.hostRetryRequired, true);
   const created = createdPayload.program;
   const originalIds = created.rundown.map((track: { id: string }) => track.id);
 
@@ -2513,7 +2516,7 @@ test("NetEase host quality failure never enables confirmation with template copy
     headers,
     body: JSON.stringify({ generation: created.generation, planRevision: created.planRevision, operationId: "confirm-final-host" }),
   });
-  assert.equal(confirm.status, 409);
+  assert.equal(confirm.status, 502);
   assert.equal((await json(confirm)).code, "HOST_PROVIDER_ERROR");
   assert.equal(ttsCalls, 0);
 });
@@ -2541,18 +2544,25 @@ test("host provider timeouts return a specific safe reason to the UI", async (co
   });
   await service.start();
   context.after(() => service.stop());
-  const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+  const response = await fetch(`${base}/programs`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-one-radio-control-token": token },
+    headers,
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(response.status, 202);
+  assert.equal(response.status, 201);
   const payload = await json(response);
-  assert.equal(payload.hostRetryRequired, true);
-  assert.match(payload.message, /主持词生成超时/);
+  const confirm = await fetch(`${base}/programs/${payload.program.id}/confirm`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ generation: payload.program.generation, planRevision: payload.program.planRevision, operationId: "host-timeout-confirm" }),
+  });
+  assert.equal(confirm.status, 504);
+  assert.match((await json(confirm)).error, /主持词生成超时/);
 });
 
-test("NetEase planning retries a transient invalid host response and locks the recovered script", async (context) => {
+test("NetEase confirmation retries a transient invalid host response and locks the recovered script", async (context) => {
   const songs = Array.from({ length: 5 }, (_, index) => ({
     id: String(9_300 + index),
     title: `恢复歌曲 ${index + 1}`,
@@ -2560,11 +2570,17 @@ test("NetEase planning retries a transient invalid host response and locks the r
     durationMs: 360_000,
   }));
   let calls = 0;
+  const storedTracks: string[] = [];
   const token = "host-retry-token";
   const service = await createLocalService({
     port: 0,
     localControlToken: token,
-    neteaseProvider: planningProvider(songs, []),
+    neteaseProvider: {
+      ...planningProvider(songs, []),
+      createPlaylist(name: string) { return { id: "host-retry-playlist", name }; },
+      addSongsToPlaylist(playlistId: string, trackIds: string[]) { storedTracks.splice(0, storedTracks.length, ...trackIds); return { playlistId, trackIds }; },
+      playlistDetail() { return { id: "host-retry-playlist", tracks: storedTracks.map((id) => ({ id })) }; },
+    },
     hostProvider: {
       configured: true,
       state: "ready",
@@ -2579,18 +2595,29 @@ test("NetEase planning retries a transient invalid host response and locks the r
   });
   await service.start();
   context.after(() => service.stop());
-  const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+  const response = await fetch(`${base}/programs`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-one-radio-control-token": token },
+    headers,
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
   assert.equal(response.status, 201);
   const program = (await json(response)).program;
-  assert.ok(calls > program.rundown.filter((track: { hostMoment?: string }) => track.hostMoment).length);
-  assert.match(program.rundown[0].hostScript.text, /恢复歌曲/);
+  assert.equal(calls, 0);
+  assert.ok(program.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
+  const confirm = await fetch(`${base}/programs/${program.id}/confirm`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ generation: program.generation, planRevision: program.planRevision, operationId: "host-retry-confirm" }),
+  });
+  assert.equal(confirm.status, 200);
+  const confirmed = (await json(confirm)).program;
+  assert.ok(calls > confirmed.rundown.filter((track: { hostMoment?: string }) => track.hostMoment).length);
+  assert.match(confirmed.rundown[0].hostScript.text, /恢复歌曲/);
 });
 
-test("NetEase planning rejects on-air research disclaimers even when metadata is grounded", async (context) => {
+test("NetEase confirmation rejects on-air research disclaimers even when metadata is grounded", async (context) => {
   const songs = Array.from({ length: 5 }, (_, index) => ({
     id: String(9_450 + index),
     title: `资料歌曲 ${index + 1}`,
@@ -2614,19 +2641,27 @@ test("NetEase planning rejects on-air research disclaimers even when metadata is
   });
   await service.start();
   context.after(() => service.stop());
-  const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+  const response = await fetch(`${base}/programs`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-one-radio-control-token": token },
+    headers,
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(response.status, 202);
+  assert.equal(response.status, 201);
   const payload = await json(response);
-  assert.equal(payload.hostRetryRequired, true);
-  const hostTexts = payload.program.rundown.map((track: { hostScript?: { text?: string } }) => track.hostScript?.text ?? "").join("\n");
-  assert.doesNotMatch(hostTexts, /资料没有更多信息|不替它贴标签/);
+  assert.ok(payload.program.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
+  const confirm = await fetch(`${base}/programs/${payload.program.id}/confirm`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ generation: payload.program.generation, planRevision: payload.program.planRevision, operationId: "research-disclaimer-confirm" }),
+  });
+  assert.equal(confirm.status, 502);
+  const persisted = (await json(await fetch(`${base}/program`, { headers }))).program;
+  assert.ok(persisted.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
 });
 
-test("NetEase planning rejects a grounded citation with additional invented music facts", async (context) => {
+test("NetEase confirmation rejects a grounded citation with additional invented music facts", async (context) => {
   const songs = Array.from({ length: 5 }, (_, index) => ({
     id: String(9_500 + index),
     title: `可信歌曲 ${index + 1}`,
@@ -2656,11 +2691,15 @@ test("NetEase planning rejects a grounded citation with additional invented musi
     headers: { "content-type": "application/json", "x-one-radio-control-token": token },
     body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(response.status, 202);
+  assert.equal(response.status, 201);
   const payload = await json(response);
-  assert.equal(payload.hostRetryRequired, true);
-  const hostTexts = payload.program.rundown.map((track: { hostScript?: { text?: string } }) => track.hostScript?.text ?? "").join("\n");
-  assert.doesNotMatch(hostTexts, /无疾而终的爱情|遗憾放下/);
+  assert.ok(payload.program.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
+  const confirm = await fetch(`${base}/programs/${payload.program.id}/confirm`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-one-radio-control-token": token },
+    body: JSON.stringify({ generation: payload.program.generation, planRevision: payload.program.planRevision, operationId: "invented-fact-confirm" }),
+  });
+  assert.equal(confirm.status, 502);
   assert.equal((await json(await fetch(`${base}/program`, { headers: { "x-one-radio-control-token": token } }))).program.id, payload.program.id);
 });
 
@@ -2672,9 +2711,8 @@ test("program creation reports real completed stages before returning the previe
     durationMs: 300_000,
   }));
   let releasePlayback!: () => void;
-  let releaseHost!: () => void;
+  let hostCalls = 0;
   const playbackGate = new Promise<void>((resolve) => { releasePlayback = resolve; });
-  const hostGate = new Promise<void>((resolve) => { releaseHost = resolve; });
   const baseProvider = planningProvider(songs, []);
   const baseHost = groundedHostProvider();
   const token = "create-progress-token";
@@ -2691,7 +2729,7 @@ test("program creation reports real completed stages before returning the previe
     hostProvider: {
       ...baseHost,
       async generate(hostContext: Parameters<typeof baseHost.generate>[0]) {
-        await hostGate;
+        hostCalls += 1;
         return baseHost.generate(hostContext);
       },
     },
@@ -2721,13 +2759,12 @@ test("program creation reports real completed stages before returning the previe
 
   assert.equal((await readProgress(1)).status, "running");
   releasePlayback();
-  assert.equal((await readProgress(3)).completedSteps, 3);
-  releaseHost();
   assert.equal((await creation).status, 201);
   assert.deepEqual(await readProgress(4), { completedSteps: 4, status: "completed", updatedAt: (await readProgress(4)).updatedAt });
+  assert.equal(hostCalls, 0);
 });
 
-test("producer failure preserves the plan without synthesizing template host copy", async (context) => {
+test("producer failure after confirmation preserves the plan without synthesizing template host copy", async (context) => {
   const songs = Array.from({ length: 8 }, (_, index) => ({
     id: String(9_900 + index),
     title: `备用歌曲 ${index + 1}`,
@@ -2752,20 +2789,28 @@ test("producer failure preserves the plan without synthesizing template host cop
   });
   await service.start();
   context.after(() => service.stop());
-  const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+  const response = await fetch(`${base}/programs`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-one-radio-control-token": token },
+    headers,
     body: JSON.stringify({ operationId: "fallback-create", spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "high", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }),
   });
-  assert.equal(response.status, 202);
+  assert.equal(response.status, 201);
   const responsePayload = await json(response);
-  assert.equal(responsePayload.hostRetryRequired, true);
-  assert.match(responsePayload.message, /口播 break-04 撰稿没有返回有效结果/);
-  assert.doesNotMatch(responsePayload.message, /upstream detail/);
   const program = responsePayload.program;
   assert.equal(program.rundown.length, songs.length);
   assert.ok(program.rundown.every((item: { hostScript?: unknown }) => !item.hostScript));
-  const persisted = (await json(await fetch(`http://127.0.0.1:${service.port}/api/program`, { headers: { "x-one-radio-control-token": token } }))).program;
+  const confirm = await fetch(`${base}/programs/${program.id}/confirm`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ generation: program.generation, planRevision: program.planRevision, operationId: "fallback-confirm" }),
+  });
+  assert.equal(confirm.status, 502);
+  const confirmPayload = await json(confirm);
+  assert.match(confirmPayload.error, /口播 break-04 撰稿没有返回有效结果/);
+  assert.doesNotMatch(confirmPayload.error, /upstream detail/);
+  const persisted = (await json(await fetch(`${base}/program`, { headers }))).program;
   assert.equal(persisted.id, program.id);
   assert.deepEqual(persisted.rundown.map((item: { id: string }) => item.id), program.rundown.map((item: { id: string }) => item.id));
 });
@@ -2939,6 +2984,7 @@ test("NetEase validation routes expose provider results without leaking credenti
 test("NetEase programs create a temporary playlist per run, unless the listener keeps it", async (context) => {
   const playlistCreates: string[] = [];
   const playlistAdds: Array<{ playlistId: string; trackIds: string[] }> = [];
+  const playlistReorders: Array<{ playlistId: string; trackIds: string[] }> = [];
   const playlistDeletes: string[] = [];
   const likedMutations: Array<{ id: string; liked: boolean }> = [];
   const storedPlaylistTracks = new Map<string, string[]>();
@@ -2949,7 +2995,7 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   let playlistNamingCalls = 0;
   let blockAccountRead = false;
   let accountReadStarted: (() => void) | null = null;
-  const songs = Array.from({ length: 10 }, (_, index) => ({
+  const songs = Array.from({ length: 16 }, (_, index) => ({
     id: String(200 + index),
     title: `画像候选 ${index + 1}`,
     artists: [{ id: String(500 + index), name: `艺术家 ${index + 1}` }],
@@ -2973,7 +3019,7 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
     songDetail(ids: string[]) { return songs.filter((song) => ids.includes(song.id)); },
     recentSongs() { return songs.slice(0, 2).map((song) => ({ song })); },
     listeningHistory() { return songs.slice(1, 4).map((song) => ({ song })); },
-    dailyRecommendations() { return songs.slice(2, 7); },
+    dailyRecommendations() { return songs.slice(2); },
     personalFm() { return songs.slice(1, 6); },
     search() { return { songs, total: songs.length }; },
     searchPlaylists() {
@@ -2988,6 +3034,11 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
     },
     addSongsToPlaylist(playlistId: string, trackIds: string[]) {
       playlistAdds.push({ playlistId, trackIds: [...trackIds] });
+      storedPlaylistTracks.set(playlistId, [...trackIds].reverse());
+      return { playlistId, trackIds };
+    },
+    reorderPlaylistTracks(playlistId: string, trackIds: string[]) {
+      playlistReorders.push({ playlistId, trackIds: [...trackIds] });
       storedPlaylistTracks.set(playlistId, [...trackIds]);
       return { playlistId, trackIds };
     },
@@ -3064,7 +3115,8 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   assert.equal(first.planSummary.targetFamiliarityRatio, 20);
   assert.equal(first.planSummary.heardTracks, Math.round(first.planSummary.totalTracks * 0.2));
   assert.equal(first.planSummary.actualFamiliarityRatio, Math.round((first.planSummary.heardTracks / first.planSummary.totalTracks) * 100));
-  assert.ok(first.rundown.every((track: { hostMoment?: string; hostScript?: { text?: string } }) => !track.hostMoment || Boolean(track.hostScript?.text)));
+  assert.ok(first.rundown.every((track: { hostMoment?: string; hostScript?: unknown }) => !track.hostMoment && !track.hostScript));
+  assert.equal(hostCalls, 0, "draft creation must not generate host copy before confirmation");
   assert.equal(ttsCalls, 0, "draft creation must not synthesize speech before confirmation");
   assert.ok(first.listenerProfile.favoriteArtists.length > 0);
   const profilePath = join(SERVER_TEST_PROFILE_DIR, `netease-${createHash("sha256").update("netease:7").digest("hex").slice(0, 24)}.json`);
@@ -3075,10 +3127,12 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   assert.equal(invalidReorder.status, 400);
   const reordered = (await json(await post(`/programs/${first.id}/reorder`, { generation: first.generation, planRevision: 0, operationId: "plan-reorder", trackIds: [...originalIds].reverse() }))).program;
   assert.deepEqual(reordered.rundown.map((track: { id: string }) => track.id), [...originalIds].reverse());
-  assert.equal(ttsCalls, 0, "manual reorder must only rewrite copy before confirmation");
+  assert.equal(ttsCalls, 0, "manual reorder must not synthesize speech before confirmation");
+  assert.equal(hostCalls, 0, "manual reorder must not generate host copy before confirmation");
   const adjusted = (await json(await post(`/programs/${first.id}/adjust`, { generation: first.generation, planRevision: 1, operationId: "plan-adjust", message: "把顺序反过来" }))).program;
   assert.deepEqual(adjusted.rundown.map((track: { id: string }) => track.id), originalIds, "AI adjustment must reorder the current songs");
   assert.equal(ttsCalls, 0, "AI adjustment must not synthesize speech before confirmation");
+  assert.ok(adjusted.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
   const hostCallsAfterAdjustment = hostCalls;
   const adjustmentReplay = (await json(await post(`/programs/${first.id}/adjust`, { generation: first.generation, planRevision: 1, operationId: "plan-adjust", message: "把顺序反过来" }))).program;
   assert.equal(adjustmentReplay.planRevision, 2);
@@ -3089,9 +3143,30 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   assert.equal(replaced.rundown.length, adjustmentReplay.rundown.length);
   assert.notEqual(replaced.rundown[replacedIndex].id, replacedId);
   assert.deepEqual(replaced.rundown.filter((_: unknown, index: number) => index !== replacedIndex).map((track: { id: string }) => track.id), adjustmentReplay.rundown.filter((_: unknown, index: number) => index !== replacedIndex).map((track: { id: string }) => track.id));
-  assert.match(replaced.rundown.at(-1).hostScript.text, /最后一首|最后一曲|收官曲|收尾曲/);
-  const regenerated = (await json(await post(`/programs/${first.id}/regenerate`, { generation: first.generation, planRevision: 3, operationId: "plan-regenerate" }))).program;
+  assert.ok(replaced.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
+  assert.equal(replaced.canUndoPlan, true);
+  assert.equal(replaced.canRedoPlan, false);
+  const undone = (await json(await post(`/programs/${first.id}/undo`, { generation: first.generation, planRevision: 3, operationId: "plan-undo" }))).program;
+  assert.deepEqual(undone.rundown.map((track: { id: string }) => track.id), adjustmentReplay.rundown.map((track: { id: string }) => track.id));
+  assert.equal(undone.canUndoPlan, true);
+  assert.equal(undone.canRedoPlan, true);
+  const redone = (await json(await post(`/programs/${first.id}/redo`, { generation: first.generation, planRevision: 4, operationId: "plan-redo" }))).program;
+  assert.deepEqual(redone.rundown.map((track: { id: string }) => track.id), replaced.rundown.map((track: { id: string }) => track.id));
+  assert.equal(redone.canRedoPlan, false);
+  const beforeFullRecommendationIds = new Set(redone.rundown.map((track: { id: string }) => track.id));
+  const fullRecommendationResponse = await post(`/programs/${first.id}/regenerate`, { generation: first.generation, planRevision: 5, operationId: "plan-regenerate-all" });
+  const fullRecommendationPayload = await json(fullRecommendationResponse);
+  assert.equal(fullRecommendationResponse.status, 200, JSON.stringify(fullRecommendationPayload));
+  const fullyRecommended = fullRecommendationPayload.program;
+  assert.equal(fullyRecommended.rundown.length, redone.rundown.length);
+  assert.ok(fullyRecommended.rundown.every((track: { id: string }) => !beforeFullRecommendationIds.has(track.id)), "full recommendation must replace every current song");
+  const restoredBeforeBatch = (await json(await post(`/programs/${first.id}/undo`, { generation: first.generation, planRevision: 6, operationId: "plan-undo-full-recommendation" }))).program;
+  assert.deepEqual(restoredBeforeBatch.rundown.map((track: { id: string }) => track.id), redone.rundown.map((track: { id: string }) => track.id));
+  const selectedTrackIds = [restoredBeforeBatch.rundown[0].id, restoredBeforeBatch.rundown[2].id];
+  const regenerated = (await json(await post(`/programs/${first.id}/regenerate`, { generation: first.generation, planRevision: 7, operationId: "plan-regenerate", replaceTrackIds: selectedTrackIds }))).program;
   assert.equal(regenerated.rundown.length, replaced.rundown.length);
+  assert.ok(selectedTrackIds.every((id) => regenerated.rundown.every((track: { id: string }) => track.id !== id)), "batch replacement must remove every selected song");
+  assert.deepEqual(regenerated.rundown.filter((_: unknown, index: number) => ![0, 2].includes(index)).map((track: { id: string }) => track.id), restoredBeforeBatch.rundown.filter((_: unknown, index: number) => ![0, 2].includes(index)).map((track: { id: string }) => track.id), "batch replacement must preserve unselected songs in place");
   assert.ok(regenerated.rundown.every((track: { id: string }) => track.id !== replacedId), "recommendation refresh must not restore a track the listener deleted");
   const staleConfirm = await post(`/programs/${first.id}/confirm`, { generation: first.generation, planRevision: 1, operationId: "stale-plan-confirm" });
   assert.equal(staleConfirm.status, 409);
@@ -3105,22 +3180,31 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   blockAccountRead = true;
   const accountStarted = new Promise<void>((resolve) => { accountReadStarted = resolve; });
   const abortController = new AbortController();
-  const abortedConfirm = post(`/programs/${first.id}/confirm`, { generation: first.generation, planRevision: 4, operationId: "netease-confirm-aborted" }, abortController.signal);
+  const abortedConfirm = post(`/programs/${first.id}/confirm`, { generation: first.generation, planRevision: 8, operationId: "netease-confirm-aborted" }, abortController.signal);
   await accountStarted;
   abortController.abort();
   await assert.rejects(abortedConfirm, /abort/i);
   blockAccountRead = false;
   accountReadStarted = null;
   assert.equal(playlistCreates.length, 0);
-  const confirmedResponse = await post(`/programs/${first.id}/confirm`, { generation: first.generation, planRevision: 4, operationId: "netease-confirm-1" });
+  const confirmedResponse = await post(`/programs/${first.id}/confirm`, { generation: first.generation, planRevision: 8, operationId: "netease-confirm-1" });
   assert.equal(confirmedResponse.status, 200);
   const confirmed = (await json(confirmedResponse)).program;
   assert.equal(confirmed.status, "on_air");
+  assert.ok(confirmed.rundown.every((track: { hostMoment?: string; hostScript?: { text?: string } }) => !track.hostMoment || Boolean(track.hostScript?.text)));
   const confirmedProfile = JSON.parse(readFileSync(profilePath, "utf8"));
   assert.equal(confirmedProfile.playedTracks[0]?.id, confirmed.currentTrack.id, "the first track is recorded when playback starts");
   assert.equal(confirmed.playlist.status, "ready");
   assert.equal(confirmed.playlist.name, first.plannedPlaylistName);
   assert.equal(confirmed.playlist.trackCount, playlistAdds[0]?.trackIds.length);
+  const expectedPlaybackOrder = regenerated.rundown.map((track: { id: string }) => track.id);
+  assert.deepEqual(playlistAdds[0]?.trackIds, expectedPlaybackOrder, "playlist write must use the edited rundown order");
+  assert.deepEqual(playlistReorders[0]?.trackIds, expectedPlaybackOrder, "provider order drift must be repaired before playback");
+  assert.deepEqual([
+    confirmed.currentTrack?.id,
+    confirmed.nextTrack?.id,
+    ...confirmed.queue.map((track: { id: string }) => track.id),
+  ].filter(Boolean), expectedPlaybackOrder, "playback queue must preserve the edited rundown order");
   assert.match(confirmed.currentTrack.audioUrl, new RegExp(`/api/netease/audio/${first.id}/${confirmed.generation}/\\d+$`));
   assert.equal(new Set(confirmed.rundown.map((track: { artist: string }) => track.artist)).size, confirmed.rundown.length);
   assert.equal(desktopCalls, 0);
@@ -3156,7 +3240,7 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   if (preparedHostScripts.length >= 3 && preparedHostScripts.some((script: { plannedDurationSeconds: number }) => script.plannedDurationSeconds >= 20)) {
     assert.ok(new Set(preparedHostScripts.map((script: { plannedDurationSeconds: number }) => script.plannedDurationSeconds)).size > 1);
   }
-  assert.equal(hostCalls, hostCallsAfterPlanning);
+  assert.ok(hostCalls > hostCallsAfterPlanning, "confirmation must generate host copy for the frozen rundown");
   const missingPreviewGeneration = await post("/host/preview", { programId: first.id, trackId: confirmed.currentTrack.id });
   assert.equal(missingPreviewGeneration.status, 400);
   const futureHostTrack = confirmed.rundown.find((track: { id: string; hostScript?: unknown }) => track.id !== confirmed.currentTrack.id && track.hostScript);
@@ -3657,13 +3741,15 @@ test("QQ API programs read the private profile, lock the rundown, and play witho
   assert.equal(created.planSummary.targetFamiliarityRatio, 60);
   assert.equal(created.rundown.length, 5);
   assert.ok(created.listenerProfile.favoriteArtists.length > 0);
-  assert.ok(created.rundown.every((track: { hostMoment?: string; hostScript?: { text?: string } }) => !track.hostMoment || Boolean(track.hostScript?.text)));
-  assert.equal(hostCalls, created.rundown.filter((track: { hostMoment?: string }) => Boolean(track.hostMoment)).length);
+  assert.ok(created.rundown.every((track: { hostMoment?: string; hostScript?: unknown }) => !track.hostMoment && !track.hostScript));
+  assert.equal(hostCalls, 0);
 
   const confirmedResponse = await post(`/programs/${created.id}/confirm`, { generation: created.generation, operationId: "qq-api-confirm" });
   assert.equal(confirmedResponse.status, 200);
   const confirmed = (await json(confirmedResponse)).program;
   assert.equal(confirmed.status, "on_air");
+  assert.ok(confirmed.rundown.every((track: { hostMoment?: string; hostScript?: { text?: string } }) => !track.hostMoment || Boolean(track.hostScript?.text)));
+  assert.ok(hostCalls > 0);
   assert.equal(confirmed.playlist.provider, "qq_music");
   assert.equal(confirmed.playlist.status, "ready");
   assert.equal(confirmed.playlist.name, created.plannedPlaylistName);

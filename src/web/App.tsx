@@ -1,7 +1,9 @@
 import {
   Activity,
   AlertTriangle,
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
   Check,
   ChevronDown,
   Clock3,
@@ -13,7 +15,6 @@ import {
   Info,
   ListMusic,
   BookOpen,
-  Send,
   LoaderCircle,
   Mic2,
   Music2,
@@ -28,6 +29,7 @@ import {
   Square,
   TriangleAlert,
   Trash2,
+  Undo2,
   Upload,
   UserRound,
   Volume2,
@@ -113,12 +115,6 @@ interface ReportEvent {
   label: string;
   detail: string;
   tone?: "neutral" | "success" | "warning" | "error";
-}
-
-interface PlannerChatMessage {
-  id: string;
-  role: "assistant" | "user";
-  text: string;
 }
 
 interface PlanUpdateResult {
@@ -546,30 +542,18 @@ function confirmRetryMessage(error: unknown): string {
   const detail = raw && raw !== "确认状态未知。" && raw !== "未观察到确认结果"
     ? raw.replace(/[。；;\s]+$/, "")
     : "开播准备没有完成";
-  return `${detail}。歌曲和口播已保留，可以重新确认。`;
-}
-
-function readHostRetryPayload(payload: unknown): { required: boolean; message?: string } {
-  if (!payload || typeof payload !== "object") return { required: false };
-  const candidate = payload as { hostRetryRequired?: unknown; message?: unknown };
-  return {
-    required: candidate.hostRetryRequired === true,
-    ...(typeof candidate.message === "string" && candidate.message.trim() ? { message: candidate.message.trim() } : {}),
-  };
+  return `${detail}。歌单已保留，可以重新确认。`;
 }
 
 function isApiMusicSource(sourceId: SourceId | undefined): sourceId is ApiMusicSource {
   return sourceId === "qq_music" || sourceId === "netease_music";
 }
 
-function hasLockedMusicArtifacts(program: ProgramState) {
+function hasMusicPlanArtifacts(program: ProgramState) {
   const rundown = program.rundown ?? [];
-  const hostMoments = rundown.filter((track) => Boolean(track.hostMoment));
   return rundown.length > 0
     && Boolean(program.planSummary)
-    && Boolean(program.listenerProfile)
-    && hostMoments.length > 0
-    && hostMoments.every((track) => Boolean(track.hostScript?.text));
+    && Boolean(program.listenerProfile);
 }
 
 function viewForProgramStatus(status: ProgramState["status"]): View {
@@ -640,12 +624,10 @@ async function fetchProgramWithTimeout(programId: string, timeoutMs: number, par
   }
 }
 
-async function waitForConfirmedProgram(programId: string, signal: AbortSignal, deadlineMs = 15 * 60_000): Promise<ProgramState> {
-  const deadlineAt = Date.now() + deadlineMs;
-  while (!signal.aborted && Date.now() < deadlineAt) {
+async function waitForConfirmedProgram(programId: string, signal: AbortSignal): Promise<ProgramState> {
+  while (!signal.aborted) {
     try {
-      const remainingMs = Math.max(1, deadlineAt - Date.now());
-      const remote = await fetchProgramWithTimeout(programId, Math.min(5_000, remainingMs), signal);
+      const remote = await fetchProgramWithTimeout(programId, 5_000, signal);
       if (remote && !["draft", "awaiting_confirmation", "preparing"].includes(remote.status)) return remote;
     } catch (error) {
       if (signal.aborted) throw error;
@@ -665,7 +647,7 @@ async function waitForConfirmedProgram(programId: string, signal: AbortSignal, d
     });
   }
   if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-  throw new Error("开播准备超过 15 分钟，已停止等待并开始核对服务状态。");
+  throw new Error("开播准备已停止。");
 }
 
 function Tooltip({ children, text }: { children: ReactNode; text: string }) {
@@ -745,8 +727,6 @@ function App() {
   const [voicePreviewProfile, setVoicePreviewProfile] = useState<HostProfileId | null>(null);
   const [processComplete, setProcessComplete] = useState(false);
   const [processCompletedSteps, setProcessCompletedSteps] = useState(0);
-  const [hostScriptRetryMessage, setHostScriptRetryMessage] = useState<string | null>(null);
-  const [hostScriptRetryPending, setHostScriptRetryPending] = useState(false);
   const setNotice = useCallback((message: string | null) => {
     if (!message) {
       setNoticeState(null);
@@ -799,7 +779,6 @@ function App() {
   const hostRetryTimerRef = useRef<number | null>(null);
   const heartbeatRequestRef = useRef<AbortController | null>(null);
   const programPollRequestRef = useRef<AbortController | null>(null);
-  const hostScriptRetryAttemptRef = useRef(0);
   const hostKeyRef = useRef<string | null>(null);
   const remainingSecondsRef = useRef(0);
   const activeDuckRef = useRef<{ sourceId: DesktopPlayerSource; operationId: string } | null>(null);
@@ -1666,13 +1645,6 @@ function App() {
         if (disposed || !remote || programRef.current || createOperationRef.current) return;
         if (landingEnteredRef.current && ["completed", "stopped", "failed", "control_lost", "stop_unconfirmed"].includes(remote.status)) return;
         setProgram({ ...remote, report: [] });
-        if (isApiMusicSource(remote.spec.sourceId) && !hasLockedMusicArtifacts(remote) && ["draft", "awaiting_confirmation"].includes(remote.status)) {
-          setProcessCompletedSteps(3);
-          setProcessComplete(false);
-          setHostScriptRetryMessage("口播生成尚未完成，歌曲和顺序已经保留。");
-          setView("generating");
-          return;
-        }
         setView(viewForProgramStatus(remote.status));
       } catch {
         // A missing service is represented by the explicit fixture path in the setup form.
@@ -2144,8 +2116,6 @@ function App() {
     setPlaylistSavePromptOpen(false);
     setProcessComplete(false);
     setProcessCompletedSteps(0);
-    hostScriptRetryAttemptRef.current = 0;
-    setHostScriptRetryMessage(null);
     setView("generating");
     setMusicPreferencesState(isApiMusicSource(selectedSource) ? "loading" : "idle");
     const spec = buildSpec();
@@ -2172,18 +2142,10 @@ function App() {
       const payload = await fetchJson<unknown>("/programs", { method: "POST", body: JSON.stringify({ spec, operationId }) });
       const remote = readProgramPayload(payload);
       if (!remote) throw new Error("服务返回了无效节目");
-      const hostRetry = readHostRetryPayload(payload);
-      const nextProgram: LocalProgram = { ...remote, report: [{ id: makeId("event"), at: nowIso(), label: hostRetry.required ? "歌单已保留" : "计划已创建", detail: hostRetry.required ? "主持口播需要重新生成一次；歌曲和顺序不会变化。" : "确认前不会发送任何播放指令。", tone: hostRetry.required ? "warning" : "success" }] };
+      const nextProgram: LocalProgram = { ...remote, report: [{ id: makeId("event"), at: nowIso(), label: "计划已创建", detail: "确认前不会生成口播或发送播放指令。", tone: "success" }] };
       programRef.current = nextProgram;
       setProgram(nextProgram);
       setMusicPreferencesState(isApiMusicSource(selectedSource) ? "ready" : "idle");
-      if (hostRetry.required) {
-        setProcessCompletedSteps(3);
-        setProcessComplete(false);
-        setHostScriptRetryMessage(hostRetry.message ?? "口播生成未完成，歌单已保留。请单独重新生成口播。");
-        setView("generating");
-        return;
-      }
       createOperationRef.current = null;
       setProcessCompletedSteps(4);
       setProcessComplete(true);
@@ -2197,13 +2159,6 @@ function App() {
           programRef.current = nextProgram;
           setProgram(nextProgram);
           setMusicPreferencesState(isApiMusicSource(selectedSource) ? "ready" : "idle");
-          if (isApiMusicSource(current.spec.sourceId) && !hasLockedMusicArtifacts(current)) {
-            setProcessCompletedSteps(3);
-            setProcessComplete(false);
-            setHostScriptRetryMessage("口播生成未完成，歌单已保留。请单独重新生成口播。");
-            setView("generating");
-            return;
-          }
           createOperationRef.current = null;
           setProcessCompletedSteps(4);
           setProcessComplete(true);
@@ -2224,73 +2179,18 @@ function App() {
     }
   };
 
-  const regenerateHostScripts = async () => {
-    if (!program || hostScriptRetryPending) return;
-    hostScriptRetryAttemptRef.current += 1;
-    const baseRevision = program.planRevision ?? 0;
-    setHostScriptRetryPending(true);
-    setLastError(null);
-    setNotice(null);
-    setProcessComplete(false);
-    setProcessCompletedSteps(3);
-    setView("generating");
-    try {
-      const payload = await fetchJson<unknown>(`/programs/${program.id}/regenerate-host`, {
-        method: "POST",
-        body: JSON.stringify({
-          generation: program.generation,
-          planRevision: baseRevision,
-          operationId: makeId("host-script-retry"),
-        }),
-      });
-      const remote = readProgramPayload(payload);
-      if (!remote) throw new Error("服务没有返回重写后的主持词。");
-      const hostMessage = payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string"
-        ? payload.message
-        : "主持口播已生成最终可播版本，歌单没有变化。";
-      const nextProgram: LocalProgram = {
-        ...remote,
-        report: [...program.report, { id: makeId("event"), at: nowIso(), label: "口播已生成", detail: hostMessage, tone: "success" }],
-      };
-      programRef.current = nextProgram;
-      setProgram(nextProgram);
-      createOperationRef.current = null;
-      hostScriptRetryAttemptRef.current = 0;
-      setHostScriptRetryMessage(null);
-      setProcessCompletedSteps(4);
-      setProcessComplete(true);
-      await new Promise((resolve) => window.setTimeout(resolve, 520));
-      setView(viewForProgramStatus(remote.status));
-    } catch (error) {
-      setProcessCompletedSteps(3);
-      setProcessComplete(false);
-      setHostScriptRetryMessage(error instanceof Error
-        ? `${error.message} 歌曲和顺序已经保留。`
-        : "口播生成没有完成，歌曲和顺序已经保留。");
-      setView("generating");
-    } finally {
-      setHostScriptRetryPending(false);
-    }
-  };
-
-  useEffect(() => {
-    if (view !== "generating" || !program || !hostScriptRetryMessage || hostScriptRetryPending) return;
-    const retryDelayMs = Math.min(1_000 * (2 ** Math.min(hostScriptRetryAttemptRef.current, 3)), 8_000);
-    const timer = window.setTimeout(() => void regenerateHostScripts(), retryDelayMs);
-    return () => window.clearTimeout(timer);
-  }, [hostScriptRetryMessage, hostScriptRetryPending, program?.id, program?.planRevision, view]);
-
   const handleConfirm = async (keepPlaylistForRun = keepPlaylist) => {
     if (!program || isConfirming || planUpdating) return;
     const diagnostic = sources.find((source) => source.sourceId === program.spec.sourceId);
     const player = program.spec.sourceId === "qq_music" ? desktopPlayers.qq_music : undefined;
     const playerControllable = player?.appRunning === true && !["automation_denied", "screen_locked", "failed", "app_not_running"].includes(player.state ?? "");
     const apiMusic = isApiMusicSource(program.spec.sourceId);
-    const lockedArtifactsReady = apiMusic && hasLockedMusicArtifacts(program);
+    const planArtifactsReady = apiMusic && hasMusicPlanArtifacts(program);
     const readyToConfirm = Boolean(
-      (apiMusic ? lockedArtifactsReady : diagnostic?.playbackReady && diagnostic.hostedProgramAllowed)
+      (apiMusic ? planArtifactsReady : diagnostic?.playbackReady && diagnostic.hostedProgramAllowed)
       && health.ok
-      && (apiMusic || (health.providers?.host?.configured && ["ready", "configured_unverified"].includes(health.providers.host.state ?? "")))
+      && (health.providers?.host?.configured && ["ready", "configured_unverified"].includes(health.providers.host.state ?? ""))
+      && (apiMusic ? invitationAccess?.connected === true : health.providers?.tts?.configured)
       && (apiMusic ? musicApiStatus[program.spec.sourceId as ApiMusicSource]?.authenticated === true : playerControllable),
     );
     if (!program.localOnly && !readyToConfirm) {
@@ -2392,7 +2292,7 @@ function App() {
     void handleConfirm(shouldKeepPlaylist);
   };
 
-  const updatePlan = async (action: "reorder" | "regenerate" | "adjust" | "replace", payload: Record<string, unknown> = {}) => {
+  const updatePlan = async (action: "reorder" | "regenerate" | "replace" | "undo", payload: Record<string, unknown> = {}) => {
     if (!program || planUpdating) return { ok: false, message: "节目单正在处理上一条要求，请稍后再试。" } satisfies PlanUpdateResult;
     const baseRevision = program.planRevision ?? 0;
     const operationId = makeId(`plan-${action}`);
@@ -2723,12 +2623,12 @@ function App() {
       onNotice={setNotice}
       onError={setLastError}
     />;
-    if (view === "generating") return <ProcessView mode="generating" complete={processComplete} completedSteps={processCompletedSteps} hostRetryMessage={hostScriptRetryMessage} hostRetryPending={hostScriptRetryPending} />;
+    if (view === "generating") return <ProcessView mode="generating" complete={processComplete} completedSteps={processCompletedSteps} />;
     if (view === "preparing") return <ProcessView mode="preparing" complete={processComplete} />;
     if (view === "confirm" && program) {
       const diagnostic = sources.find((source) => source.sourceId === program.spec.sourceId);
       const apiMusic = isApiMusicSource(program.spec.sourceId);
-      const lockedArtifactsReady = apiMusic && hasLockedMusicArtifacts(program);
+      const planArtifactsReady = apiMusic && hasMusicPlanArtifacts(program);
       const checks = {
         source: apiMusic
           ? Boolean((program.rundown?.length ?? 0) > 0 && program.planSummary)
@@ -2736,11 +2636,23 @@ function App() {
         player: apiMusic ? musicApiStatus[program.spec.sourceId as ApiMusicSource]?.authenticated === true : true,
         service: health.ok,
         host: apiMusic
-          ? lockedArtifactsReady
+          ? Boolean(planArtifactsReady && health.providers?.host?.configured && ["ready", "configured_unverified"].includes(health.providers.host.state ?? ""))
           : Boolean(health.providers?.host?.configured && ["ready", "configured_unverified"].includes(health.providers.host.state ?? "")),
         tts: apiMusic ? invitationAccess?.connected === true : Boolean(health.providers?.tts?.configured),
       };
-      return <ConfirmView program={program} checks={checks} onExit={() => void handleExitProgram()} onConfirm={requestProgramConfirmation} confirming={isConfirming} exiting={isStopping} updating={planUpdating} onReplace={(trackId) => updatePlan("replace", { trackId })} onAdjust={(message, conversation) => updatePlan("adjust", { message, conversation })} onRegenerate={() => updatePlan("regenerate")} />;
+      return <ConfirmView
+        program={program}
+        checks={checks}
+        onExit={() => void handleExitProgram()}
+        onConfirm={requestProgramConfirmation}
+        confirming={isConfirming}
+        exiting={isStopping}
+        updating={planUpdating}
+        onReplace={(trackId) => updatePlan("replace", { trackId })}
+        onRegenerate={(replaceTrackIds) => updatePlan("regenerate", replaceTrackIds ? { replaceTrackIds } : {})}
+        onReorder={(trackIds) => updatePlan("reorder", { trackIds })}
+        onUndo={() => updatePlan("undo")}
+      />;
     }
     if ((view === "on_air" || view === "ended") && program) {
       return (
@@ -2919,7 +2831,7 @@ function App() {
         />
       )}
       <audio
-        key="meyda-audio-graph-v1"
+        key="meyda-audio-graph-v2"
         ref={musicAudioRef}
         onPlay={(event) => {
           if (enforcePlaybackDeadline()) setAudioPlaying(true);
@@ -3440,23 +3352,19 @@ function ProcessView({
   mode,
   complete = false,
   completedSteps = 0,
-  hostRetryMessage = null,
-  hostRetryPending = false,
 }: {
   mode: "generating" | "preparing";
   complete?: boolean;
   completedSteps?: number;
-  hostRetryMessage?: string | null;
-  hostRetryPending?: boolean;
 }) {
   const steps = mode === "generating"
-    ? ["读取账号听歌画像", "筛选可播放候选", "排定熟悉与探索比例", "生成、审核并锁定主持词"]
-    : ["合成全部主持语音", "整理本次播放队列", "核对歌曲与播放顺序", "校验第一首播放信号"];
+    ? ["读取账号听歌画像", "筛选可播放候选", "排定熟悉与探索比例", "锁定节目单"]
+    : ["锁定最终节目单", "准备节目内容", "整理播放队列", "校验首曲信号"];
   const taskLabel = mode === "generating" ? "PLAN ENGINE" : "ON AIR PREP";
   const confirmedSteps = complete ? steps.length : Math.max(0, Math.min(steps.length, completedSteps));
   const progress = Math.round(confirmedSteps / steps.length * 100);
   const activeStep = confirmedSteps < steps.length ? steps[confirmedSteps] : null;
-  const currentStatus = hostRetryMessage ? (hostRetryPending ? "正在自动重试口播" : "正在准备自动重试") : complete ? "完整结果已返回" : activeStep ? `正在${activeStep}` : "正在启动任务";
+  const currentStatus = complete ? "完整结果已返回" : activeStep ? `正在${activeStep}` : "正在启动任务";
   return <section className="process-view" role="status" aria-live="polite">
     <div className="process-signal">
       <div className={`process-orbit${complete ? " is-complete" : ""}`} style={{ "--process-progress": `${progress}%` } as CSSProperties} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} aria-label={`处理进度 ${progress}%`}>
@@ -3469,11 +3377,8 @@ function ProcessView({
     <div className="process-copy">
       <div className="process-terminal"><span>OPEN MUSIC RADIO / {taskLabel}</span><strong>{progress}%</strong></div>
       <h2>{mode === "generating" ? "正在生成节目计划" : "正在完成开播准备"}</h2>
-      <p>{mode === "generating" ? "这里只生成节目单和主持文案，不会改动你的音乐平台。" : "全部语音、播放队列和首曲信号就绪后，节目会自动开始播放。"}</p>
-      <div className="process-current"><Activity size={16} aria-hidden="true" /><span><strong>{currentStatus}</strong><small>{hostRetryMessage ? "歌单和顺序已经保留，只会重新生成主持人口播。" : complete ? "本次任务已校验。" : "每个阶段完成后会立即更新，达到 100% 后进入节目计划。"}</small></span></div>
-      {hostRetryMessage && <div className="process-retry-compact">
-        <span>{hostRetryPending ? "模型正在逐条生成并审核口播。" : `${hostRetryMessage} 系统将自动继续。`}</span>
-      </div>}
+      <p>{mode === "generating" ? "这里只生成可调整的节目单，不会改动你的音乐平台。" : "节目内容和播放队列就绪后，会自动开始播放。"}</p>
+      <div className="process-current"><Activity size={16} aria-hidden="true" /><span><strong>{currentStatus}</strong><small>{complete ? "本次任务已校验。" : "每个阶段完成后会立即更新。"}</small></span></div>
       <div className="process-meter process-meter-live" aria-hidden="true"><span style={{ width: `${progress}%` }} /></div>
       <div className="process-queue-heading"><span>PROCESS QUEUE</span><small>{steps.length} ITEMS</small></div>
       <ol>{steps.map((step, index) => {
@@ -3793,62 +3698,117 @@ function SourceGlyph({ sourceId }: { sourceId: SourceId }) {
   return <Music2 size={17} aria-hidden="true" />;
 }
 
-function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, updating, onReplace, onAdjust, onRegenerate }: { program: LocalProgram; checks: { source: boolean; player: boolean; service: boolean; host: boolean; tts: boolean }; onExit: () => void; onConfirm: () => void; confirming: boolean; exiting: boolean; updating: boolean; onReplace: (trackId: string) => Promise<PlanUpdateResult>; onAdjust: (message: string, conversation: Array<{ role: "user" | "assistant"; text: string }>) => Promise<PlanUpdateResult>; onRegenerate: () => Promise<PlanUpdateResult> }) {
+type PlanEditorMode = "browse" | "batch" | "order";
+function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, updating, onReplace, onRegenerate, onReorder, onUndo }: {
+  program: LocalProgram;
+  checks: { source: boolean; player: boolean; service: boolean; host: boolean; tts: boolean };
+  onExit: () => void;
+  onConfirm: () => void;
+  confirming: boolean;
+  exiting: boolean;
+  updating: boolean;
+  onReplace: (trackId: string) => Promise<PlanUpdateResult>;
+  onRegenerate: (replaceTrackIds?: string[]) => Promise<PlanUpdateResult>;
+  onReorder: (trackIds: string[]) => Promise<PlanUpdateResult>;
+  onUndo: () => Promise<PlanUpdateResult>;
+}) {
   const apiMusic = isApiMusicSource(program.spec.sourceId);
   const rundown = program.rundown ?? [];
-  const hostMoments = rundown.filter((track) => Boolean(track.hostMoment));
-  const allScriptsLocked = hostMoments.length > 0 && hostMoments.every((track) => Boolean(track.hostScript?.text));
   const selectedHost = HOST_PROFILES[program.spec.hostProfile ?? DEFAULT_HOST_PROFILE];
   const density = HOST_DENSITY_OPTIONS.find((option) => option.value === program.spec.hostDensity);
   const familiarity = FAMILIARITY_OPTIONS.find((option) => option.value === program.spec.familiarityRatio);
   const genreLabels = (program.spec.musicGenres ?? []).map((genreId) => MUSIC_GENRES[genreId].label);
-  const [chat, setChat] = useState("");
   const [replacingTrackId, setReplacingTrackId] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
-  const [messages, setMessages] = useState<PlannerChatMessage[]>([
-    { id: "planner-welcome", role: "assistant", text: "我会先判断你的要求能否在当前节目单完成。可以按语种、风格或歌手调整；节目时长、音源和主持人需要退出后重新设置。" },
-  ]);
-  const chatLogRef = useRef<HTMLDivElement | null>(null);
-  const canConfirm = checks.source && checks.player && checks.service && checks.host && checks.tts && (!apiMusic || (rundown.length > 0 && allScriptsLocked && Boolean(program.listenerProfile)));
-  useEffect(() => {
-    const log = chatLogRef.current;
-    if (log) log.scrollTop = log.scrollHeight;
-  }, [messages, updating]);
-  const appendMessage = (role: PlannerChatMessage["role"], text: string) => {
-    setMessages((current) => [...current, { id: makeId(`planner-${role}`), role, text }]);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [editorMode, setEditorMode] = useState<PlanEditorMode>("browse");
+  const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(() => new Set());
+  const [draftOrder, setDraftOrder] = useState<string[]>(() => rundown.map((track) => track.id));
+  const baselineIds = useRef(rundown.map((track) => track.id));
+  const totalSeconds = rundown.reduce((total, track) => total + track.durationSeconds, 0);
+  const modifiedCount = Math.max(baselineIds.current.length, rundown.length)
+    ? Array.from({ length: Math.max(baselineIds.current.length, rundown.length) }, (_, index) => baselineIds.current[index] !== rundown[index]?.id).filter(Boolean).length
+    : 0;
+  const selectedIds = [...selectedTrackIds].filter((id) => rundown.some((track) => track.id === id));
+  const displayRundown = editorMode === "order"
+    ? draftOrder.map((id) => rundown.find((track) => track.id === id)).filter((track): track is ProgramRundownItem => Boolean(track))
+    : rundown;
+  const hasPendingOrder = editorMode === "order" && draftOrder.some((id, index) => id !== rundown[index]?.id);
+  const canConfirm = checks.source && checks.player && checks.service && checks.host && checks.tts && (!apiMusic || (rundown.length > 0 && Boolean(program.listenerProfile)));
+  const selectMode = (mode: PlanEditorMode) => {
+    if (updating) return;
+    if (mode === "order") setDraftOrder(rundown.map((track) => track.id));
+    if (mode === "batch") setSelectedTrackIds(new Set());
+    setEditorMode(mode);
+    setActionMessage(null);
+  };
+  const toggleTrackSelection = (trackId: string) => {
+    setSelectedTrackIds((current) => {
+      const next = new Set(current);
+      if (next.has(trackId)) next.delete(trackId); else next.add(trackId);
+      return next;
+    });
   };
   const replaceTrack = async (track: ProgramRundownItem) => {
     if (updating) return;
     setReplacingTrackId(track.id);
-    appendMessage("user", `删除《${track.title}》并原位补一首。`);
+    setActionMessage(null);
     const result = await onReplace(track.id);
-    appendMessage("assistant", result.ok ? `《${track.title}》已删除。新歌已补入第 ${rundown.findIndex((item) => item.id === track.id) + 1} 位，相关口播也已重写。` : result.message);
+    setActionMessage(result.ok ? `已替换第 ${rundown.findIndex((item) => item.id === track.id) + 1} 首，原有位置不变。` : result.message);
     setReplacingTrackId(null);
-  };
-  const submitAdjustment = async () => {
-    const message = chat.trim();
-    if (!message || updating) return;
-    const conversation = [...messages, { id: "pending-user", role: "user" as const, text: message }]
-      .slice(-8)
-      .map(({ role, text }) => ({ role, text }));
-    appendMessage("user", message);
-    setChat("");
-    const result = await onAdjust(message, conversation);
-    appendMessage("assistant", result.message);
   };
   const regeneratePlan = async () => {
     if (updating) return;
     setRegenerating(true);
-    appendMessage("user", "换一组歌曲推荐。");
+    setActionMessage(null);
     const result = await onRegenerate();
-    appendMessage("assistant", result.ok ? "已经重新推荐并生成节目单，你可以继续调整顺序或删除单曲。" : result.message);
+    setActionMessage(result.message);
     setRegenerating(false);
+  };
+  const replaceSelectedTracks = async () => {
+    if (updating) return;
+    if (selectedIds.length === 0) {
+      setActionMessage("请先选择要替换的歌曲。");
+      return;
+    }
+    setActionMessage(null);
+    const selectedCount = selectedIds.length;
+    const result = await onRegenerate(selectedIds);
+    setActionMessage(result.ok ? `已替换所选 ${selectedCount} 首歌曲。` : result.message);
+    if (result.ok) {
+      setSelectedTrackIds(new Set());
+      setEditorMode("browse");
+    }
+  };
+  const moveTrack = (index: number, direction: -1 | 1) => {
+    const destination = index + direction;
+    if (destination < 0 || destination >= draftOrder.length) return;
+    setDraftOrder((current) => {
+      const next = [...current];
+      [next[index], next[destination]] = [next[destination]!, next[index]!];
+      return next;
+    });
+  };
+  const saveOrder = async () => {
+    if (updating || draftOrder.every((id, index) => id === rundown[index]?.id)) {
+      setEditorMode("browse");
+      return;
+    }
+    const result = await onReorder(draftOrder);
+    setActionMessage(result.message);
+    if (result.ok) setEditorMode("browse");
+  };
+  const undoLastChange = async () => {
+    setActionMessage(null);
+    const result = await onUndo();
+    setActionMessage(result.message);
+    if (result.ok) setEditorMode("browse");
   };
   return (
     <div className="confirm-view">
-      <div className="confirm-topbar"><p className="eyebrow">确认计划</p><button className="secondary-button" type="button" onClick={onExit} disabled={exiting || confirming || updating}>{exiting ? <LoaderCircle size={15} className="spin" /> : <RotateCcw size={15} />}{exiting ? "退出中" : "退出节目"}</button></div>
+      <div className="confirm-topbar"><p className="eyebrow">确认计划</p><div className="confirm-topbar-actions"><button className="secondary-button" type="button" onClick={onExit} disabled={exiting || confirming || updating}>{exiting ? <LoaderCircle size={15} className="spin" /> : <RotateCcw size={15} />}{exiting ? "退出中" : "退出节目"}</button></div></div>
       <section className="program-spec-summary" aria-labelledby="program-spec-summary-title">
-        <div className="program-spec-summary-heading"><p className="eyebrow" id="program-spec-summary-title">本次电台参数</p><span>{rundown.length} 首歌曲 · {hostMoments.length} 段口播</span></div>
+        <div className="program-spec-summary-heading"><p className="eyebrow" id="program-spec-summary-title">本次电台参数</p><span>{rundown.length} 首歌曲 · 约 {formatTrackDuration(totalSeconds)}</span></div>
         <dl className="program-spec-list">
           <div><dt>音源与时长</dt><dd>{SOURCE_SHORT_LABELS[program.spec.sourceId]} · {program.spec.durationMinutes} 分钟</dd></div>
           <div><dt>推荐方式</dt><dd>{programRecommendationLabel(program.spec)}</dd></div>
@@ -3859,51 +3819,46 @@ function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, 
         </dl>
       </section>
       {apiMusic && (
-        <div className="plan-editor-grid">
+        <div className="plan-editor-grid plan-editor-grid-solo">
           <section className="program-outline" aria-label="节目单">
             <div className="outline-heading">
-              <div><p className="eyebrow outline-channel-label"><ListMusic size={13} />节目单 <span>CH-A</span></p><h3>{rundown.length} 首歌曲 · 可替换歌曲</h3><p className="outline-playlist-name"><span>本次歌单</span>{program.playlist?.name ?? program.plannedPlaylistName ?? "等待生成名称"}</p></div>
-              <div className="outline-heading-actions">
-                <span className="outline-console-status"><i />EDIT READY</span>
-                <span className="outline-lock-note"><Check size={13} />删除后原位补歌</span>
-                <IconButton label="重新生成歌曲推荐" disabled={updating} onClick={() => void regeneratePlan()}>
-                  {regenerating ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}
-                </IconButton>
-              </div>
+              <div><p className="eyebrow outline-channel-label"><ListMusic size={13} />节目单 <span>CH-A</span></p><h3>{program.playlist?.name ?? program.plannedPlaylistName ?? "本次节目单"}</h3><p className="outline-playlist-name"><span>{rundown.length} 首歌曲</span>约 {formatTrackDuration(totalSeconds)} · 已修改 {modifiedCount} 首</p></div>
+              <span className="outline-console-status"><i />EDIT READY</span>
             </div>
-            <ol>{rundown.map((track, index) => (
-              <li key={track.id} className="outline-item">
+            <div className="plan-editor-toolbar" aria-label="节目单编辑工具">
+              <div className="plan-editor-tabs" role="tablist" aria-label="编辑方式">
+                <button type="button" role="tab" aria-selected={editorMode === "browse"} className={editorMode === "browse" ? "selected" : ""} onClick={() => selectMode("browse")}>浏览</button>
+                <button type="button" role="tab" aria-selected={editorMode === "batch"} className={editorMode === "batch" ? "selected" : ""} onClick={() => selectMode("batch")}>批量调整</button>
+                <button type="button" role="tab" aria-selected={editorMode === "order"} className={editorMode === "order" ? "selected" : ""} onClick={() => selectMode("order")}>调整顺序</button>
+              </div>
+              <button className="secondary-button plan-refresh-button" type="button" disabled={updating} onClick={() => void regeneratePlan()}>{regenerating ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}重新推荐</button>
+            </div>
+            {editorMode === "batch" && <div className="batch-adjust-panel">
+              <p><strong>已选择 {selectedIds.length} 首歌曲</strong></p>
+              <div className="batch-selection-actions">
+                <button className="text-button" type="button" disabled={updating || selectedIds.length === rundown.length} onClick={() => setSelectedTrackIds(new Set(rundown.map((track) => track.id)))}>全选</button>
+                <button className="text-button" type="button" disabled={updating || selectedIds.length === 0} onClick={() => setSelectedTrackIds(new Set())}>清空</button>
+                <button className="primary-button" type="button" disabled={updating || selectedIds.length === 0} onClick={() => void replaceSelectedTracks()}>{updating ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}替换所选{selectedIds.length > 0 ? `（${selectedIds.length}）` : ""}</button>
+              </div>
+            </div>}
+            {editorMode === "order" && <div className="order-edit-banner"><span>使用每首歌右侧的箭头调整位置。</span><div><button className="text-button" type="button" onClick={() => selectMode("browse")} disabled={updating}>取消</button><button className="secondary-button" type="button" onClick={() => void saveOrder()} disabled={updating}><Check size={15} />保存顺序</button></div></div>}
+            <ol>{displayRundown.map((track, index) => (
+              <li key={track.id} className={`outline-item ${editorMode === "batch" && selectedTrackIds.has(track.id) ? "is-selected" : ""} ${replacingTrackId === track.id ? "is-replacing" : ""}`} aria-busy={replacingTrackId === track.id}>
                 <span className="outline-index-cell"><span className="outline-index">{String(index + 1).padStart(2, "0")}</span><span className={`outline-familiarity ${track.liked ? "is-familiar" : "is-discovery"}`}>{track.liked ? "熟悉" : "探索"}</span></span>
                 <TrackArtwork track={track} compact />
                 <div className="outline-track">
                   <div className="outline-track-heading">
                     <div><strong>{track.title}</strong><span className="outline-track-artist"><UserRound size={12} aria-hidden="true" />{track.artist}</span></div>
-                    <div className="outline-track-actions"><time>{Math.floor(track.durationSeconds / 60)}:{String(track.durationSeconds % 60).padStart(2, "0")}</time><IconButton label={`删除《${track.title}》并原位替换`} disabled={updating} onClick={() => void replaceTrack(track)}>
-                      {replacingTrackId === track.id ? <LoaderCircle size={14} className="spin" /> : <Trash2 size={14} />}
-                    </IconButton></div>
+                    <div className="outline-track-actions"><time>{Math.floor(track.durationSeconds / 60)}:{String(track.durationSeconds % 60).padStart(2, "0")}</time>{editorMode === "order" ? <div className="order-row-actions"><IconButton label={`将《${track.title}》上移`} disabled={updating || index === 0} onClick={() => moveTrack(index, -1)}><ArrowUp size={14} /></IconButton><IconButton label={`将《${track.title}》下移`} disabled={updating || index === displayRundown.length - 1} onClick={() => moveTrack(index, 1)}><ArrowDown size={14} /></IconButton></div> : editorMode === "batch" ? <label className="batch-track-selector"><input type="checkbox" aria-label={`选择《${track.title}》`} checked={selectedTrackIds.has(track.id)} disabled={updating} onChange={() => toggleTrackSelection(track.id)} /><span aria-hidden="true">选择</span></label> : <div className="track-edit-actions"><button className="track-action-button" type="button" disabled={updating} onClick={() => void replaceTrack(track)}>{replacingTrackId === track.id ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}{replacingTrackId === track.id ? "替换中" : "替换"}</button></div>}</div>
                   </div>
-                  {track.hostScript && <div className="outline-host-script"><span className="outline-host-mark"><Mic2 size={14} /></span><div><span>主持口播</span><p>{track.hostScript.text}</p></div></div>}
+                  {(track.album || track.releaseYear) && <p className="outline-track-meta">{track.album && !releaseTitlesMatch(track.title, track.album) ? track.album : ""}{track.album && track.releaseYear && !releaseTitlesMatch(track.title, track.album) ? " · " : ""}{track.releaseYear ? `${track.releaseYear} 年` : ""}</p>}
                 </div>
               </li>
             ))}</ol>
           </section>
-          <aside className="ai-adjust-panel ai-chat-panel">
-            <div className="ai-chat-identity"><span className="ai-host-avatar"><RadioHostAvatar profileId={selectedHost.id} portrait /></span><div className="ai-host-copy"><h3>{selectedHost.name}</h3><span><i />在线 · {selectedHost.trait}</span></div></div>
-            <div className="ai-chat-log" ref={chatLogRef} aria-live="polite">
-              {messages.map((message) => <div key={message.id} className={`ai-chat-message is-${message.role}`}>{message.role === "assistant" && <RadioHostAvatar profileId={selectedHost.id} portrait />}<div><span>{message.role === "assistant" ? selectedHost.name : "你"}</span><p>{message.text}</p></div></div>)}
-              {updating && <div className="ai-chat-message is-assistant is-working"><RadioHostAvatar profileId={selectedHost.id} portrait /><div><span>{selectedHost.name}</span><p><LoaderCircle size={13} className="spin" />正在理解并调整节目单...</p></div></div>}
-            </div>
-            <div className="ai-chat-compose">
-              <div className="ai-chat-input-shell">
-                <textarea rows={1} value={chat} onChange={(event) => setChat(event.target.value)} maxLength={600} placeholder={`告诉${selectedHost.name}你想怎样调整节目单`} disabled={updating} />
-                <div className="ai-chat-input-actions"><small>{chat.length}/600</small><IconButton label={`发送给${selectedHost.name}`} className="ai-chat-send" disabled={updating || !chat.trim()} onClick={() => void submitAdjustment()}>{updating ? <LoaderCircle size={15} className="spin" /> : <Send size={16} />}</IconButton></div>
-              </div>
-              <small>支持按语种、风格、歌手调整和明确的曲序变更；其他节目参数需退出后重新设置。</small>
-            </div>
-          </aside>
         </div>
       )}
-      <div className="confirm-actions"><p className={`confirm-commit-summary ${canConfirm ? "" : "is-blocked"}`}><Info size={14} />{canConfirm ? apiMusic ? "确认后会先询问是否保存本次歌单，然后准备主持语音并开播。" : "确认后才会控制音乐客户端并开始播放。" : "开播检查尚未通过，请检查音源、账号、本地服务与语音配置。"}</p><button className="primary-button primary-button-wide" type="button" onClick={onConfirm} disabled={confirming || exiting || updating || !canConfirm}>{confirming ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}{confirming ? "启动中" : updating ? "计划更新中" : "确认并启动"}</button></div>
+      <div className="confirm-actions"><div className="plan-history-actions"><button className="secondary-button" type="button" onClick={() => void undoLastChange()} disabled={updating || !program.canUndoPlan}><Undo2 size={15} />撤销</button></div><p className={`confirm-commit-summary ${canConfirm ? "" : "is-blocked"}`}><Info size={14} />{actionMessage ?? (hasPendingOrder ? "顺序尚未保存，保存后才能启动节目。" : canConfirm ? apiMusic ? `已修改 ${modifiedCount} 首；口播将在确认后生成。` : "确认后才会控制音乐客户端并开始播放。" : "开播检查尚未通过，请检查音源、账号、本地服务与语音配置。")}</p><button className="primary-button primary-button-wide" type="button" onClick={hasPendingOrder ? () => void saveOrder() : onConfirm} disabled={confirming || exiting || updating || !canConfirm}>{confirming ? <LoaderCircle size={16} className="spin" /> : hasPendingOrder ? <Check size={16} /> : <Play size={16} />}{confirming ? "正在生成口播" : updating ? "计划更新中" : hasPendingOrder ? "保存顺序" : "完成选歌并生成口播"}</button></div>
     </div>
   );
 }
@@ -4010,8 +3965,6 @@ function TrackArtwork({ track, fixture = false, compact = false, circular = fals
   );
 }
 
-let visualizerContext: AudioContext | null = null;
-const visualizerSources = new WeakMap<HTMLMediaElement, AudioNode>();
 type MeydaAnalyzerInstance = ReturnType<typeof Meyda.createMeydaAnalyzer>;
 interface VisualizerFeatures {
   amplitudeSpectrum: Float32Array;
@@ -4019,8 +3972,19 @@ interface VisualizerFeatures {
   loudness: number;
   rms: number;
 }
-const visualizerAnalyzers = new WeakMap<HTMLMediaElement, MeydaAnalyzerInstance>();
-const visualizerFeatures = new WeakMap<HTMLMediaElement, VisualizerFeatures>();
+interface VisualizerRuntime {
+  context: AudioContext | null;
+  sources: WeakMap<HTMLMediaElement, AudioNode>;
+  analyzers: WeakMap<HTMLMediaElement, MeydaAnalyzerInstance>;
+  features: WeakMap<HTMLMediaElement, VisualizerFeatures>;
+}
+const visualizerGlobal = globalThis as typeof globalThis & { __openMusicRadioVisualizerV2?: VisualizerRuntime };
+const visualizerRuntime = visualizerGlobal.__openMusicRadioVisualizerV2 ??= {
+  context: null,
+  sources: new WeakMap(),
+  analyzers: new WeakMap(),
+  features: new WeakMap(),
+};
 
 function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HTMLAudioElement | null>; active: boolean; label: string }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -4037,24 +4001,24 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
     let features: VisualizerFeatures | null = null;
     let drawCount = 0;
     if (audio && active) try {
-      visualizerContext ??= new AudioContext();
-      source = visualizerSources.get(audio) ?? null;
+      visualizerRuntime.context ??= new AudioContext();
+      source = visualizerRuntime.sources.get(audio) ?? null;
       if (!source) {
-        source = visualizerContext.createMediaElementSource(audio);
-        source.connect(visualizerContext.destination);
-        visualizerSources.set(audio, source);
+        source = visualizerRuntime.context.createMediaElementSource(audio);
+        source.connect(visualizerRuntime.context.destination);
+        visualizerRuntime.sources.set(audio, source);
       }
-      frequencyAnalyzer = visualizerContext.createAnalyser();
+      frequencyAnalyzer = visualizerRuntime.context.createAnalyser();
       frequencyAnalyzer.fftSize = 256;
       frequencyAnalyzer.smoothingTimeConstant = .68;
       source.connect(frequencyAnalyzer);
-      features = visualizerFeatures.get(audio) ?? { amplitudeSpectrum: new Float32Array(512), frames: 0, loudness: 0, rms: 0 };
-      visualizerFeatures.set(audio, features);
-      meydaAnalyzer = visualizerAnalyzers.get(audio) ?? null;
+      features = visualizerRuntime.features.get(audio) ?? { amplitudeSpectrum: new Float32Array(512), frames: 0, loudness: 0, rms: 0 };
+      visualizerRuntime.features.set(audio, features);
+      meydaAnalyzer = visualizerRuntime.analyzers.get(audio) ?? null;
       if (!meydaAnalyzer) {
         const featureTarget = features;
         meydaAnalyzer = Meyda.createMeydaAnalyzer({
-          audioContext: visualizerContext,
+          audioContext: visualizerRuntime.context,
           source,
           bufferSize: 1024,
           hopSize: 512,
@@ -4067,15 +4031,17 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
             if (nextFeatures.amplitudeSpectrum) featureTarget.amplitudeSpectrum = nextFeatures.amplitudeSpectrum;
           },
         });
-        visualizerAnalyzers.set(audio, meydaAnalyzer);
+        visualizerRuntime.analyzers.set(audio, meydaAnalyzer);
       }
       meydaAnalyzer.start();
       canvas.dataset.analyserMode = "meyda-media-element";
-      void visualizerContext.resume().catch(() => undefined);
-    } catch {
+      delete canvas.dataset.analyserError;
+      void visualizerRuntime.context.resume().catch(() => undefined);
+    } catch (error) {
       meydaAnalyzer = null;
       features = null;
       canvas.dataset.analyserMode = "fallback";
+      canvas.dataset.analyserError = error instanceof Error ? `${error.name}: ${error.message}` : "Unknown audio graph error";
     }
     const context = canvas.getContext("2d");
     const frequencyValues = new Uint8Array(frequencyAnalyzer?.frequencyBinCount ?? 0);

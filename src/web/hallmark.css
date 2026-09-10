@@ -10690,6 +10690,10 @@ button:disabled,
     align-items: stretch;
   }
 
+  .view-confirm .plan-editor-grid.plan-editor-grid-solo {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .view-confirm .plan-editor-grid .program-outline,
   .view-confirm .plan-editor-grid .ai-chat-panel {
     height: 100%;
@@ -10741,5 +10745,282 @@ button:disabled,
   .view-confirm .confirm-actions .primary-button {
     min-height: 2.75rem;
     height: 2.75rem;
+  }
+}
+
+.plan-editor-grid-solo {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.plan-editor-grid-solo .program-outline {
+  width: 100%;
+}
+
+.outline-track-meta {
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-neutral);
+  font-size: .7rem;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Confirmation editor: explicit, bounded playlist operations. */
+.confirm-topbar-actions,
+.plan-history-actions,
+.track-edit-actions,
+.order-row-actions,
+.order-edit-banner > div {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+}
+
+.confirm-topbar-actions {
+  margin-inline-start: auto;
+}
+
+.plan-editor-grid .program-outline {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.plan-editor-grid .program-outline:has(.batch-adjust-panel),
+.plan-editor-grid .program-outline:has(.order-edit-banner) {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.plan-editor-toolbar {
+  min-height: 3.35rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .45rem 1rem;
+  border-top: 1px solid var(--color-rule);
+  border-bottom: 1px solid var(--color-rule);
+  background: var(--color-paper-3);
+}
+
+.plan-editor-tabs {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-input);
+  overflow: hidden;
+}
+
+.plan-editor-tabs button {
+  min-height: 2.25rem;
+  padding: .45rem .8rem;
+  color: var(--color-ink-2);
+  border: 0;
+  border-right: 1px solid var(--color-rule-2);
+  background: transparent;
+  font-size: .75rem;
+  font-weight: 700;
+}
+
+.plan-editor-tabs button:last-child {
+  border-right: 0;
+}
+
+.plan-editor-tabs button.selected {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.plan-refresh-button {
+  min-height: 2.25rem;
+  height: 2.25rem;
+  padding-inline: .75rem;
+  color: var(--color-accent);
+}
+
+.batch-adjust-panel,
+.order-edit-banner {
+  display: flex;
+  align-items: center;
+  gap: .85rem;
+  padding: .65rem 1rem;
+  border-bottom: 1px solid var(--color-rule);
+  background: color-mix(in oklch, var(--color-accent) 4%, var(--color-paper-2));
+}
+
+.batch-adjust-panel {
+  justify-content: space-between;
+}
+
+.batch-adjust-panel > p {
+  margin: 0;
+  color: var(--color-ink-2);
+  font-size: .75rem;
+}
+
+.batch-adjust-panel > p strong {
+  color: var(--color-ink);
+}
+
+.batch-selection-actions {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+}
+
+.batch-selection-actions .primary-button,
+.order-edit-banner .secondary-button {
+  min-height: 2.25rem;
+  height: 2.25rem;
+}
+
+.outline-item.is-selected {
+  background: color-mix(in oklch, var(--color-accent) 7%, transparent);
+}
+
+.plan-editor-grid .outline-item {
+  padding-inline: .75rem 1rem;
+  border-inline-start: .2rem solid transparent;
+}
+
+.outline-item.is-replacing {
+  border-inline-start-color: var(--color-accent);
+  background: color-mix(in oklch, var(--color-accent) 9%, var(--color-paper-2));
+}
+
+.outline-item.is-replacing .outline-index,
+.outline-item.is-replacing .outline-track-heading strong,
+.outline-item.is-replacing .track-action-button {
+  color: var(--color-accent);
+}
+
+.outline-item.is-replacing .track-action-button {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.batch-track-selector {
+  min-height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .35rem .55rem;
+  color: var(--color-ink-2);
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-input);
+  background: transparent;
+  font-size: .7rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.batch-track-selector:has(input:checked) {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.batch-track-selector input {
+  width: .9rem;
+  height: .9rem;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+.order-edit-banner {
+  justify-content: space-between;
+  color: var(--color-ink-2);
+  font-size: .75rem;
+}
+
+.track-action-button {
+  min-height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .3rem;
+  padding: .35rem .55rem;
+  color: var(--color-ink-2);
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-input);
+  background: transparent;
+  font-size: .7rem;
+  font-weight: 700;
+}
+
+.track-action-button:hover:not(:disabled) {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.order-row-actions .icon-button {
+  min-width: 2rem;
+  width: 2rem;
+  min-height: 2rem;
+  height: 2rem;
+}
+
+.plan-history-actions .secondary-button {
+  min-height: 2.4rem;
+  height: 2.4rem;
+  padding-inline: .65rem;
+}
+
+.confirm-actions .confirm-commit-summary {
+  min-width: 12rem;
+}
+
+@media (min-width: 64rem) {
+  .view-confirm .confirm-topbar-actions .secondary-button {
+    min-height: 2.45rem;
+    height: 2.45rem;
+  }
+}
+
+@media (max-width: 63.999rem) {
+  .batch-adjust-panel,
+  .batch-selection-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .batch-selection-actions {
+    width: 100%;
+  }
+}
+
+@media (max-width: 39.999rem) {
+  .confirm-topbar,
+  .plan-editor-toolbar,
+  .confirm-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .confirm-topbar-actions,
+  .plan-editor-tabs,
+  .plan-refresh-button,
+  .plan-history-actions {
+    width: 100%;
+  }
+
+  .confirm-topbar-actions > button,
+  .plan-editor-tabs > button,
+  .plan-history-actions > button {
+    flex: 1;
+  }
+
+  .outline-track-heading {
+    align-items: flex-start !important;
+    flex-direction: column;
+  }
+
+  .outline-track-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .plan-editor-grid .outline-item {
+    padding-inline: .55rem .7rem;
   }
 }
