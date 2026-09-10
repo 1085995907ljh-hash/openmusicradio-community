@@ -1,5 +1,5 @@
 import type { HostContextPack } from "../shared/contracts.js";
-import { hostCharacterBounds, middleHostBreakCount, normalizeSpokenEnglishCase, normalizeSpokenYearDigits } from "../core/host-script-planning.js";
+import { evenlySpacedHostBreakIndices, hostCharacterBounds, middleHostBreakCount, normalizeSpokenEnglishCase, normalizeSpokenYearDigits } from "../core/host-script-planning.js";
 import { getSceneConfig } from "../core/scenes.js";
 import { DEFAULT_HOST_PROFILE, HOST_PROFILES, hostOpeningIdentity, type HostProfileId } from "../shared/program-options.js";
 import {
@@ -40,6 +40,8 @@ const DEFAULT_MAX_TEXT_LENGTH = 600;
 const PROVIDER_NAME = "openai-compatible";
 const MUSIC_RESEARCH_TIMEOUT_MS = 20_000;
 const WHOLE_SHOW_STAGE_ATTEMPTS = 3;
+const PROVIDER_RETRY_BASE_DELAY_MS = 1_500;
+const PROVIDER_RETRY_MAX_DELAY_MS = 15_000;
 
 interface HostBreakPlacement {
   id: string;
@@ -253,31 +255,45 @@ export class OpenAICompatibleHostProvider implements HostProvider {
       }
       const mode = this.mode === "chat_completions" ? "chat_completions" : "responses";
       const runStage = async <T>(stage: string, operation: (attempt: number) => Promise<T>): Promise<T> => {
-        let lastError: ProviderError | undefined;
-        for (let attempt = 0; attempt < WHOLE_SHOW_STAGE_ATTEMPTS; attempt += 1) {
+        let structuredAttempt = 0;
+        let transportAttempt = 0;
+        while (true) {
           try {
-            return await operation(attempt);
+            return await operation(structuredAttempt);
           } catch (error) {
             const providerError = asProviderError(error);
-            lastError = providerError;
-            const canRetry = providerError.code !== "timeout"
-              && (providerError.retryable || providerError.code === "invalid_response")
-              && attempt + 1 < WHOLE_SHOW_STAGE_ATTEMPTS;
-            if (!canRetry) {
-              throw new ProviderError(providerErrorInfo(PROVIDER_NAME, providerError.code, `${stage}: ${providerError.message}`, {
-                status: providerError.status,
-                retryable: providerError.retryable,
-                retryAfterMs: providerError.retryAfterMs,
-              }), { cause: providerError });
+            if (options.signal?.aborted) throw providerError;
+            if (providerError.retryable) {
+              const retryDelay = providerError.retryAfterMs
+                ?? Math.min(PROVIDER_RETRY_MAX_DELAY_MS, PROVIDER_RETRY_BASE_DELAY_MS * 2 ** Math.min(transportAttempt, 4));
+              transportAttempt += 1;
+              await waitForProviderRetry(retryDelay, options.signal);
+              continue;
             }
+            if (providerError.code === "invalid_response" && structuredAttempt + 1 < WHOLE_SHOW_STAGE_ATTEMPTS) {
+              structuredAttempt += 1;
+              transportAttempt = 0;
+              continue;
+            }
+            throw new ProviderError(providerErrorInfo(PROVIDER_NAME, providerError.code, `${stage}: ${providerError.message}`, {
+              status: providerError.status,
+              retryable: providerError.retryable,
+              retryAfterMs: providerError.retryAfterMs,
+            }), { cause: providerError });
           }
         }
-        throw lastError ?? new ProviderError(providerErrorInfo(PROVIDER_NAME, "network_error", `${stage}: whole-show stage failed`, { retryable: true }));
       };
-      const placements = await runStage("口播布点", async (attempt) => {
-        const payload = await this.request(mode, withStructuredOutputRetry(buildHostShowPlacementPrompt(request), attempt), options.signal, false, 2_400, 0);
-        return parseHostShowPlacementPayload(payload, request);
-      });
+      let placements: HostBreakPlacement[];
+      try {
+        placements = await runStage("口播布点", async (attempt) => {
+          const payload = await this.request(mode, withStructuredOutputRetry(buildHostShowPlacementPrompt(request), attempt), options.signal, false, 2_400, 0);
+          return parseHostShowPlacementPayload(payload, request);
+        });
+      } catch (error) {
+        const providerError = asProviderError(error);
+        if (providerError.code !== "invalid_response") throw providerError;
+        placements = fallbackHostShowPlacements(request);
+      }
       const breaks: HostShowBreak[] = [];
       for (const placement of placements) {
         let hostBreak = await runStage(`口播 ${placement.id} 撰稿`, async (attempt) => {
@@ -481,7 +497,9 @@ export class OpenAICompatibleHostProvider implements HostProvider {
     }
     const businessFailure = findBusinessFailure(bodyResult.json);
     if (businessFailure) {
-      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "business_error", businessFailure.message, { retryable: false }));
+      const failureText = `${businessFailure.code ?? ""} ${businessFailure.message}`.toLowerCase();
+      const rateLimited = /rate[\s_-]*limit|too many requests|限流/.test(failureText);
+      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, rateLimited ? "rate_limited" : "business_error", businessFailure.message, { retryable: rateLimited }));
     }
     return bodyResult.json;
   }
@@ -493,6 +511,22 @@ function withStructuredOutputRetry(prompt: HostPrompt, attempt: number): HostPro
     ...prompt,
     system: `${prompt.system}\n\n上一轮输出未通过 JSON 契约。保留原任务，只返回一个完整、可解析且字段严格匹配示例的 JSON 对象，不要 Markdown、代码围栏或解释。`,
   };
+}
+
+function waitForProviderRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new ProviderError(providerErrorInfo(PROVIDER_NAME, "network_error", "provider request was cancelled", { retryable: false })));
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timer = setTimeout(finish, Math.max(0, Math.round(delayMs)));
+    const abort = () => {
+      clearTimeout(timer);
+      reject(new ProviderError(providerErrorInfo(PROVIDER_NAME, "network_error", "provider request was cancelled", { retryable: false })));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function isCredentialTransportSecure(baseUrl: string, allowInsecureHttp: boolean): boolean {
@@ -632,6 +666,19 @@ function buildHostShowPlacementPrompt(request: HostShowGenerationRequest): HostP
     ].join("\n\n"),
     user: JSON.stringify(safeHostShowRequest(request)),
   };
+}
+
+function fallbackHostShowPlacements(request: HostShowGenerationRequest): HostBreakPlacement[] {
+  return evenlySpacedHostBreakIndices(request.tracks.length, request.frequency).map((trackIndex, index, indices) => {
+    const type: HostBreakPlacement["type"] = index === 0 ? "opening" : index === indices.length - 1 ? "closing" : "middle";
+    return {
+      id: `break-${String(index + 1).padStart(2, "0")}`,
+      beforeTrackIndex: trackIndex + 1,
+      type,
+      targetSeconds: type === "opening" ? 18 : 10,
+      reason: "模型布点格式不可用，按节目频率均匀安排。",
+    };
+  });
 }
 
 function safeHostShowWritingContext(

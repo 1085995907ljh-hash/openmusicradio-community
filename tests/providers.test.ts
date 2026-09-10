@@ -629,12 +629,12 @@ test("single-track placement keeps one opening when DeepSeek also returns a dupl
   assert.match(JSON.stringify(bodies[0]), /不要再返回 closing/);
 });
 
-test("whole-show generation failure is explicit and never returns automatic fallback copy", async () => {
+test("whole-show non-retryable provider failure is explicit and never returns automatic fallback copy", async () => {
   const provider = new OpenAICompatibleHostProvider({
     apiKey: "unit-test-key",
     mode: "responses",
     timeoutMs: 0,
-    fetchImpl: async () => { throw new Error("upstream unavailable"); },
+    fetchImpl: async () => jsonResponse({ error: { message: "model unavailable" } }, 404),
   });
   const result = await provider.generateShow({
     scenePreset: "study",
@@ -653,6 +653,62 @@ test("whole-show generation failure is explicit and never returns automatic fall
   assert.equal(result.success, false);
   assert.equal(result.status, "failed");
   assert.deepEqual(result.breaks, []);
+});
+
+test("whole-show generation retries a relay rate-limit envelope until the stage succeeds", async () => {
+  let calls = 0;
+  const placement = { frequency: "low", placements: [{ id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 18, reason: "开场" }] };
+  const hostBreak = { id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 10, text: "下午好，先听音乐人一的《歌曲一》。", sourceIds: ["track:1:metadata"], deliveryInstruction: "自然。" };
+  const responses = [placement, { break: hostBreak }, approvedBreakReview];
+  const provider = new OpenAICompatibleHostProvider({
+    apiKey: "unit-test-key",
+    mode: "responses",
+    timeoutMs: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return jsonResponse({ error: { type: "rate_limit_error", message: "All accounts are rate-limited" } });
+      return jsonResponse({ output_text: JSON.stringify(responses.shift()) });
+    },
+  });
+
+  const result = await provider.generateShow({
+    scenePreset: "study",
+    frequency: "low",
+    openingGreeting: "下午好",
+    tracks: [{ trackIndex: 1, title: "歌曲一", artist: "音乐人一", exploration: true, allowedFacts: [{ id: "track:1:metadata", value: "歌曲《歌曲一》，艺术家是音乐人一。", source: "user" }] }],
+    skillInstruction: "整档撰稿契约",
+    reviewInstruction: "整档监制契约",
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(calls, 4);
+});
+
+test("whole-show generation falls back only for placement after repeated malformed plans", async () => {
+  let calls = 0;
+  const breaks = [
+    { id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 10, text: "下午好，先听音乐人一的《歌曲一》。", sourceIds: ["track:1:metadata"], deliveryInstruction: "自然。" },
+    { id: "break-02", beforeTrackIndex: 2, type: "middle", targetSeconds: 8, text: "接下来听音乐人二的《歌曲二》。", sourceIds: ["track:2:metadata"], deliveryInstruction: "自然。" },
+    { id: "break-03", beforeTrackIndex: 3, type: "closing", targetSeconds: 8, text: "最后一首是音乐人三的《歌曲三》。", sourceIds: ["track:3:metadata"], deliveryInstruction: "自然。" },
+  ];
+  const responses = breaks.flatMap((hostBreak) => [{ break: hostBreak }, approvedBreakReview]);
+  const provider = new OpenAICompatibleHostProvider({
+    apiKey: "unit-test-key",
+    mode: "responses",
+    timeoutMs: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls <= 3) return jsonResponse({ output_text: "not-json" });
+      return jsonResponse({ output_text: JSON.stringify(responses.shift()) });
+    },
+  });
+  const tracks = [1, 2, 3].map((id) => ({ trackIndex: id, title: `歌曲${id}`, artist: `音乐人${id}`, exploration: true, allowedFacts: [{ id: `track:${id}:metadata`, value: `歌曲《歌曲${id}》，艺术家是音乐人${id}。`, source: "user" as const }] }));
+
+  const result = await provider.generateShow({ scenePreset: "study", frequency: "low", openingGreeting: "下午好", tracks, skillInstruction: "整档撰稿契约", reviewInstruction: "整档监制契约" });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.breaks.map((hostBreak) => hostBreak.beforeTrackIndex), [1, 2, 3]);
+  assert.equal(calls, 9);
 });
 
 test("whole-show prompts bound profile and fact payloads", async () => {

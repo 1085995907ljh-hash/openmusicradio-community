@@ -3227,6 +3227,20 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       const result = isRecord(raw) ? raw : {};
       const breaks = Array.isArray(result.breaks) ? result.breaks.filter(isRecord) : [];
       if (result.success !== true || breaks.length === 0) {
+        if (isRecord(result.error)
+          && typeof result.error.code === "string"
+          && typeof result.error.message === "string"
+          && typeof result.error.provider === "string"
+          && typeof result.error.retryable === "boolean") {
+          throw hostProviderFailure(new ProviderError({
+            code: result.error.code as ProviderError["code"],
+            message: result.error.message,
+            provider: result.error.provider,
+            retryable: result.error.retryable,
+            ...(typeof result.error.status === "number" ? { status: result.error.status } : {}),
+            ...(typeof result.error.retryAfterMs === "number" ? { retryAfterMs: result.error.retryAfterMs } : {}),
+          }), "整档主持文案生成");
+        }
         const providerMessage = isRecord(result.error) && typeof result.error.message === "string" ? result.error.message : "";
         const failedStage = providerMessage.match(/^(口播布点|口播 break-\d+ (?:撰稿|第 \d+ 轮返修)|整档口播(?:第 \d+ 轮复审|审核))(?=:)/)?.[1];
         const detail = failedStage ? `${failedStage}没有返回有效结果` : "模型没有返回可用的最终稿";

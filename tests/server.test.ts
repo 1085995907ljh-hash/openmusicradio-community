@@ -2764,7 +2764,7 @@ test("program creation reports real completed stages before returning the previe
   assert.equal(hostCalls, 0);
 });
 
-test("producer failure after confirmation preserves the plan without synthesizing template host copy", async (context) => {
+test("producer rate limit after confirmation preserves the plan and exposes the real failure class", async (context) => {
   const songs = Array.from({ length: 8 }, (_, index) => ({
     id: String(9_900 + index),
     title: `备用歌曲 ${index + 1}`,
@@ -2782,7 +2782,7 @@ test("producer failure after confirmation preserves the plan without synthesizin
     hostProvider: {
       configured: true,
       state: "ready",
-      generateShow() { return { provider: "openai-compatible", configured: true, success: false, status: "failed", breaks: [], error: { code: "invalid_response", message: "口播 break-04 撰稿: upstream detail must stay private" } }; },
+      generateShow() { return { provider: "openai-compatible", configured: true, success: false, status: "failed", breaks: [], error: { code: "rate_limited", message: "upstream detail must stay private", provider: "openai-compatible", retryable: true } }; },
       generate() { return { provider: "openai-compatible", configured: true, success: false, status: "failed", text: "", factIds: [] }; },
     },
     ttsProvider: readyTtsProvider,
@@ -2806,9 +2806,9 @@ test("producer failure after confirmation preserves the plan without synthesizin
     headers,
     body: JSON.stringify({ generation: program.generation, planRevision: program.planRevision, operationId: "fallback-confirm" }),
   });
-  assert.equal(confirm.status, 502);
+  assert.equal(confirm.status, 429);
   const confirmPayload = await json(confirm);
-  assert.match(confirmPayload.error, /口播 break-04 撰稿没有返回有效结果/);
+  assert.match(confirmPayload.error, /模型服务当前限流/);
   assert.doesNotMatch(confirmPayload.error, /upstream detail/);
   const persisted = (await json(await fetch(`${base}/program`, { headers }))).program;
   assert.equal(persisted.id, program.id);
