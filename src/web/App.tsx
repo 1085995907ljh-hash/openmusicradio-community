@@ -2213,11 +2213,28 @@ function App() {
     }
     setIsConfirming(true);
     setProcessComplete(false);
+    setProcessCompletedSteps(0);
     setView("preparing");
     setLastError(null);
     const operationId = makeId("confirm");
     const confirmController = new AbortController();
     const observationController = new AbortController();
+    const progressController = new AbortController();
+    const monitorProgress = async () => {
+      while (!progressController.signal.aborted) {
+        try {
+          const payload = await fetchJson<{ progress?: { completedSteps?: number; status?: string } }>(`/programs/progress?operationId=${encodeURIComponent(operationId)}`, { signal: progressController.signal });
+          const completedSteps = payload.progress?.completedSteps;
+          if (typeof completedSteps === "number") setProcessCompletedSteps(Math.max(0, Math.min(4, completedSteps)));
+          if (payload.progress?.status === "completed" || payload.progress?.status === "failed" || payload.progress?.status === "action_required") return;
+        } catch (error) {
+          if (progressController.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+          if ((error as Error & { status?: number }).status !== 404) return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 120));
+      }
+    };
+    const progressPromise = monitorProgress();
     try {
       const confirmRequest = fetchJson<unknown>(`/programs/${program.id}/confirm`, {
         method: "POST",
@@ -2241,6 +2258,7 @@ function App() {
         const merged = mergeRemoteProgramIfCurrent(current, remote);
         return merged === current ? current : { ...merged, report: [...current.report, { id: makeId("event"), at: nowIso(), label: "节目已确认", detail: "服务已完成开播准备。", tone: "success" }] };
       });
+      setProcessCompletedSteps(4);
       setProcessComplete(true);
       await new Promise((resolve) => window.setTimeout(resolve, 320));
       setView(viewForProgramStatus(remote.status));
@@ -2263,6 +2281,7 @@ function App() {
           return merged === current ? current : { ...merged, report: [...current.report, { id: makeId("event"), at: nowIso(), label: "确认状态已对账", detail: `未知响应后已恢复 · 操作 ${operationId}`, tone: "warning" }] };
         });
         if (!["draft", "awaiting_confirmation", "preparing"].includes(remote.status)) {
+          setProcessCompletedSteps(4);
           setProcessComplete(true);
           await new Promise((resolve) => window.setTimeout(resolve, 320));
         }
@@ -2281,6 +2300,8 @@ function App() {
         setView("confirm");
       }
     } finally {
+      progressController.abort();
+      await progressPromise;
       setIsConfirming(false);
     }
   };
@@ -2632,7 +2653,7 @@ function App() {
       onError={setLastError}
     />;
     if (view === "generating") return <ProcessView mode="generating" complete={processComplete} completedSteps={processCompletedSteps} />;
-    if (view === "preparing") return <ProcessView mode="preparing" complete={processComplete} />;
+    if (view === "preparing") return <ProcessView mode="preparing" complete={processComplete} completedSteps={processCompletedSteps} />;
     if (view === "confirm" && program) {
       const diagnostic = sources.find((source) => source.sourceId === program.spec.sourceId);
       const apiMusic = isApiMusicSource(program.spec.sourceId);
@@ -3367,7 +3388,7 @@ function ProcessView({
 }) {
   const steps = mode === "generating"
     ? ["读取账号听歌画像", "筛选可播放候选", "排定熟悉与探索比例", "锁定节目单"]
-    : ["锁定最终节目单", "准备节目内容", "整理播放队列", "校验首曲信号"];
+    : ["核对最终节目单", "准备主持内容", "合成语音并准备播放队列", "校验首曲并开始播放"];
   const taskLabel = mode === "generating" ? "PLAN ENGINE" : "ON AIR PREP";
   const confirmedSteps = complete ? steps.length : Math.max(0, Math.min(steps.length, completedSteps));
   const progress = Math.round(confirmedSteps / steps.length * 100);

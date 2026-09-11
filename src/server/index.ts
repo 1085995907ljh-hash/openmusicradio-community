@@ -1766,7 +1766,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
   const version = options.version ?? process.env.APP_VERSION ?? "0.1.0";
   const operationResults = new Map<string, { action: "confirm" | "next" | "stop"; generation?: number; state: ProgramState }>();
   type PlanOperationAction = "reorder" | "regenerate" | "adjust" | "replace" | "undo" | "redo" | "regenerate-host";
-  type CreateProgressStatus = "running" | "completed" | "failed" | "action_required";
+  type TaskProgressStatus = "running" | "completed" | "failed" | "action_required";
   const planOperationResults = new Map<string, { action: PlanOperationAction; baseRevision: number; revision: number; message?: string }>();
   const rememberPlanOperation = (key: string, value: { action: PlanOperationAction; baseRevision: number; revision: number; message?: string }) => {
     planOperationResults.set(key, value);
@@ -1776,7 +1776,21 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     }
   };
   const createResults = new Map<string, { spec: ProgramSpec; state: ProgramState }>();
-  const createProgress = new Map<string, { completedSteps: number; status: CreateProgressStatus; updatedAt: string }>();
+  const taskProgress = new Map<string, { completedSteps: number; status: TaskProgressStatus; updatedAt: string }>();
+  const updateTaskProgress = (operationId: string | null | undefined, completedSteps: number, status: TaskProgressStatus = "running") => {
+    if (!operationId) return;
+    const previous = taskProgress.get(operationId);
+    taskProgress.set(operationId, {
+      completedSteps: Math.max(previous?.completedSteps ?? 0, Math.min(4, completedSteps)),
+      status,
+      updatedAt: nowIso(),
+    });
+    while (taskProgress.size > 128) {
+      const oldest = taskProgress.keys().next().value;
+      if (typeof oldest === "string") taskProgress.delete(oldest);
+      else break;
+    }
+  };
   const desktopSelections = new Map<string, DesktopProgramResult>();
   const accountRundowns = new Map<string, AccountRundown>();
   const accountPlaylists = new Map<string, ProgramPlaylistReceipt>();
@@ -1865,7 +1879,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     operationResults.clear();
     planOperationResults.clear();
     createResults.clear();
-    createProgress.clear();
+    taskProgress.clear();
     desktopSelections.clear();
     accountRundowns.clear();
     accountPlaylists.clear();
@@ -4179,7 +4193,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     if (method === "GET" && pathname === "/api/programs/progress") {
       assertPlayerControlAuthorized(req);
       const operationId = nonEmptyString(parsedUrl.searchParams.get("operationId"), "operationId", MAX_OPERATION_ID_LENGTH);
-      const progress = createProgress.get(operationId);
+      const progress = taskProgress.get(operationId);
       if (!progress) throw new ServiceError("NOT_FOUND", 404, publicMessage("NOT_FOUND"));
       writeJson(res, 200, { progress });
       return;
@@ -4595,20 +4609,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         res.once("close", abortCreate);
         if (req.aborted || res.destroyed) createController.abort();
       }
-      const updateCreateProgress = (completedSteps: number, status: CreateProgressStatus = "running") => {
-        if (!operationId) return;
-        const previous = createProgress.get(operationId);
-        createProgress.set(operationId, {
-          completedSteps: Math.max(previous?.completedSteps ?? 0, Math.min(4, completedSteps)),
-          status,
-          updatedAt: nowIso(),
-        });
-        while (createProgress.size > 128) {
-          const oldest = createProgress.keys().next().value;
-          if (typeof oldest === "string") createProgress.delete(oldest);
-          else break;
-        }
-      };
+      const updateCreateProgress = (completedSteps: number, status: TaskProgressStatus = "running") => updateTaskProgress(operationId, completedSteps, status);
       updateCreateProgress(0);
       const rememberCreateResult = (state: ProgramState): void => {
         if (!operationId) return;
@@ -4678,7 +4679,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         });
         updateCreateProgress(4, "completed");
       } catch (error) {
-        updateCreateProgress(createProgress.get(operationId ?? "")?.completedSteps ?? 0, "failed");
+        updateCreateProgress(taskProgress.get(operationId ?? "")?.completedSteps ?? 0, "failed");
         throw error;
       } finally {
         req.off("aborted", abortCreate);
@@ -5130,14 +5131,21 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           req.once("aborted", abortConfirm);
           res.once("close", abortConfirm);
         }
-        const response = await serializeProgramAction(programId, async () => {
+        updateTaskProgress(operationId, 0);
+        let response: { state: ProgramState; replayed: boolean };
+        try {
+          response = await serializeProgramAction(programId, async () => {
           if (confirmController?.signal.aborted) throw new ServiceError("REQUEST_ABORTED", 499, "请求已取消，未继续写入网易云账号。");
           const lockedState = assertProgram(programId);
           if (operationId) {
             const previous = readOperationResult(operationKey(programId, operationId), "confirm");
-            if (previous) return { state: lockedState, replayed: true };
+            if (previous) {
+              updateTaskProgress(operationId, 4, "completed");
+              return { state: lockedState, replayed: true };
+            }
           }
           if (lockedState.status !== "draft" && lockedState.status !== "awaiting_confirmation") {
+            updateTaskProgress(operationId, 4, "completed");
             return { state: lockedState, replayed: true };
           }
           assertGeneration(lockedState, generationFromBody(body, false));
@@ -5172,6 +5180,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                   if (replacementId) accountArtifact.hostAudio.delete(replacementId);
                 }
               }
+              updateTaskProgress(operationId, 1);
               const hostTracks = exactAccountRundown.filter((item) => Boolean(item.hostScript));
               if (accountArtifact.hostScriptsPending || hostTracks.length === 0) {
                 try {
@@ -5184,6 +5193,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                   throw error;
                 }
               }
+              updateTaskProgress(operationId, 2);
               const revalidatedHostTracks = exactAccountRundown.filter((item) => Boolean(item.hostScript));
               if (revalidatedHostTracks.some((item) => item.hostScript?.audioReady !== true || !accountArtifact.hostAudio.has(item.id))) {
                 const prepared = await prepareLockedHostAudio(lockedState.spec, exactAccountRundown, confirmController!.signal);
@@ -5196,6 +5206,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               } else {
                 await provisionNeteasePlaylist(programId, lockedState.spec, exactAccountRundown, confirmController!.signal);
               }
+              updateTaskProgress(operationId, 3);
             } catch (error) {
               if (error instanceof ServiceError && error.code === "NETEASE_PROVIDER_ERROR" && error.message === "网易云 Cloud Music API request failed") {
                 throw new ServiceError("NETEASE_PROVIDER_ERROR", 502, "网易云创建或写入节目歌单失败，请重试；已创建的歌单会自动复用。");
@@ -5204,7 +5215,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             }
           } else if (desktopSource) {
             let personalizationTerms: string[] = [];
+            updateTaskProgress(operationId, 1);
             await prepareExclusiveDesktopPlayback(lockedState.spec.sourceId as DesktopPlayerSource, operationId!);
+            updateTaskProgress(operationId, 2);
             const prepared = await desktopProgramController.prepare(
               lockedState.spec.sourceId as DesktopPlayerSource,
               lockedState.spec.scenePreset,
@@ -5216,6 +5229,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
               throw new ServiceError("DESKTOP_PROGRAM_FAILED", 409, prepared.detail || publicMessage("DESKTOP_PROGRAM_FAILED"));
             }
             desktopSelections.set(programId, prepared);
+            updateTaskProgress(operationId, 3);
           }
           let nextState: ProgramState | null;
           try {
@@ -5241,13 +5255,18 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             await persistPlayedTrackSnapshot(providerId, artifact?.accountUid, artifact?.preferences, lockedState.spec, artifact?.items[artifact.index], programId).catch(() => undefined);
           }
           if (operationId) rememberOperationResult(operationKey(programId, operationId), "confirm", nextState);
+          updateTaskProgress(operationId, 4, "completed");
           return { state: nextState, replayed: false };
-        }).finally(() => {
+          });
+        } catch (error) {
+          updateTaskProgress(operationId, taskProgress.get(operationId ?? "")?.completedSteps ?? 0, "failed");
+          throw error;
+        } finally {
           if (confirmController) {
             req.off("aborted", abortConfirm);
             res.off("close", abortConfirm);
           }
-        });
+        }
         updateDesktopPet(response.state);
         writeJson(res, 200, { program: responseProgram(response.state), ...(response.replayed ? { replayed: true } : {}) });
         return;

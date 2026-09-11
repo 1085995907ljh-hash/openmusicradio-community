@@ -3074,8 +3074,15 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
     async adjustRundown({ tracks }: { tracks: Array<{ id: string }> }) { return tracks.map((track) => track.id).reverse(); },
     generatePlaylistNames() { playlistNamingCalls += 1; throw new Error("private tracks must stay local"); },
   };
+  let ttsGate: Promise<void> | null = null;
+  let releaseTtsGate!: () => void;
   const ttsProvider = {
-    async synthesize() { ttsCalls += 1; await new Promise((resolve) => setTimeout(resolve, 20)); return { success: true, status: "ready", audio: Buffer.from("RIFF0000WAVElocked") }; },
+    async synthesize() {
+      ttsCalls += 1;
+      if (ttsGate) await ttsGate;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { success: true, status: "ready", audio: Buffer.from("RIFF0000WAVElocked") };
+    },
   };
   const service = await createLocalService({ port: 0, neteaseProvider, desktopPlayerController, hostProvider, ttsProvider, localControlToken: "netease-program-token" });
   await service.start();
@@ -3187,8 +3194,29 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   blockAccountRead = false;
   accountReadStarted = null;
   assert.equal(playlistCreates.length, 0);
-  const confirmedResponse = await post(`/programs/${first.id}/confirm`, { generation: first.generation, planRevision: 8, operationId: "netease-confirm-1" });
+  ttsGate = new Promise<void>((resolve) => { releaseTtsGate = resolve; });
+  const confirmedRequest = post(`/programs/${first.id}/confirm`, { generation: first.generation, planRevision: 8, operationId: "netease-confirm-1" });
+  let runningConfirmProgress: { completedSteps: number; status: string } | undefined;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const progressResponse = await fetch(`${base}/programs/progress?operationId=netease-confirm-1`, { headers: { "x-one-radio-control-token": "netease-program-token" } });
+    if (progressResponse.ok) {
+      const payload = await json(progressResponse);
+      if (payload.progress.completedSteps >= 2) {
+        runningConfirmProgress = payload.progress;
+        break;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  releaseTtsGate();
+  ttsGate = null;
+  assert.equal(runningConfirmProgress?.completedSteps, 2, "confirmation progress must stop at the completed host-copy stage while TTS is pending");
+  assert.equal(runningConfirmProgress?.status, "running");
+  const confirmedResponse = await confirmedRequest;
   assert.equal(confirmedResponse.status, 200);
+  const completedConfirmProgress = await json(await fetch(`${base}/programs/progress?operationId=netease-confirm-1`, { headers: { "x-one-radio-control-token": "netease-program-token" } }));
+  assert.equal(completedConfirmProgress.progress.completedSteps, 4);
+  assert.equal(completedConfirmProgress.progress.status, "completed");
   const confirmed = (await json(confirmedResponse)).program;
   assert.equal(confirmed.status, "on_air");
   assert.ok(confirmed.rundown.every((track: { hostMoment?: string; hostScript?: { text?: string } }) => !track.hostMoment || Boolean(track.hostScript?.text)));
