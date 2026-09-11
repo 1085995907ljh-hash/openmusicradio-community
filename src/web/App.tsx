@@ -762,6 +762,7 @@ function App() {
   const audioTokenRef = useRef(0);
   const musicAudioTokenRef = useRef(0);
   const musicVolumeRampRef = useRef<number | null>(null);
+  const musicStallTimerRef = useRef<number | null>(null);
   const hostMusicStartTimerRef = useRef<number | null>(null);
   const webDuckOwnerRef = useRef<string | null>(null);
   const hostAudioSourceRef = useRef<{ key: string; url: string; token: number } | null>(null);
@@ -1041,9 +1042,15 @@ function App() {
     return "unavailable" as const;
   }, [restoreDuckOperation]);
 
+  const clearMusicStallTimer = useCallback(() => {
+    if (musicStallTimerRef.current !== null) window.clearTimeout(musicStallTimerRef.current);
+    musicStallTimerRef.current = null;
+  }, []);
+
   const stopAudio = useCallback(async (options?: { waitForRestore?: boolean }) => {
     if (nextRetryTimerRef.current !== null) window.clearTimeout(nextRetryTimerRef.current);
     nextRetryTimerRef.current = null;
+    clearMusicStallTimer();
     if (pendingDuckRef.current) pendingDuckRef.current.cancelled = true;
     audioTokenRef.current += 1;
     pendingAudioRef.current = null;
@@ -1092,11 +1099,12 @@ function App() {
     currentAudioModeRef.current = null;
     const restorePromise = restorePlayerVolume();
     if (options?.waitForRestore) await restorePromise;
-  }, [cancelVoicePreview, restorePlayerVolume]);
+  }, [cancelVoicePreview, clearMusicStallTimer, restorePlayerVolume]);
 
   const setMusicFromSource = useCallback(async (url: string, key: string) => {
     const music = musicAudioRef.current;
     if (!music) return false;
+    clearMusicStallTimer();
     const token = ++musicAudioTokenRef.current;
     music.pause();
     music.currentTime = 0;
@@ -1112,6 +1120,7 @@ function App() {
       return true;
     } catch (error) {
       if (token !== musicAudioTokenRef.current) return false;
+      if (seamlessMusicKeyRef.current === key) seamlessMusicKeyRef.current = null;
       pendingMusicRef.current = { url, key };
       setAudioPlaying(false);
       setAudioNeedsGesture(true);
@@ -1119,7 +1128,7 @@ function App() {
       else setAudioError("音乐音频无法加载，节目单仍可查看。");
       return false;
     }
-  }, []);
+  }, [clearMusicStallTimer]);
 
   const prepareMusicBehindHost = useCallback((url: string, key: string) => {
     const music = musicAudioRef.current;
@@ -2515,6 +2524,22 @@ function App() {
     void handleNext(true);
   };
 
+  const scheduleMusicStallRecovery = () => {
+    const currentProgram = programRef.current;
+    const music = musicAudioRef.current;
+    if (!currentProgram || !isApiMusicSource(currentProgram.spec.sourceId) || !currentProgram.currentTrack?.audioUrl || !music || music.paused || music.ended) return;
+    if (musicStallTimerRef.current !== null) return;
+    const trackId = currentProgram.currentTrack.id;
+    const generation = currentProgram.generation;
+    musicStallTimerRef.current = window.setTimeout(() => {
+      musicStallTimerRef.current = null;
+      const latestProgram = programRef.current;
+      const latestMusic = musicAudioRef.current;
+      if (!latestProgram || latestProgram.generation !== generation || latestProgram.currentTrack?.id !== trackId || latestMusic !== music || latestMusic.paused || latestMusic.ended) return;
+      handleMusicError();
+    }, 8000);
+  };
+
   const handleStop = async () => {
     if (!program || isStopping || ["stopped", "completed", "failed", "stop_unconfirmed"].includes(program.status)) return;
     heartbeatRequestRef.current?.abort();
@@ -2863,6 +2888,7 @@ function App() {
         key="meyda-audio-graph-v2"
         ref={musicAudioRef}
         onPlay={(event) => {
+          clearMusicStallTimer();
           if (enforcePlaybackDeadline()) setAudioPlaying(true);
           setTrackElapsedSeconds(event.currentTarget.currentTime || 0);
         }}
@@ -2877,21 +2903,46 @@ function App() {
         onDurationChange={(event) => {
           if (Number.isFinite(event.currentTarget.duration) && event.currentTarget.duration > 0) setTrackDurationSeconds(event.currentTarget.duration);
         }}
-        onPause={() => setAudioPlaying(false)}
+        onPause={() => {
+          clearMusicStallTimer();
+          setAudioPlaying(false);
+        }}
         onEnded={() => {
+          clearMusicStallTimer();
           if (!program || !isApiMusicSource(program.spec.sourceId) || !program.currentTrack?.audioUrl) return;
           const next = program.nextTrack as ProgramRundownItem | null;
           if (next?.audioUrl && !next.hostMoment) {
             const nextKey = `${program.id}:${program.generation + 1}:${next.id}`;
-            seamlessMusicKeyRef.current = nextKey;
             fixtureAudioRef.current = { url: next.audioUrl, key: nextKey };
             musicFailureRef.current = { key: nextKey, attempts: 0 };
-            void setMusicFromSource(next.audioUrl, nextKey);
+            void setMusicFromSource(next.audioUrl, nextKey).then((played) => {
+              const current = programRef.current;
+              if (played && current?.currentTrack?.id === next.id) seamlessMusicKeyRef.current = nextKey;
+              else if (seamlessMusicKeyRef.current === nextKey) seamlessMusicKeyRef.current = null;
+            });
           }
           void handleNext(true);
         }}
-        onCanPlay={() => setAudioError(null)}
-        onError={handleMusicError}
+        onCanPlay={() => {
+          clearMusicStallTimer();
+          setAudioError(null);
+        }}
+        onPlaying={() => {
+          clearMusicStallTimer();
+          setAudioPlaying(true);
+        }}
+        onWaiting={() => {
+          setAudioPlaying(false);
+          scheduleMusicStallRecovery();
+        }}
+        onStalled={() => {
+          setAudioPlaying(false);
+          scheduleMusicStallRecovery();
+        }}
+        onError={() => {
+          clearMusicStallTimer();
+          handleMusicError();
+        }}
         aria-label="当前曲目音频"
       />
       <audio ref={audioRef} onError={handleHostAudioError} aria-label="主持人口播音频" />
