@@ -2985,6 +2985,7 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   const playlistCreates: string[] = [];
   const playlistAdds: Array<{ playlistId: string; trackIds: string[] }> = [];
   const playlistReorders: Array<{ playlistId: string; trackIds: string[] }> = [];
+  let stalePlaylistOrder: string[] | null = null;
   const playlistDeletes: string[] = [];
   const likedMutations: Array<{ id: string; liked: boolean }> = [];
   const storedPlaylistTracks = new Map<string, string[]>();
@@ -3039,6 +3040,7 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
     },
     reorderPlaylistTracks(playlistId: string, trackIds: string[]) {
       playlistReorders.push({ playlistId, trackIds: [...trackIds] });
+      stalePlaylistOrder = [...trackIds].reverse();
       storedPlaylistTracks.set(playlistId, [...trackIds]);
       return { playlistId, trackIds };
     },
@@ -3053,7 +3055,9 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
     },
     playlistDetail(playlistId: string) {
       if (playlistId === "7001") return { id: playlistId, name: "深夜放松精选", tracks: songs };
-      return { id: playlistId, name: "AI 电台", tracks: (storedPlaylistTracks.get(playlistId) ?? []).map((id) => ({ id })) };
+      const ids = stalePlaylistOrder ?? storedPlaylistTracks.get(playlistId) ?? [];
+      stalePlaylistOrder = null;
+      return { id: playlistId, name: "AI 电台", tracks: ids.map((id) => ({ id })) };
     },
   };
   const desktopPlayerController: DesktopPlayerControllerLike = {

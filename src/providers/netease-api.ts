@@ -70,6 +70,7 @@ export interface NeteasePlaylist {
   name: string;
   description: string | null;
   trackCount: number;
+  trackIds: string[];
   tracks: NeteaseSong[];
 }
 
@@ -284,12 +285,17 @@ export class NeteaseApiProvider {
     const playlistId = requireInputId(id, "playlist id");
     const root = asRecord(await this.request("/playlist/detail", { id: playlistId }, signal), "playlist response");
     const playlist = asRecord(root.playlist, "playlist");
+    const tracks = asArray(playlist.tracks, "playlist.tracks").map(parseSong);
+    const trackIds = Array.isArray(playlist.trackIds)
+      ? playlist.trackIds.map((entry) => requireResponseId(isRecordValue(entry) ? entry.id : entry, "playlist.trackIds[].id"))
+      : tracks.map((track) => track.id);
     return {
       id: requireResponseId(playlist.id, "playlist.id"),
       name: requireString(playlist.name, "playlist.name"),
       description: optionalString(playlist.description, "playlist.description"),
       trackCount: requireNonNegativeNumber(playlist.trackCount, "playlist.trackCount"),
-      tracks: asArray(playlist.tracks, "playlist.tracks").map(parseSong),
+      trackIds,
+      tracks,
     };
   }
 
@@ -337,7 +343,7 @@ export class NeteaseApiProvider {
     const cleanTrackIds = requireUniqueTrackIds(trackIds);
     const root = await this.request("/song/order/update", {
       pid: cleanPlaylistId,
-      ids: JSON.stringify(cleanTrackIds),
+      ids: JSON.stringify(cleanTrackIds.map(Number)),
       timestamp: String(Date.now()),
     }, signal);
     requireMutationSuccess(root, "reorder playlist songs");

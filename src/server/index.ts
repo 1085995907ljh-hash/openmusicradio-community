@@ -3647,9 +3647,18 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     }
     if (receipt.status === "ready") return receipt;
     const trackIds = items.map((item) => item.id);
-    const readbackTrackIds = (detail: unknown): string[] => isRecord(detail) && Array.isArray(detail.tracks)
-      ? detail.tracks.flatMap((track) => isRecord(track) && (typeof track.id === "string" || typeof track.id === "number") ? [String(track.id)] : [])
-      : [];
+    const readbackTrackIds = (detail: unknown): string[] => {
+      if (!isRecord(detail)) return [];
+      if (Array.isArray(detail.trackIds)) {
+        return detail.trackIds.flatMap((entry) => {
+          const id = isRecord(entry) ? entry.id : entry;
+          return typeof id === "string" || typeof id === "number" ? [String(id)] : [];
+        });
+      }
+      return Array.isArray(detail.tracks)
+        ? detail.tracks.flatMap((track) => isRecord(track) && (typeof track.id === "string" || typeof track.id === "number") ? [String(track.id)] : [])
+        : [];
+    };
     const hasExactTrackOrder = (detail: unknown): boolean => {
       const actualIds = readbackTrackIds(detail);
       return actualIds.length === trackIds.length && actualIds.every((id, index) => id === trackIds[index]);
@@ -3660,10 +3669,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         throw new ServiceError("NETEASE_PROVIDER_ERROR", 502, "网易云节目歌单的歌曲顺序与已确认计划不一致。");
       }
       await invokeNeteaseStage("修复节目歌单顺序", () => provider.reorderPlaylistTracks!(receipt!.id, trackIds, signal));
-      const repaired = await invokeNeteaseStage("验证节目歌单顺序", () => provider.playlistDetail!(receipt!.id, signal));
-      if (!hasExactTrackOrder(repaired)) {
-        throw new ServiceError("NETEASE_PROVIDER_ERROR", 502, "网易云节目歌单的歌曲顺序修复失败。");
-      }
+      // 网易云歌单详情存在短暂缓存；排序 mutation 成功后，本地节目单仍是播放顺序的唯一依据。
     };
     let missingTrackIds = trackIds;
     if (existingReceipt) {

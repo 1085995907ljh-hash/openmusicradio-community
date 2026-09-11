@@ -126,7 +126,7 @@ test("playlist detail, song detail, and song URL have validated typed results", 
       const url = new URL(String(input));
       paths.push(`${url.pathname}${url.search}`);
       if (url.pathname === "/playlist/detail") {
-        return jsonResponse({ code: 200, playlist: { id: 3, name: "学习", description: null, trackCount: 1, tracks: [{ ...song, ar: [{ id: 0, name: "未知歌手" }] }] } });
+        return jsonResponse({ code: 200, playlist: { id: 3, name: "学习", description: null, trackCount: 1, trackIds: [{ id: 42 }], tracks: [{ ...song, ar: [{ id: 0, name: "未知歌手" }] }] } });
       }
       if (url.pathname === "/song/detail") return jsonResponse({ code: 200, songs: [{ ...song, publishTime: Date.UTC(1998, 0, 1) }] });
       return jsonResponse({ code: 200, data: [{ id: 42, url: "https://music.example/42.mp3", br: 320000, size: 123, type: "mp3", time: 201000, freeTrialInfo: null }] });
@@ -138,6 +138,7 @@ test("playlist detail, song detail, and song URL have validated typed results", 
   const url = await provider.songUrl(42);
 
   assert.equal(playlist.name, "学习");
+  assert.deepEqual(playlist.trackIds, ["42"]);
   assert.equal(playlist.tracks[0]?.title, "夜航");
   assert.equal(playlist.tracks[0]?.artists[0]?.id, "0");
   assert.equal(songs[0]?.id, "42");
@@ -547,7 +548,7 @@ test("playlist mutations validate and return normalized typed results", async ()
   assert.ok(requests[1]?.searchParams.get("timestamp"));
   assert.equal(requests[2]?.pathname, "/song/order/update");
   assert.equal(requests[2]?.searchParams.get("pid"), "123");
-  assert.equal(requests[2]?.searchParams.get("ids"), JSON.stringify(["44", "43", "42"]));
+  assert.equal(requests[2]?.searchParams.get("ids"), JSON.stringify([44, 43, 42]));
   assert.ok(requests[2]?.searchParams.get("timestamp"));
   assert.equal(requests[3]?.pathname, "/playlist/delete");
   assert.equal(requests[3]?.searchParams.get("id"), "123");
