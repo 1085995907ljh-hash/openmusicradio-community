@@ -537,6 +537,10 @@ function readProgramPayload(payload: unknown): ProgramState | null {
   return USER_SOURCE_IDS.includes(value.spec.sourceId as (typeof USER_SOURCE_IDS)[number]) ? value : null;
 }
 
+function isEmptyProgramPayload(payload: unknown): boolean {
+  return Boolean(payload && typeof payload === "object" && "program" in payload && (payload as { program?: unknown }).program === null);
+}
+
 function confirmRetryMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message.trim() : "";
   const detail = raw && raw !== "确认状态未知。" && raw !== "未观察到确认结果"
@@ -1755,6 +1759,12 @@ function App() {
         const payload = await fetchJson<unknown>(`/programs/${program.id}`, { signal: controller.signal });
         const remote = readProgramPayload(payload);
         if (!disposed && remote) setProgram((current) => current ? mergeRemoteProgramIfCurrent(current, remote) : { ...remote, report: [] });
+        else if (!disposed && isEmptyProgramPayload(payload)) {
+          await stopAudio();
+          setProgram(null);
+          setView("setup");
+          setNotice("本地服务已重启，旧节目已停止，请重新创建节目。");
+        }
       } catch (error) {
         if (disposed) return;
         if (error instanceof DOMException && error.name === "AbortError") return;
@@ -2515,12 +2525,12 @@ function App() {
     failure.attempts += 1;
     musicFailureRef.current = failure;
     if (failure.attempts === 1) {
-      setNotice("当前播放地址失效，正在刷新后重试一次。");
+      setNotice("音频流暂时中断，正在刷新播放地址后重试一次。");
       const separator = track.audioUrl.includes("?") ? "&" : "?";
       void setMusicFromSource(`${track.audioUrl}${separator}retry=${Date.now()}`, key);
       return;
     }
-    setNotice("当前歌曲仍无法播放，正在跳到下一首。");
+    setNotice("当前音频仍无法恢复，正在跳到下一首。");
     void handleNext(true);
   };
 
