@@ -166,7 +166,7 @@ export class CloudAccessStore {
 
   serviceMetadata() {
     return {
-      llmModel: process.env.ONE_RADIO_MANAGED_LLM_MODEL?.trim() || "gpt-5.4-mini",
+      llmModel: process.env.ONE_RADIO_MANAGED_LLM_MODEL?.trim() || "deepseek-v4-flash",
       ttsModel: process.env.ONE_RADIO_MANAGED_TTS_MODEL?.trim() || "cosyvoice-v2",
       managed: true as const,
     };

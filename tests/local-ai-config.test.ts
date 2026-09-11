@@ -42,6 +42,18 @@ test("managed access uses the shared cloud service and rejects implicit local pr
   }
 });
 
+test("managed access advertises DeepSeek V4 Flash by default", () => {
+  const previousModel = process.env.ONE_RADIO_MANAGED_LLM_MODEL;
+  delete process.env.ONE_RADIO_MANAGED_LLM_MODEL;
+  try {
+    const store = new CloudAccessStore("/unused/cloud-access.json", "unused-test-keychain", async () => { throw new Error("network must not be called"); });
+    assert.equal(store.serviceMetadata().llmModel, "deepseek-v4-flash");
+  } finally {
+    if (previousModel === undefined) delete process.env.ONE_RADIO_MANAGED_LLM_MODEL;
+    else process.env.ONE_RADIO_MANAGED_LLM_MODEL = previousModel;
+  }
+});
+
 test("local AI settings reject credential-bearing custom endpoints", async () => {
   const directory = await mkdtemp(join(tmpdir(), "one-radio-ai-config-"));
   const store = new LocalAiConfigStore(join(directory, "ai-config.json"));
