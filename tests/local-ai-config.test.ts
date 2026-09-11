@@ -8,6 +8,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { LocalAiConfigStore } from "../src/server/local-ai-config.js";
 import { CloudAccessStore } from "../src/server/cloud-access.js";
+import { llmApiMode } from "../src/server/local-ai-providers.js";
 
 const tts = { provider: "qwen" as const, model: "cosyvoice-v2", voice: "longanxuan" };
 const run = promisify(execFile);
@@ -52,6 +53,13 @@ test("managed access advertises DeepSeek V4 Flash by default", () => {
     if (previousModel === undefined) delete process.env.ONE_RADIO_MANAGED_LLM_MODEL;
     else process.env.ONE_RADIO_MANAGED_LLM_MODEL = previousModel;
   }
+});
+
+test("managed DeepSeek uses JSON chat completions like direct DeepSeek", () => {
+  assert.equal(llmApiMode("custom", "deepseek-v4-flash"), "chat_completions");
+  assert.equal(llmApiMode("custom", "deepseek-v4.1-flash"), "chat_completions");
+  assert.equal(llmApiMode("deepseek", "deepseek-v4-flash"), "chat_completions");
+  assert.equal(llmApiMode("custom", "gpt-5.5"), "responses");
 });
 
 test("local AI settings reject credential-bearing custom endpoints", async () => {

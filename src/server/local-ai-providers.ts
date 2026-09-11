@@ -10,6 +10,11 @@ import { researchPublicMusicFacts } from "./public-music-research.js";
 const OPENAI_VOICES: Record<HostProfileId, string> = { anxuan: "coral", anran: "nova", anya: "shimmer", xiaocheng: "onyx", longxin: "alloy", longhao: "echo" };
 const AZURE_VOICES: Record<HostProfileId, string> = { anxuan: "zh-CN-XiaoxiaoNeural", anran: "zh-CN-XiaoyiNeural", anya: "zh-CN-XiaochenMultilingualNeural", xiaocheng: "zh-CN-YunxiNeural", longxin: "zh-CN-YunyangNeural", longhao: "zh-CN-YunjianNeural" };
 
+export function llmApiMode(provider: LlmProviderId, model: string): "responses" | "chat_completions" {
+  if (isDeepSeekModel(model)) return "chat_completions";
+  return provider === "custom" || provider === "openai" ? "responses" : "chat_completions";
+}
+
 export class LocalConfiguredHostProvider {
   configured = true;
   state = "configured_unverified";
@@ -127,7 +132,7 @@ export class LocalConfiguredHostProvider {
       model: settings.llm.model,
       reviewModel: settings.llm.reviewModel ?? settings.llm.model,
       reasoningEffort: settings.llm.reasoningEffort ?? "high",
-      mode: settings.llm.provider === "custom" || settings.llm.provider === "openai" ? "responses" : "chat_completions",
+      mode: llmApiMode(settings.llm.provider, settings.llm.model),
       timeoutMs: 0,
       enableWebSearch: settings.llm.provider === "custom" || settings.llm.provider === "openai",
       fetchImpl: translatedProvider ? nativeFormatFetch(translatedProvider, apiKey, settings.llm.model) : undefined,
@@ -182,7 +187,7 @@ async function completeText(provider: LlmProviderId, apiKey: string, model: stri
     return payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
   }
   const { baseUrl } = llmDetails(provider, customBaseUrl);
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", signal, headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: user }], response_format: { type: "json_object" }, ...(provider === "deepseek" ? { thinking: { type: "disabled" } } : {}) }) });
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", signal, headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: user }], response_format: { type: "json_object" }, ...(isDeepSeekModel(model) ? { thinking: { type: "disabled" } } : {}) }) });
   if (!response.ok) throw new Error(`大模型连接失败 (${response.status})`);
   const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
   return payload.choices?.[0]?.message?.content ?? "";
@@ -248,6 +253,10 @@ function llmDetails(provider: LlmProviderId, custom?: string): { baseUrl: string
   if (provider === "gemini") return { baseUrl: "https://generativelanguage.googleapis.com/v1beta", translate: true };
   if (provider === "custom") return { baseUrl: custom!, translate: false };
   return { baseUrl: "https://api.openai.com/v1", translate: false };
+}
+
+function isDeepSeekModel(model: string): boolean {
+  return /^deepseek(?:[-_/]|$)/i.test(model.trim());
 }
 
 function nativeFormatFetch(provider: "anthropic" | "gemini", apiKey: string, model: string): typeof globalThis.fetch {
