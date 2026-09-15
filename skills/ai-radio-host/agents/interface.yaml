@@ -1,0 +1,22 @@
+interface:
+  display_name: "AI 音乐电台口播"
+  short_description: "调研与布点、逐条事实检查、整档一次编辑后锁稿。"
+  default_prompt: "Use $ai-radio-host to research the locked playlist, fix placements, draft each break with a factual check, then perform one whole-show editorial pass with local edits and affected-claim verification before final locking. Style preferences must not trigger metadata fallbacks."
+compatibility:
+  canonical_format: "agent-skills"
+  adapter_targets:
+    - "openai"
+    - "generic"
+  activation:
+    mode: "manual"
+    paths: []
+  execution:
+    context: "inline"
+    shell: "bash"
+  trust:
+    source_tier: "local"
+    remote_inline_execution: "forbid"
+    remote_metadata_policy: "allow-metadata-only"
+  degradation:
+    openai: "Preserve source IDs and fixed placements. Fact-check each draft, retain internal checkpoints, then edit the whole show once and verify affected claims before locking."
+    generic: "Preserve factual checks and a separate whole-show editorial pass. If a required stage cannot run, report it incomplete rather than substituting a metadata template."

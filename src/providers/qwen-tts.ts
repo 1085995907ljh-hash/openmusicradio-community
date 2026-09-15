@@ -19,7 +19,7 @@ import {
   safeUpstreamMessage,
 } from "./http.js";
 import WebSocket from "ws";
-import { HOST_PROFILES, hostTtsInstruction } from "../shared/program-options.js";
+import { HOST_PROFILES, hostTtsInstruction, naturalHostDeliveryInstruction } from "../shared/program-options.js";
 import { boostedHostTtsVolume, getSceneConfig } from "../core/scenes.js";
 
 const DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/api/v1";
@@ -31,7 +31,7 @@ const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 const ENDPOINT_PATH = "/services/aigc/multimodal-generation/generation";
 const SPEECH_SYNTHESIZER_PATH = "/services/audio/tts/SpeechSynthesizer";
 const PROVIDER_NAME = "qwen-tts";
-const RADIO_VOICE_INSTRUCTION = "中文电台主持。";
+const RADIO_VOICE_INSTRUCTION = "中文电台主持。自然语速，读完即止。";
 const COMPACT_SCENE_INSTRUCTIONS: Readonly<Record<TtsSynthesisRequest["scenePreset"], string>> = Object.freeze({
   late_night: "温暖舒展，句尾放松。",
   study: "清楚克制，重音准确。",
@@ -113,7 +113,7 @@ export class QwenTtsProvider implements TtsProvider {
     const selectedProfileId = selectedProfile?.id;
     const ttsInstruction = compactDeliveryInstruction([
       selectedProfileId ? hostTtsInstruction(selectedProfileId) : "",
-      request?.instruction ?? "",
+      naturalHostDeliveryInstruction(request?.instruction),
     ].filter(Boolean).join(" "));
     const personaFallbackInstruction = selectedProfileId ? compactDeliveryInstruction(hostTtsInstruction(selectedProfileId)) : undefined;
     const model = selectedProfile?.model ?? this.model;
@@ -237,7 +237,7 @@ export class QwenTtsProvider implements TtsProvider {
           text,
           voice,
           language_type: "Chinese",
-          instructions: deliveryInstruction || SCENE_INSTRUCTIONS[scenePreset],
+          instructions: `${RADIO_VOICE_INSTRUCTION}${deliveryInstruction || SCENE_INSTRUCTIONS[scenePreset]}`,
           optimize_instructions: true,
         },
       }),
@@ -396,7 +396,7 @@ function sanitizeInstruction(value: string): string {
 
 function compactDeliveryInstruction(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  const normalized = sanitizeInstruction(value);
+  const normalized = sanitizeInstruction(value.replace(/按自然语速播报，读完即止。/g, ""));
   const patterns = [
     /(?:声线|声调|声音)[^，。；]{0,12}/g,
     /语速[^，。；]{0,12}/g,
@@ -409,7 +409,7 @@ function compactDeliveryInstruction(value: string | undefined): string | undefin
   ];
   const clauses: string[] = [];
   for (const pattern of patterns) {
-    for (const match of normalized.match(pattern) ?? []) {
+    for (const match of (normalized.match(pattern) ?? []).slice(0, 1)) {
       if (!clauses.includes(match)) clauses.push(match);
       if (clauses.join("，").length >= 64) break;
     }

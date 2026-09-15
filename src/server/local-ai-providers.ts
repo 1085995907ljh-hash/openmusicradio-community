@@ -5,7 +5,8 @@ import type { HostContextPack, ScenePreset } from "../shared/contracts.js";
 import { hostPreviewText, hostTtsInstruction, MUSIC_GENRE_IDS, MUSIC_GENRES, type HostProfileId } from "../shared/program-options.js";
 import type { RundownAdjustmentConversationMessage, RundownAdjustmentIntent, RundownAdjustmentTrack } from "../core/rundown-adjustment.js";
 import { LocalAiConfigStore, type LlmProviderId, type TtsProviderId } from "./local-ai-config.js";
-import { researchPublicMusicFacts } from "./public-music-research.js";
+import { AutonomousMusicResearchService } from "./autonomous-music-research.js";
+import { requireCompletedMusicResearch } from "../shared/music-research.js";
 
 const OPENAI_VOICES: Record<HostProfileId, string> = { anxuan: "coral", anran: "nova", anya: "shimmer", xiaocheng: "onyx", longxin: "alloy", longhao: "echo" };
 const AZURE_VOICES: Record<HostProfileId, string> = { anxuan: "zh-CN-XiaoxiaoNeural", anran: "zh-CN-XiaoyiNeural", anya: "zh-CN-XiaochenMultilingualNeural", xiaocheng: "zh-CN-YunxiNeural", longxin: "zh-CN-YunyangNeural", longhao: "zh-CN-YunjianNeural" };
@@ -18,7 +19,7 @@ export function llmApiMode(provider: LlmProviderId, model: string): "responses" 
 export class LocalConfiguredHostProvider {
   configured = true;
   state = "configured_unverified";
-  constructor(private readonly store: LocalAiConfigStore) {}
+  constructor(private readonly store: LocalAiConfigStore, private readonly musicResearch = new AutonomousMusicResearchService()) {}
   getStatus() { return { provider: "local-configured", configured: true, mock: false, state: this.state }; }
 
   async generate(context: HostContextPack, options: { signal?: AbortSignal } = {}) {
@@ -35,16 +36,16 @@ export class LocalConfiguredHostProvider {
   }
 
   async research(request: Parameters<OpenAICompatibleHostProvider["research"]>[0], options: { signal?: AbortSignal } = {}) {
-    const provider = await this.provider();
-    const publicFacts = await researchPublicMusicFacts(request.tracks, { signal: options.signal }).catch(() => []);
-    const modelFacts = publicFacts.length >= 4 ? [] : await provider.research(request, options).catch(() => []);
-    const seen = new Set<string>();
-    return [...modelFacts, ...publicFacts].filter((fact) => {
-      const key = `${fact.sourceUrl}\n${fact.value}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).slice(0, 24);
+    const settings = await this.store.read();
+    const apiKey = await this.store.llmSecret(settings.llm.provider);
+    if (!apiKey) throw new Error("请先配置大模型 API Key，以执行自主联网调研");
+    const model = await this.provider();
+    const report = await this.musicResearch.research(request.tracks, {
+      signal: options.signal,
+      cacheScope: JSON.stringify(settings.llm),
+      complete: (system, user, signal) => model.researchAction(system, user, { signal }),
+    });
+    return requireCompletedMusicResearch(report, request.tracks);
   }
 
   async generatePlaylistNames(request: Parameters<OpenAICompatibleHostProvider["generatePlaylistNames"]>[0], options: { signal?: AbortSignal } = {}) {

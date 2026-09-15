@@ -1,4 +1,5 @@
 import type { HostProfileId, MusicGenreId } from "./program-options.js";
+import type { MusicResearchReceipt } from "./music-research.js";
 
 export const SCENE_PRESETS = ["late_night", "study", "workout", "commute", "party"] as const;
 export type ScenePreset = (typeof SCENE_PRESETS)[number];
@@ -82,6 +83,8 @@ export interface ProgramRundownItem extends Track {
   heard?: boolean;
   hostMoment?: "opening" | "song_note" | "next_preview" | "scene_boost" | "music_news";
   hostScript?: ProgramHostScript;
+  /** Completed per-song web research used to prepare this program. */
+  hostResearch?: MusicResearchReceipt;
 }
 
 export interface ProgramHostScript {

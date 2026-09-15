@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  estimateHostDurationSeconds,
   evenlySpacedHostBreakIndices,
   hostCharacterBounds,
   hostScriptRepeats,
@@ -16,6 +17,13 @@ import {
   spokenArtistName,
 } from "../src/core/host-script-planning.js";
 import type { Track } from "../src/shared/contracts.js";
+
+test("speech estimates follow natural text length without a five-second floor or a thirty-second ceiling", () => {
+  assert.equal(estimateHostDurationSeconds("王菲，《红豆》。"), 1.1);
+  assert.equal(estimateHostDurationSeconds("John Mayer, New Light."), 1.6);
+  assert.equal(estimateHostDurationSeconds(""), 0);
+  assert.ok(estimateHostDurationSeconds("一段有完整来源的音乐故事。".repeat(15)) > 35);
+});
 
 const track = (energy: number, mood: string[] = []): Track => ({
   id: `track-${energy}`,

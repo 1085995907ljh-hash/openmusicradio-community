@@ -22,6 +22,7 @@
   "dependencies": {
     "@neteasecloudmusicapienhanced/api": "4.39.0",
     "@vitejs/plugin-react": "latest",
+    "linkedom": "0.18.13",
     "lucide-react": "latest",
     "meyda": "^5.6.3",
     "react": "latest",

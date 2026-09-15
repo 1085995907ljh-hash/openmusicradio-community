@@ -46,9 +46,8 @@ import {
 } from "../core/rundown-adjustment.js";
 import { energyRangeForPhase, getSceneConfig, phaseForElapsedSeconds } from "../core/scenes.js";
 import {
-  hostCharacterBounds,
+  estimateHostDurationSeconds,
   hostScriptRepeats,
-  HOST_MUSIC_DUCK_DB,
   HOST_MUSIC_START_DELAY_SECONDS,
   radioGreetingAt,
   evenlySpacedHostBreakIndices,
@@ -79,6 +78,7 @@ import { QwenTtsProvider } from "../providers/qwen-tts.js";
 import { ProviderError } from "../providers/types.js";
 import { LocalAiConfigStore, LLM_PROVIDER_IDS, TTS_PROVIDER_IDS, type LocalAiSettings } from "./local-ai-config.js";
 import { LocalConfiguredHostProvider, LocalConfiguredTtsProvider } from "./local-ai-providers.js";
+import { requireCompletedMusicResearch, musicResearchFactText, type MusicResearchReport } from "../shared/music-research.js";
 import { CloudAccessStore, ManagedAiConfigStore } from "./cloud-access.js";
 import { loadRadioHostReviewSkill, loadRadioHostSkill } from "./radio-host-skill.js";
 import {
@@ -323,7 +323,7 @@ interface HostProviderLike {
   research?(request: {
     scenePreset: ScenePreset;
     listenerProfile?: { favoriteArtists: string[]; topSongs: string[]; inferredThemes: string[] };
-    tracks: Array<{ title: string; artist: string; exploration?: boolean }>;
+    tracks: Array<{ title: string; artist: string; album?: string; exploration?: boolean }>;
   }, options?: { signal?: AbortSignal }): unknown;
   generatePlaylistNames?(request: {
     scenePreset: ScenePreset;
@@ -512,15 +512,6 @@ function isRecord(value: unknown): value is UnknownRecord {
 
 function isUsableAlbumTitle(value: string): boolean {
   return !/^(?:未知(?:专辑)?|unknown(?: album)?|n\/?a|null|-)$/i.test(value.trim());
-}
-
-function musicFactMatchesTrack(value: string, track: Pick<ProgramRundownItem, "title" | "artist">, playlist: Array<Pick<ProgramRundownItem, "title" | "artist">>): boolean {
-  const fact = value.toLocaleLowerCase();
-  const title = track.title.toLocaleLowerCase();
-  const artist = track.artist.toLocaleLowerCase();
-  if (title && fact.includes(title)) return true;
-  if (!artist || !fact.includes(artist)) return false;
-  return !playlist.some((candidate) => candidate.title !== track.title && candidate.title.length >= 3 && fact.includes(candidate.title.toLocaleLowerCase()));
 }
 
 function nonEmptyString(value: unknown, field: string, maxLength: number): string {
@@ -3170,46 +3161,32 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           inferredThemes: listenerProfile.inferredThemes.slice(0, 8),
         }
       : undefined;
-    let webFacts: Array<{ id: string; value: string; sourceUrl: string }> = [];
     const researchProvider = hostProvider as HostProviderLike;
-    if (typeof researchProvider.research === "function") {
-      try {
-        const researched = await Promise.resolve(researchProvider.research({
-          scenePreset: spec.scenePreset,
-          tracks: [...items]
-            .sort((left, right) => Number(left.liked === true) - Number(right.liked === true))
-            .slice(0, 12)
-            .map((item) => ({ title: item.title, artist: item.artist, exploration: item.liked !== true })),
-        }, { signal }));
-        if (Array.isArray(researched)) {
-          webFacts = researched
-            .filter((fact): fact is { id: string; value: string; sourceUrl: string } => (
-              isRecord(fact)
-              && typeof fact.id === "string"
-              && /^web:[A-Za-z0-9_-]+$/.test(fact.id)
-              && typeof fact.value === "string"
-              && fact.value.trim().length >= 12
-              && typeof fact.sourceUrl === "string"
-              && /^https:\/\//.test(fact.sourceUrl)
-            ))
-            .slice(0, 24)
-            .map((fact) => ({ id: fact.id, value: fact.value.trim().slice(0, 500), sourceUrl: fact.sourceUrl.slice(0, 500) }));
-        }
-      } catch {
-        // A news lookup is additive. Song/profile facts remain sufficient to host safely.
-      }
+    if (typeof researchProvider.research !== "function") {
+      throw new ServiceError("HOST_PROVIDER_ERROR", 503, "联网调研服务不可用，口播尚未开始生成。");
     }
+    const researchTracks = items.map((item) => ({
+      title: item.title, artist: item.artist, album: item.album ?? undefined, exploration: item.liked !== true,
+    }));
+    let researchReport: MusicResearchReport;
+    try {
+      const researched = await researchProvider.research({ scenePreset: spec.scenePreset, tracks: researchTracks }, { signal });
+      signal.throwIfAborted();
+      researchReport = requireCompletedMusicResearch(researched, researchTracks);
+    } catch (error) {
+      if (signal.aborted) throw new ServiceError("REQUEST_ABORTED", 499, "请求已取消，口播尚未生成。");
+      throw new ServiceError("HOST_PROVIDER_ERROR", 502, "歌曲联网调研未完成，口播尚未生成。请重试；已确认的歌单和顺序会保留。");
+    }
+    items = items.map((item, index) => ({ ...item, hostResearch: researchReport.tracks[index]! }));
     if (typeof researchProvider.generateShow === "function") {
       const showTracks = items.map((item, index) => {
         const spokenArtist = spokenArtistName(item.artist);
-        const relevantWebFacts = webFacts
-          .filter((fact) => musicFactMatchesTrack(fact.value, item, items))
-          .slice(0, item.liked !== true ? 6 : 3);
+        const relevantWebFacts = item.hostResearch!.facts;
         const allowedFacts: HostContextPack["allowedFacts"] = [
           { id: `track:${item.id}:metadata`, value: `歌曲《${item.title}》，艺术家是${spokenArtist}。`, source: "user" },
           ...(item.album && isUsableAlbumTitle(item.album) && !releaseTitlesMatch(item.title, item.album) ? [{ id: `track:${item.id}:album`, value: `《${item.title}》所属专辑是《${item.album}》。`, source: "user" as const }] : []),
           ...(item.releaseYear ? [{ id: `track:${item.id}:year`, value: `《${item.title}》发行于${item.releaseYear}年。`, source: "user" as const }] : []),
-          ...relevantWebFacts.map((fact) => ({ id: fact.id, value: fact.value, source: "web" as const, sourceUrl: fact.sourceUrl })),
+          ...relevantWebFacts.map((fact) => ({ id: fact.id, value: musicResearchFactText(fact), source: "web" as const, sourceUrl: fact.sourceUrl })),
         ];
         return {
           trackIndex: index + 1,
@@ -3274,9 +3251,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         const text = typeof hostBreak.text === "string" ? normalizeSpokenYearDigits(normalizeSpokenEnglishCase(hostBreak.text.trim())).slice(0, 600) : "";
         if (!text) throw new ServiceError("HOST_PROVIDER_ERROR", 502, `整档主持文案生成失败：第 ${index + 1} 首前的口播为空。`);
         const hostMoment: NonNullable<ProgramRundownItem["hostMoment"]> = index === 0 ? "opening" : index === items.length - 1 ? "song_note" : "next_preview";
-        const targetSeconds = typeof hostBreak.targetSeconds === "number" && Number.isFinite(hostBreak.targetSeconds)
-          ? Math.min(35, Math.max(5, Math.round(hostBreak.targetSeconds)))
-          : (item.liked !== true ? 28 : 22);
+        const targetSeconds = estimateHostDurationSeconds(text);
         const factIds = Array.isArray(hostBreak.sourceIds)
           ? hostBreak.sourceIds.filter((id): id is string => typeof id === "string")
           : [`track:${item.id}:metadata`];
@@ -3325,10 +3300,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           ? "verified_story"
         : (["previous_review", "artist_spotlight", "verified_story", "artist_spotlight"] as const)[(hostBreakIndex - 1) % 4]!;
       hostBreakIndex += 1;
-      const relevantWebFacts = webFacts.filter((fact) => {
-        if (musicFactMatchesTrack(fact.value, item, items)) return true;
-        return previous ? musicFactMatchesTrack(fact.value, previous, items) : false;
-      }).slice(0, isExploration ? 6 : 4);
+      const relevantWebFacts = [...item.hostResearch!.facts, ...(previous?.hostResearch?.facts ?? [])];
       const hostMode = requestedHostMode === "verified_story" && relevantWebFacts.length === 0
         ? "artist_spotlight"
         : requestedHostMode;
@@ -3347,7 +3319,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         ...(previous && previous.id !== groundedTrack.id ? [{ id: `track:${previous.id}:previous`, value: `刚刚播完的是${spokenArtistName(previous.artist)}的《${previous.title}》。`, source: "user" as const }] : []),
         ...(profileForPrompt?.favoriteArtists.length ? [{ id: "profile:artists", value: `听众长期偏好的艺术家包括：${profileForPrompt.favoriteArtists.join("、")}。`, source: "user" as const }] : []),
         ...(profileForPrompt?.inferredThemes.length ? [{ id: "profile:themes", value: `听众画像中反复出现的音乐主题包括：${profileForPrompt.inferredThemes.join("、")}。`, source: "user" as const }] : []),
-        ...relevantWebFacts.map((fact) => ({ id: fact.id, value: fact.value, source: "web" as const, sourceUrl: fact.sourceUrl })),
+        ...relevantWebFacts.map((fact) => ({ id: fact.id, value: musicResearchFactText(fact), source: "web" as const, sourceUrl: fact.sourceUrl })),
       ];
       const transitionReason = isFinalTrack
         ? `这是整档节目的最后一首。必须在开头明确告诉听众“这是最后一首”或同等清晰的结束提示，再用已核验事实介绍${spokenArtist}和《${groundedTrack.title}》；不要总结节目，不要说告别套话。`
@@ -3373,7 +3345,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         facts: allowedFacts.map((fact) => fact.value),
         targetDurationSeconds: relevantWebFacts.length === 0 ? 15 : hostDurationTargets[currentHostBreakIndex],
       });
-      const characterBounds = hostCharacterBounds(hostPlan.durationSeconds);
       const moodDirection = item.mood.length > 0 ? `平台提供的曲目氛围标签为${item.mood.join("、")}。` : "平台未提供可验证的曲目氛围标签，不要把节目氛围说成歌曲事实。";
       const emotionalDirection = `主持角色是${hostProfile.name}，表达特征为${hostProfile.trait}。${moodDirection}本段编排目标强度约${Math.round(arrangementEnergy * 100)}；${previous ? `上一段编排目标强度约${Math.round((previousArrangementEnergy ?? previous.energy) * 100)}。` : "这是节目开场。"}这里的强度是节目编排目标，不是平台测得的歌曲声学属性。口播必须跟随段落变化调整句长、力度和停顿，避免统一收尾。`;
       const hostContext: HostContextPack = {
@@ -3383,7 +3354,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           previousTrack: spokenPrevious,
           currentTrack: spokenCurrent,
           nextTrack: null,
-          transitionReason: `${transitionReason}${explorationDirection}${emotionalDirection}这是整档第${currentHostBreakIndex + 1}/${hostDurationTargets.length}段口播。根据节目位置自然组织，不套固定的开头、转折和收尾结构；每句话都要增加一条音乐信息。${userAdjustment ? `用户对本档的调整要求：${userAdjustment.slice(0, 300)}。` : ""}本段目标${hostPlan.durationSeconds}秒、约${characterBounds.min}-${characterBounds.max}字；口播开始约${hostPlan.musicBedDelaySeconds}秒后，让待播歌曲前奏以${HOST_MUSIC_DUCK_DB} dB 的压低音量进入；口播结束后音乐在2秒内恢复正常音量。英文歌名、专辑名和艺人名使用正常首字母大写，不写成连续全大写。`,
+          transitionReason: `${transitionReason}${explorationDirection}${emotionalDirection}这是整档第${currentHostBreakIndex + 1}/${hostDurationTargets.length}段口播。根据节目位置自然组织，不套固定的开头、转折和收尾结构。${userAdjustment ? `用户对本档的调整要求：${userAdjustment.slice(0, 300)}。` : ""}内容决定长度，不设最低秒数或字数。歌曲故事不足时可用已核验的歌手背景、对应专辑理念、风格或奖项，明确事实归属；仍无材料就简短报歌。自然语速读完即止，禁止减速、拖音或延长停顿凑时长。英文歌名、专辑名和艺人名使用正常首字母大写，不写成连续全大写。`,
           recentHostLines: recentHostLines.slice(-8),
           allowedFacts,
           forbiddenClaims: ["未经验证的音乐资料、新闻、用户感受或私人经历", "声音稳稳托住", "把注意力交给音乐", "把注意力交回", "音乐现在接上", "继续往前走", "先记住这两个名字", "不急着预判", "别着急把它收起来", "换一种开场", "注意最初几秒", "留意开场几秒", "先听第一拍", "让我们开始这段音乐", "探索位", "背景有点东西", "先听完再说", "别急着下结论", "看看合不合拍", "顺手认识一下", "马上播出"],
@@ -3455,7 +3426,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         ...(typeof result.deliveryInstruction === "string" ? { deliveryInstruction: result.deliveryInstruction.slice(0, 160) } : {}),
         hostMoment: item.hostMoment,
         generatedAt: typeof result.generatedAt === "string" ? result.generatedAt : nowIso(),
-        plannedDurationSeconds: hostPlan.durationSeconds,
+        plannedDurationSeconds: estimateHostDurationSeconds(lockedText.slice(0, 600)),
         musicBedDelaySeconds: hostPlan.musicBedDelaySeconds,
       };
       recentHostLines.push(lockedText);

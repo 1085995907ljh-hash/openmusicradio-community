@@ -50,10 +50,17 @@ export function hostTtsPersona(profileId: HostProfileId): string {
 
 export function hostTtsInstruction(profileId: HostProfileId, moment?: HostTtsMoment, deliveryInstruction?: string): string {
   return [
+    "按自然语速播报，读完即止。",
     hostTtsPersona(profileId),
     moment ? HOST_TTS_MOMENTS[moment] : "",
-    deliveryInstruction?.trim() ?? "",
+    naturalHostDeliveryInstruction(deliveryInstruction),
   ].filter(Boolean).join(" ");
+}
+
+/** Discard timing directives before they can override the host's normal pace. */
+export function naturalHostDeliveryInstruction(instruction?: string): string {
+  const value = instruction?.trim() ?? "";
+  return /凑(?:满|够|足|时)|补(?:满|够|足|齐).{0,8}(?:秒|时)|拖音|补静音|(?:拉长|拖长).{0,8}(?:秒|时间|时长)|(?:至少|不少于|达到|控制在|保持|持续|保证|延长到|为了|目标).{0,12}(?:秒|\d\s*s\b|seconds)|\b(?:stretch|pad|fill).{0,25}(?:second|duration|time)/i.test(value) ? "" : value;
 }
 
 export function hostPreviewText(profileId: HostProfileId): string {

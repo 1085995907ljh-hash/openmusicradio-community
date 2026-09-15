@@ -1,0 +1,16 @@
+{
+  "name": "ai-radio-host",
+  "version": "3.0.0",
+  "owner": "One Radio",
+  "updated_at": "2026-09-15",
+  "status": "active",
+  "maturity_tier": "production",
+  "lifecycle_stage": "production",
+  "context_budget_tier": "production",
+  "review_cadence": "per-release",
+  "review_due": "2026-09-24",
+  "skill_archetype": "production",
+  "skill_ir_source": "reports/skill-ir.json",
+  "target_platforms": ["openai", "generic", "agent-skills-compatible"],
+  "factory_components": ["references", "evals", "reports"]
+}

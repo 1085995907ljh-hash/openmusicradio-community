@@ -8,6 +8,7 @@ import {
   QwenTtsProvider,
 } from "../src/providers/index.js";
 import { findBusinessFailure, httpError, safeUpstreamMessage } from "../src/providers/http.js";
+import { estimateHostDurationSeconds } from "../src/core/host-script-planning.js";
 
 const NOW = new Date("2026-01-02T03:04:05.000Z");
 
@@ -103,6 +104,25 @@ test("a TTS provider without a key is explicit and does not fabricate audio", as
   assert.equal(result.model, "qwen3-tts-instruct-flash");
   assert.equal(result.voice, "Elias");
   assert.equal(result.language, "Chinese");
+});
+
+test("autonomous research actions use the configured model transport without native browsing", async () => {
+  for (const mode of ["responses", "chat_completions"] as const) {
+    const action = { action: "search", scope: "album", query: "橙月 方大同 访谈" };
+    let endpoint = "";
+    let body: Record<string, unknown> = {};
+    const provider = new OpenAICompatibleHostProvider({
+      apiKey: "unit-test-key", mode,
+      fetchImpl: async (input, init) => {
+        endpoint = String(input);
+        body = JSON.parse(String(init?.body));
+        return jsonResponse(mode === "responses" ? { output_text: JSON.stringify(action) } : { choices: [{ message: { content: JSON.stringify(action) } }] });
+      },
+    });
+    assert.deepEqual(JSON.parse(await provider.researchAction("资料编辑", "当前歌曲")), action);
+    assert.ok(endpoint.endsWith(mode === "responses" ? "/responses" : "/chat/completions"));
+    assert.equal(body.tools, undefined);
+  }
 });
 
 test("host output may reference only facts in allowedFacts", async () => {
@@ -278,15 +298,35 @@ test("whole-show copy accepts natural duration estimates and repairs unknown sou
 
   assert.match(result.breaks[0]?.text ?? "", /^下午好，欢迎收听 Open Music Radio 电台，我是主持人龙浩。/);
   assert.doesNotMatch(result.breaks[0]?.text ?? "", /晚上好/);
-  assert.deepEqual(result.breaks.map((item) => item.targetSeconds), [15, 10, 6]);
+  assert.deepEqual(result.breaks.map((item) => item.targetSeconds), result.breaks.map((item) => estimateHostDurationSeconds(item.text)));
   assert.deepEqual(result.breaks.map((item) => item.finalization), ["draft_approved", "draft_approved", "draft_approved"]);
-  assert.match(JSON.stringify(bodies[1]), /资料充足时优先写 25 至 30 秒/);
+  assert.match(JSON.stringify(bodies[1]), /内容决定长度，无最低秒数/);
   assert.match(JSON.stringify(bodies[2]), /当前歌曲只有基础元数据/);
   assert.match(JSON.stringify(bodies[2]), /完全不审核字数、时长或 targetSeconds/);
   assert.match(result.breaks[1]?.text ?? "", /2017年/);
   assert.doesNotMatch(result.breaks[1]?.text ?? "", /二[〇零]一七年/);
   assert.deepEqual(result.breaks[1]?.sourceIds, ["track:2:metadata"]);
   assert.deepEqual(result.breaks[2]?.sourceIds, ["track:3:metadata"]);
+});
+
+test("a short researched introduction is accepted below five seconds regardless of the planned target", async () => {
+  const breaks = [
+    { id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 20, text: "欢迎收听电台，我是主持人，先听王菲的《红豆》。", sourceIds: ["track:1:metadata"] },
+    { id: "break-02", beforeTrackIndex: 2, type: "middle", targetSeconds: 1.5, text: "王菲，《红豆》。", sourceIds: ["track:2:metadata"] },
+    { id: "break-03", beforeTrackIndex: 3, type: "closing", targetSeconds: 30, text: "最后一首，王菲的《红豆》。", sourceIds: ["track:3:metadata"] },
+  ];
+  const placements = { frequency: "low", placements: breaks.map((item) => ({ ...item, reason: "报歌" })) };
+  const responses = approvedShowResponses(placements, breaks);
+  const provider = new OpenAICompatibleHostProvider({ apiKey: "test-key", mode: "responses", fetchImpl: async () => jsonResponse({ output_text: JSON.stringify(responses.shift()) }) });
+  const result = await provider.generateShow({ scenePreset: "study", frequency: "low", skillInstruction: "撰稿契约", reviewInstruction: "审核契约", tracks: [1, 2, 3].map((index) => ({
+    trackIndex: index, title: "红豆", artist: "王菲", exploration: true,
+    allowedFacts: [{ id: `track:${index}:metadata`, value: "《红豆》由王菲演唱。", source: "user" as const }, { id: `web:metadata_${index}`, value: "资料页面只有歌曲身份信息，《红豆》由王菲演唱。", source: "web" as const }],
+  })) });
+  assert.equal(result.success, true);
+  assert.equal(result.breaks[1]?.text, "王菲，《红豆》。");
+  assert.equal(result.breaks[1]?.targetSeconds, 1.1);
+  assert.equal(result.breaks[1]?.finalization, "draft_approved");
+  assert.ok(result.breaks[2]!.targetSeconds < 5, "a 30-second model target must not inflate a short closing");
 });
 
 test("each host break is reviewed immediately and a rejected draft is rewritten then reviewed again", async () => {
@@ -455,9 +495,30 @@ test("a host break rejected twice uses the factual metadata fallback and stops r
 
   assert.equal(result.success, true);
   assert.equal(calls, 5);
-  assert.equal(result.breaks[0]?.text, "下午好，欢迎收听 Open Music Radio 电台，我是主持人龙浩。接下来听音乐人一的《歌曲一》，发行于2021年，收录在专辑《专辑一》中。");
+  assert.match(result.breaks[0]!.text, /^下午好，欢迎收听 Open Music Radio 电台，我是主持人龙浩。/);
+  assert.match(result.breaks[0]!.text, /音乐人一的《歌曲一》/);
+  assert.doesNotMatch(result.breaks[0]!.text, /2021|专辑一/);
   assert.deepEqual(result.breaks[0]?.sourceIds, ["track:1:metadata", "track:1:year", "track:1:album"]);
   assert.equal(result.breaks[0]?.finalization, "metadata_fallback");
+});
+
+test("fallback never borrows an artist award year as the song release year", async () => {
+  const opening = { id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 10, text: "先听王菲的《红豆》。", sourceIds: ["track:1:metadata"] };
+  const closing = { id: "break-02", beforeTrackIndex: 2, type: "closing", targetSeconds: 10, text: "最后一首，王菲的《红豆》。", sourceIds: ["track:2:metadata"] };
+  const rejected = { approved: false, issues: [{ breakId: closing.id, problem: "测试返修", direction: "使用可靠事实" }] };
+  const responses = [
+    { frequency: "low", placements: [opening, closing].map((item) => ({ ...item, reason: "报歌" })) },
+    { break: opening }, { approved: true, issues: [] },
+    { break: closing }, rejected, { break: closing }, rejected,
+  ];
+  const provider = new OpenAICompatibleHostProvider({ apiKey: "test-key", mode: "responses", fetchImpl: async () => jsonResponse({ output_text: JSON.stringify(responses.shift()) }) });
+  const result = await provider.generateShow({ scenePreset: "study", frequency: "low", skillInstruction: "撰稿契约", reviewInstruction: "审核契约", tracks: [1, 2].map((index) => ({
+    trackIndex: index, title: "红豆", artist: "王菲", exploration: true,
+    allowedFacts: [{ id: `track:${index}:metadata`, value: "《红豆》由王菲演唱。", source: "user" as const }, { id: `web:artist_${index}`, value: "歌手在2004年获得最佳女歌手奖。", source: "web" as const }],
+  })) });
+  assert.equal(result.success, true);
+  assert.equal(result.breaks[1]?.finalization, "metadata_fallback");
+  assert.doesNotMatch(result.breaks[1]!.text, /2004|发行/);
 });
 
 test("whole-show generation retries an incorrect placement count before returning the reviewed copy", async () => {
@@ -711,7 +772,7 @@ test("whole-show generation falls back only for placement after repeated malform
   assert.equal(calls, 9);
 });
 
-test("whole-show prompts bound profile and fact payloads", async () => {
+test("whole-show prompts omit private playlist names and preserve all researched evidence", async () => {
   const bodies: Array<Record<string, unknown>> = [];
   const placements = {
     frequency: "low",
@@ -733,15 +794,17 @@ test("whole-show prompts bound profile and fact payloads", async () => {
       return jsonResponse({ output_text: JSON.stringify(responses.shift()) });
     },
   });
-  const facts = Array.from({ length: 12 }, (_, index) => ({ id: `track:1:fact-${index}`, value: `事实 ${index} ${"很长的资料".repeat(100)}`, source: "web" as const, sourceUrl: `https://source.example/${index}` }));
+  const facts = Array.from({ length: 16 }, (_, index) => ({ id: `track:1:fact-${index}`, value: `事实 ${index} ${"很长的资料".repeat(140)} 原文证据结尾`, source: "web" as const, sourceUrl: `https://source.example/${index}` }));
   const tracks = [1, 2].map((id) => ({ trackIndex: id, title: `歌曲${id}`, artist: `音乐人${id}`, exploration: true, allowedFacts: id === 1 ? facts : [{ id: "track:2:metadata", value: "歌曲二由音乐人二演唱。", source: "user" as const }] }));
   const listenerProfile = { favoriteArtists: [{ name: "音乐人", score: 1 }], topSongs: [{ title: "歌曲", artists: ["音乐人"] }], playlistNames: ["不应发送的私人歌单名"], inferredThemes: ["主题"], evidence: ["证据"] };
 
   await provider.generateShow({ scenePreset: "study", frequency: "low", tracks, skillInstruction: "整档撰稿契约", reviewInstruction: "整档监制契约", listenerProfile });
 
   const payload = JSON.stringify(bodies);
-  assert.doesNotMatch(payload, /不应发送的私人歌单名|source\.example/);
-  assert.ok(payload.length < 45_000, `bounded sequential show payload was ${payload.length} bytes`);
+  assert.doesNotMatch(payload, /不应发送的私人歌单名/);
+  const input = bodies[0]!.input as Array<{ role: string; content: Array<{ text: string }> }>;
+  const context = JSON.parse(input.find((item) => item.role === "user")!.content[0]!.text);
+  assert.deepEqual(context.tracks[0].allowedFacts, facts);
 });
 
 test("an invalid final rewrite fails without substituting local template copy", async () => {
@@ -790,6 +853,13 @@ test("OpenAI Responses host uses the requested Sol model without repeating progr
   assert.ok(body);
   assert.equal(body.model, "gpt-5.6-sol");
   assert.equal(body.tools, undefined);
+});
+
+test("legacy host generation also accepts concise copy without filling its old duration hint", async () => {
+  const provider = new OpenAICompatibleHostProvider({ apiKey: "test-key", mode: "responses", fetchImpl: async () => jsonResponse({ output_text: JSON.stringify({ text: "王菲，《红豆》。", factIds: [], deliveryInstruction: "自然语速，读完即止。" }) }) });
+  const result = await provider.generate(context({ hostLengthSeconds: 30 }));
+  assert.equal(result.success, true);
+  assert.equal(result.text, "王菲，《红豆》。");
 });
 
 test("OpenAI Responses host does not retry a failed script request with a duplicate search", async () => {
@@ -995,12 +1065,14 @@ test("Qwen TTS enables instruction optimization for natural delivery", async () 
     },
   });
 
-  const result = await provider.synthesize({ text: "这是一段自然的电台过场。", scenePreset: "late_night" });
+  const result = await provider.synthesize({ text: "王菲，《红豆》。", scenePreset: "late_night", instruction: "语速极慢，延长停顿，凑足5秒。" });
   const input = (requestBody as Record<string, unknown> | null)?.input as Record<string, unknown> | undefined;
   assert.equal(result.success, true);
   assert.equal(input?.voice, "Elias");
   assert.equal(input?.language_type, "Chinese");
   assert.equal(input?.optimize_instructions, true);
+  assert.match(String(input?.instructions), /自然语速，读完即止/);
+  assert.doesNotMatch(String(input?.instructions), /极慢|延长停顿|凑足/);
 });
 
 test("selected Mandarin host uses its exact CosyVoice v2 model and voice", async () => {

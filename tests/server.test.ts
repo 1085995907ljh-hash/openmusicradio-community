@@ -5,8 +5,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createLocalService } from "../src/server/index.js";
+import { createLocalService as createService } from "../src/server/index.js";
+import { musicResearchTrackKey, type MusicResearchTrack } from "../src/shared/music-research.js";
 import { ProgramEngine } from "../src/core/program-engine.js";
+import { estimateHostDurationSeconds } from "../src/core/host-script-planning.js";
 import { ProviderError } from "../src/providers/types.js";
 import { LocalAiConfigStore } from "../src/server/local-ai-config.js";
 import type { CloudAccessStore } from "../src/server/cloud-access.js";
@@ -26,6 +28,20 @@ after(() => {
 
 async function json(response: Response) {
   return response.json() as Promise<Record<string, any>>;
+}
+
+// All account-program fixtures explicitly supply completed research; tests for
+// missing/failed research override it or use the unwrapped service factory.
+function completedResearch(request: { tracks: MusicResearchTrack[] }) {
+  return { tracks: request.tracks.map((track) => ({
+    trackKey: musicResearchTrackKey(track), status: "no_results" as const,
+    completedAt: new Date().toISOString(), facts: [],
+    attempts: [{ query: `${track.title} ${track.artist}`, status: "completed" as const, sourceUrls: [] }],
+  })) };
+}
+
+function createLocalService(options: NonNullable<Parameters<typeof createService>[0]> = {}) {
+  return createService({ ...options, ...(options.hostProvider ? { hostProvider: { research: completedResearch, ...options.hostProvider } } : {}) });
 }
 
 function planningProvider<T extends { id: string; title: string; artists: Array<{ id: string; name: string }>; durationMs: number }>(songs: T[], likedIds: string[], recentIds: string[] = [], historyIds: string[] = []) {
@@ -65,6 +81,86 @@ function groundedHostProvider() {
 }
 
 const readyTtsProvider = { configured: true, state: "ready", synthesize() { return { success: true, status: "ready", audio: Buffer.from("RIFF0000WAVE") }; } };
+
+test("account confirmation requires complete per-song research before writing and recovers without changing the playlist", async (context) => {
+  const songs = Array.from({ length: 20 }, (_, index) => ({ id: String(97000 + index), title: `调研曲目${index}`, artists: [{ id: String(index), name: `调研艺人${index}` }], durationMs: 180_000 }));
+  let hostCalls = 0;
+  let ttsCalls = 0;
+  let playlistWrites = 0;
+  let researchTrackCount = 0;
+  let stored: string[] = [];
+  const hostProvider = {
+    configured: true,
+    research: undefined as ((request: { tracks: MusicResearchTrack[] }) => unknown) | undefined,
+    generate() { hostCalls++; throw new Error("whole-show path expected"); },
+    generateShow(request: { tracks: Array<{ title: string; artist: string; allowedFacts: Array<{ id: string }> }> }) {
+      hostCalls++;
+      request.tracks.forEach((track, index) => {
+        assert.deepEqual(track.allowedFacts.filter((fact) => fact.id.startsWith("web:")).map((fact) => fact.id), [`web:checked_${index}`]);
+      });
+      return { success: true, breaks: [0, request.tracks.length - 1].map((index) => ({
+        id: `break-${index}`, beforeTrackIndex: index + 1, type: index === 0 ? "opening" : "closing",
+        targetSeconds: 30, text: `${index === 0 ? "下午好" : "最后一首"}，${request.tracks[index]!.artist}的《${request.tracks[index]!.title}》。`, sourceIds: [`web:checked_${index}`],
+      })) };
+    },
+  };
+  const token = "mandatory-research-test";
+  const service = await createService({ port: 0, localControlToken: token, hostProvider,
+    neteaseProvider: {
+      ...planningProvider(songs, []),
+      createPlaylist(name: string) { playlistWrites++; return { id: "researched-playlist", name }; },
+      addSongsToPlaylist(_id: string, ids: string[]) { stored = ids; return { playlistId: "researched-playlist", trackIds: ids }; },
+      playlistDetail() { return { id: "researched-playlist", tracks: stored.map((id) => ({ id })) }; },
+    },
+    ttsProvider: { synthesize() { ttsCalls++; return { success: true, status: "ready", audio: Buffer.from("RIFF0000WAVE") }; } },
+  });
+  await service.start();
+  context.after(() => service.stop());
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+  const createdResponse = await fetch(`${base}/programs`, { method: "POST", headers, body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 60, scenePreset: "study", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }) });
+  assert.equal(createdResponse.status, 201);
+  const { program } = await json(createdResponse);
+  const originalIds = program.rundown.map((track: { id: string }) => track.id);
+  assert.ok(originalIds.length > 12);
+  const confirm = (operationId: string) => fetch(`${base}/programs/${program.id}/confirm`, { method: "POST", headers, body: JSON.stringify({ generation: program.generation, planRevision: program.planRevision, operationId }) });
+  for (const mode of ["missing", "legacy-array", "partial", "failed"] as const) {
+    hostProvider.research = mode === "missing" ? undefined : (request) => {
+      const result = completedResearch(request);
+      if (mode === "legacy-array") return [];
+      if (mode === "partial") result.tracks.pop();
+      if (mode === "failed") return { tracks: result.tracks.map((track, index) => index === result.tracks.length - 1 ? { ...track, status: "failed" } : track) };
+      return result;
+    };
+    const response = await confirm(`research-${mode}`);
+    assert.ok(response.status >= 500);
+    assert.match((await json(response)).error, /调研/);
+    assert.equal(hostCalls, 0);
+    assert.equal(ttsCalls, 0);
+    assert.equal(playlistWrites, 0);
+    const current = (await json(await fetch(`${base}/program`, { headers }))).program;
+    assert.deepEqual(current.rundown.map((track: { id: string }) => track.id), originalIds);
+    assert.ok(current.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
+  }
+  hostProvider.research = (request) => {
+    researchTrackCount = request.tracks.length;
+    return { tracks: completedResearch(request).tracks.map((receipt, index) => ({
+      ...receipt, status: "researched", attempts: [{ query: receipt.attempts[0]!.query, status: "completed", sourceUrls: [`https://example.com/source/${index}`] }],
+      facts: [{ id: `web:checked_${index}`, value: `这是一条只属于当前资料记录的公开音乐背景信息，编号${index}。`, sourceUrl: `https://example.com/source/${index}` }],
+    })) };
+  };
+  const recovered = await confirm("research-recovered");
+  assert.equal(recovered.status, 200);
+  const result = (await json(recovered)).program;
+  assert.equal(researchTrackCount, originalIds.length);
+  assert.equal(hostCalls, 1);
+  assert.ok(ttsCalls > 0);
+  assert.deepEqual(result.rundown.map((track: { id: string }) => track.id), originalIds);
+  assert.ok(result.rundown.every((track: { hostResearch?: { status: string } }) => track.hostResearch?.status === "researched"));
+  const shortClosing = result.rundown.at(-1).hostScript;
+  assert.equal(shortClosing.plannedDurationSeconds, estimateHostDurationSeconds(shortClosing.text));
+  assert.ok(shortClosing.plannedDurationSeconds < 5, "persisted web-backed short copy must not be padded to the model's target");
+});
 
 test("local service enforces fixture ids, generations, and operation action scope", async (context) => {
   const service = await createLocalService({ port: 0 });
@@ -3264,7 +3360,7 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
     .map((track: { hostScript?: { audioReady?: boolean; plannedDurationSeconds?: number; musicBedDelaySeconds?: number } }) => track.hostScript)
     .filter((script: unknown): script is { audioReady: boolean; plannedDurationSeconds: number; musicBedDelaySeconds: number } => Boolean(script));
   assert.ok(
-    preparedHostScripts.every((script: { plannedDurationSeconds: number }) => script.plannedDurationSeconds >= 5 && script.plannedDurationSeconds <= 35),
+    preparedHostScripts.every((script: { text: string; plannedDurationSeconds: number }) => script.plannedDurationSeconds === estimateHostDurationSeconds(script.text)),
     JSON.stringify(preparedHostScripts.map((script: { plannedDurationSeconds: number; musicBedDelaySeconds: number }) => ({ plannedDurationSeconds: script.plannedDurationSeconds, musicBedDelaySeconds: script.musicBedDelaySeconds }))),
   );
   assert.ok(preparedHostScripts.every((script: { musicBedDelaySeconds: number }) => script.musicBedDelaySeconds === 5));

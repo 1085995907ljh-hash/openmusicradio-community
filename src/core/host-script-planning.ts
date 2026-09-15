@@ -12,6 +12,13 @@ export const HOST_MUSIC_DUCK_DB = -5;
 export const HOST_MUSIC_DUCK_VOLUME = dbToGain(HOST_MUSIC_DUCK_DB);
 export const HOST_MUSIC_RESTORE_DURATION_MS = 2_000;
 
+/** Display estimate only: never use it to stretch speech or enforce a minimum. */
+export function estimateHostDurationSeconds(text: string): number {
+  const words = text.match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) ?? [];
+  const characters = Array.from(text.replace(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g, "").replace(/[^\p{L}\p{N}]/gu, "")).length;
+  return Math.round((characters / 3.75 + words.length / 2.5) * 10) / 10;
+}
+
 export function dbToGain(db: number): number {
   if (!Number.isFinite(db)) return 1;
   return Math.max(0, Math.min(1, 10 ** (db / 20)));

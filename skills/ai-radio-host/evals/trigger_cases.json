@@ -1,0 +1,21 @@
+{
+  "recommended_threshold": 0.35,
+  "negative_patterns": ["歌单排序", "选歌", "TTS", "语音合成", "节目摘要", "普通文章", "只查资料"],
+  "should_trigger": [
+    { "text": "这是完整歌单，口播频率设为中。先布点，再逐条撰稿与事实检查，最后整档编辑一次并锁稿。", "family": "whole_show_pipeline" },
+    { "text": "低频口播，开场和最后一首前必须有，中间挑最值得讲的歌介绍创作故事。", "family": "low_frequency_placement" },
+    { "text": "做一档高频音乐节目，调研歌手、专辑、奖项和翻唱资料，整档主持词不要重复。", "family": "high_frequency_research" },
+    { "text": "每生成一条音乐节目口播先查事实硬伤，整档完成后只对明显重复和绕口做局部编辑。", "family": "fact_check_and_show_edit" },
+    { "text": "Research this locked playlist, place medium-frequency radio breaks, and return one reviewed Chinese show script.", "family": "english_route" },
+    { "text": "熟悉歌曲短一点，陌生音乐人多讲背景，开头结尾和中段承接都要像真实电台。", "family": "show_pacing" },
+    { "text": "这档节目是派对氛围，整档口播的句子和语气要比放松节目更紧凑，但仍然要完成调研和审核。", "family": "atmosphere_adaptation" }
+  ],
+  "should_not_trigger": [
+    { "text": "把这十首歌重新排序，节奏先慢后快。", "family": "playlist_order" },
+    { "text": "只帮我搜索这位歌手获得过哪些奖，不用写口播。", "family": "research_only" },
+    { "text": "把这段现成口播转换成语音。", "family": "tts_only" },
+    { "text": "总结一下这档节目的歌曲和风格。", "family": "summary_only" },
+    { "text": "写一篇介绍这位音乐人的公众号文章。", "family": "article_writing" },
+    { "text": "删除节目单第三首歌，再补一首新的。", "family": "rundown_edit" }
+  ]
+}

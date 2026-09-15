@@ -1,0 +1,50 @@
+{
+  "optimizer_hints": {
+    "capability": "Research and draft a Chinese radio show with per-break fact checks and one whole-show editorial pass",
+    "inputs": ["有序歌单", "低中高口播频率", "音乐氛围", "歌曲", "音乐人", "完整节目", "locked playlist", "break frequency", "music atmosphere"],
+    "trigger_actions": ["调研口播资料", "按音乐氛围调整表达", "决定口播位置", "逐条生成口播", "逐条事实检查", "整档编辑一次", "research and place radio breaks"],
+    "exclusions": ["歌单排序", "单独音乐检索", "TTS 合成", "节目摘要", "普通文章"],
+    "artifacts": ["调研事实包", "口播位置计划", "完整节目稿", "逐条事实检查结果", "整档局部编辑"]
+  },
+  "fallback_positive_concepts": ["whole_show_copy", "placement_and_review"],
+  "positive_concepts": {
+    "whole_show_copy": {
+      "weight": 0.4,
+      "phrases": ["完整歌单", "整档口播", "完整节目稿", "完整音乐节目口播", "开场和结尾", "开头结尾和中段承接", "complete show script", "locked playlist"]
+    },
+    "placement_and_frequency": {
+      "weight": 0.3,
+      "phrases": ["低频", "中频", "高频", "口播频率", "决定哪里放口播", "中段口播", "break frequency", "place radio breaks", "medium-frequency radio breaks"]
+    },
+    "research_and_review": {
+      "weight": 0.3,
+      "phrases": ["调研歌曲背景", "奖项和翻唱", "创作故事", "逐条生成", "逐条审核", "事实检查", "事实硬伤", "整档编辑", "审核这份", "调研和审核", "不通过", "单独修改", "只修改不合格口播", "陌生音乐人多讲背景", "真实电台", "research music facts", "per-break review", "reviewed Chinese show script"]
+    },
+    "atmosphere_adaptation": {
+      "weight": 0.2,
+      "phrases": ["音乐氛围", "放松口吻", "专注口吻", "运动口吻", "律动口吻", "派对口吻", "放松节目", "专注氛围", "运动氛围", "律动氛围", "派对氛围", "music atmosphere", "adapt the delivery"]
+    }
+  },
+  "negative_concepts": {
+    "playlist_edit": {
+      "weight": 0.6,
+      "exclusive": true,
+      "phrases": ["歌单排序", "重新排序", "删除歌曲", "补一首", "调整曲序", "playlist order"]
+    },
+    "research_only": {
+      "weight": 0.5,
+      "exclusive": true,
+      "phrases": ["只搜索", "只查资料", "不用写口播", "research only"]
+    },
+    "tts_only": {
+      "weight": 0.5,
+      "exclusive": true,
+      "phrases": ["转换成语音", "语音合成", "只做 TTS", "synthesize speech"]
+    },
+    "other_writing": {
+      "weight": 0.4,
+      "exclusive": true,
+      "phrases": ["节目摘要", "公众号文章", "普通文章", "summarize the show"]
+    }
+  }
+}

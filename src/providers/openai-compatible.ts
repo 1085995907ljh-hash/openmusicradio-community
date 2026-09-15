@@ -1,5 +1,5 @@
 import type { HostContextPack } from "../shared/contracts.js";
-import { evenlySpacedHostBreakIndices, hostCharacterBounds, middleHostBreakCount, normalizeSpokenEnglishCase, normalizeSpokenYearDigits } from "../core/host-script-planning.js";
+import { estimateHostDurationSeconds, evenlySpacedHostBreakIndices, middleHostBreakCount, normalizeSpokenEnglishCase, normalizeSpokenYearDigits } from "../core/host-script-planning.js";
 import { getSceneConfig } from "../core/scenes.js";
 import { DEFAULT_HOST_PROFILE, HOST_PROFILES, hostOpeningIdentity, type HostProfileId } from "../shared/program-options.js";
 import {
@@ -57,12 +57,12 @@ interface HostShowReviewIssue {
   direction: string;
 }
 
-type HostFactAvailability = "rich" | "sparse";
+type HostFactAvailability = "available" | "sparse";
 
 const GENERATOR_SYSTEM_PROMPT = [
   "你是本地音乐电台的中文主持人兼撰稿人。先考虑听众体验，再根据节目上下文和 allowedFacts 写候选口播。",
   "不得猜测用户的位置、心情、记忆、身体或私人经历，不得创造歌曲或艺人事实。",
-  "熟悉歌曲通常安排 12 至 18 秒，只补一个新信息；探索歌曲通常安排 25 至 35 秒，优先介绍音乐人和作品来路。普通话自然播报按每秒约 2.8 至 3.7 个汉字估算，宁可缩短，也不准用空话补齐。",
+  "内容决定长度，不设最低秒数或目标字数。熟悉歌曲只补一个新信息；探索歌曲有材料时介绍音乐人和作品来路。歌曲故事不足时先从已调研的歌手背景、对应专辑理念、风格或奖项中选一个重点；这些也不足就简短报歌，读完即止。",
   "整档节目轮换点评上一首、艺人聚焦和核验故事；不要同时报出两首未来歌曲，不要提及马上要播歌曲之后的任何曲目。",
   "艺人背景、长期风格、经典成就、奖项意义、近况、公众评价、制作、唱腔与歌曲逸事都必须引用明确支持该说法的 allowedFacts；没有证据就省略。",
   "把事实讲成人话，不逐条朗读资料。自然口语来自具体材料和清楚的词序，不来自网络流行词、口头禅、态度引导或故意俏皮。",
@@ -78,15 +78,15 @@ const GENERATOR_SYSTEM_PROMPT = [
   "英文歌名、专辑名和艺人名使用正常首字母大写；不要输出 BLUE、OPEN MUSIC RADIO、CINNAMON CURLS 这类连续全大写英文，以免中文 TTS 逐字母误读。",
   "年份必须使用阿拉伯数字加“年”，例如 2017年、2024年；绝对不要写二〇一七年、二零一七年这类中文数字年份。",
   "禁止“探索位”“背景有点东西”“先听完再说”“别急着下结论”“看看合不合拍”“顺手认识一下”以及同类没有音乐信息的填充表达。",
-  "必须先写三个内容角度真正不同的候选，不得只换同义词或句序。每个候选都必须独立满足时长、事实和节目位置要求。",
+  "必须先写三个内容角度真正不同的候选，不得只换同义词或句序。每个候选都必须独立满足事实和节目位置要求，短稿不因时长被否决。",
   "只返回 JSON，不要 Markdown：{\"candidates\":[{\"angle\":\"切入点\",\"text\":\"口播\",\"factIds\":[\"事实ID\"],\"deliveryInstruction\":\"TTS演绎指令\"}]}。",
-  "deliveryInstruction 不超过 80 字，只写语速、停顿、重音、情绪和句尾处理，不增加事实。",
+  "deliveryInstruction 不超过 80 字，只写自然语速、必要停顿、重音、情绪和句尾处理，不增加事实。禁止为了目标秒数减速、拖音、延长停顿或补静音；稿件短就自然结束。奖项必须说明获奖主体是歌曲、专辑还是歌手，不得互相挪用。",
 ].join("\n");
 
 const REVIEWER_SYSTEM_PROMPT = [
   "你是这档音乐节目的独立监制。你只审核主持人候选，不能代写、补句或润色。",
   "从听众体验出发判断：这段是否真的提供了值得听的信息，是否像真实主持人在说话，是否适合此刻的节目位置。",
-  "逐项检查事实均有 factIds 支持、没有幕后说明或虚构、长度合规、歌手歌名清楚、没有百科履历或空泛抒情、没有广告腔播音腔短视频腔。",
+  "逐项检查事实均有 factIds 支持、没有幕后说明或虚构、歌手歌名清楚、没有百科履历或空泛抒情、没有广告腔播音腔短视频腔。不设最低字数或秒数，资料不足的短稿必须允许通过；歌手和专辑资料可用，但不得说成歌曲本身的获奖或创作事实。",
   "检查每句话是否增加音乐信息。网络流行词、口头禅、听歌建议、让听众下结论或判断合不合拍的句子都应退回删除。",
   "正文出现冒号、破折号、翻案句或“马上播出”时退回，要求改成正常说话顺序。",
   "年份必须写成阿拉伯数字加“年”，例如 2017年；出现二〇一七年、二零一七年等中文数字年份时退回。",
@@ -418,6 +418,17 @@ export class OpenAICompatibleHostProvider implements HostProvider {
       .map((fact, index) => ({ ...fact, id: `web:${index + 1}` }));
   }
 
+  /** The application executes these actions; no model-native web tool is needed. */
+  async researchAction(system: string, user: string, options: HostGenerationOptions = {}): Promise<string> {
+    const mode = this.mode === "auto" ? "responses" : this.mode;
+    const payload = await this.request(mode, { system, user }, options.signal, false, 4_000);
+    for (const candidate of collectResponseCandidates(payload)) {
+      const object = extractJsonObject(candidate);
+      if (object && typeof object.action === "string") return JSON.stringify(object);
+    }
+    throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "research model did not return an executable action", { retryable: true }));
+  }
+
   async generatePlaylistNames(request: PlaylistNamingRequest, options: HostGenerationOptions = {}): Promise<PlaylistNamingResult> {
     if (!this.configured || !isScenePreset(request.scenePreset) || !Array.isArray(request.tracks) || request.tracks.length === 0) {
       return { success: false, names: [] };
@@ -554,7 +565,6 @@ function safeHostContext(context: HostContextPack): Record<string, unknown> {
   const allowedFacts = Array.isArray(context.allowedFacts) ? context.allowedFacts : [];
   const forbiddenClaims = Array.isArray(context.forbiddenClaims) ? context.forbiddenClaims : [];
   const targetSeconds = context.hostLengthSeconds ?? 16;
-  const characterBounds = hostCharacterBounds(targetSeconds);
   const hostProfileId = normalizeHostProfile(context.hostProfile);
   const hostProfile = HOST_PROFILES[hostProfileId];
   const safeContext: Record<string, unknown> = {
@@ -572,7 +582,7 @@ function safeHostContext(context: HostContextPack): Record<string, unknown> {
     hostMoment: context.hostMoment ?? "opening",
     familiarity: context.isExploration === true ? "exploration" : "familiar",
     hostLengthSeconds: targetSeconds,
-    hostCharacterRange: characterBounds,
+    durationPolicy: "hostLengthSeconds 仅是旧版编排参考，正文不设最低秒数或字数。自然语速读完即止，不为参考时长扩写、减速、拖音或加停顿。",
     recentHostLines: recentHostLines.slice(-8),
     allowedFacts: allowedFacts.map(({ id, value, source, sourceUrl }) => ({ id, value, source, ...(sourceUrl ? { sourceUrl } : {}) })),
     forbiddenClaims,
@@ -639,7 +649,7 @@ function safeHostShowRequest(request: HostShowGenerationRequest): Record<string,
       ...(track.releaseYear ? { releaseYear: track.releaseYear } : {}),
       familiarity: track.exploration ? "exploration" : "familiar",
       listenerRelationship: track.exploration ? "not_yet_familiar" : "liked_by_listener",
-      allowedFacts: track.allowedFacts.slice(0, 8).map(({ id, value, source }) => ({ id, value: value.slice(0, 360), source })),
+      allowedFacts: track.allowedFacts.map(({ id, value, source, sourceUrl }) => ({ id, value, source, ...(sourceUrl ? { sourceUrl } : {}) })),
     })),
     ...(request.listenerProfile ? { listenerProfile: {
       favoriteArtists: request.listenerProfile.favoriteArtists.slice(0, 8).map((item) => ({ name: item.name, score: item.score })),
@@ -691,7 +701,6 @@ function safeHostShowWritingContext(
   const safeTracks = Array.isArray(safeRequest.tracks) ? safeRequest.tracks : [];
   const currentTrack = request.tracks[placement.beforeTrackIndex - 1]!;
   const factAvailability = hostFactAvailability(currentTrack);
-  const durationRange = hostDurationRange(factAvailability, placement.type);
   return {
     show: {
       ...safeRequest,
@@ -706,9 +715,7 @@ function safeHostShowWritingContext(
     currentTrack: safeTracks[placement.beforeTrackIndex - 1],
     factAvailability: {
       level: factAvailability,
-      durationPolicy: factAvailability === "sparse"
-        ? `资料不足，正文按 ${durationRange.min}-${durationRange.max} 秒生成，不用空话补齐。`
-        : `资料充足，正文优先按 ${durationRange.min}-${durationRange.max} 秒生成。`,
+      durationPolicy: "内容决定长度，无最低秒数；网页存在不代表资料丰富。先选择可核验的歌曲故事、歌手背景或对应专辑理念、风格、奖项，均不足时只简短报歌。自然语速读完即止，targetSeconds 只记录正文的估算时长。",
     },
     completedBreaks: breaks.map(({ id, beforeTrackIndex, type, text }) => ({ id, beforeTrackIndex, type, text })),
   };
@@ -724,7 +731,7 @@ function buildHostShowBreakPrompt(
     system: [
       request.skillInstruction.slice(0, 48_000),
       "本轮只写 currentPlacement 指定的一条口播。先在内部判断这一条最值得讲的主线，再结合 completedBreaks 避免重复角度、开头、句式和收尾。不要输出思考过程。",
-      "不得改变 id、beforeTrackIndex 或 type。资料充足时优先写 25 至 30 秒；资料不足时，中段和结尾写 5 至 10 秒，开场只额外保留电台与主持人身份所需时间。按正文实际播报长度填写 targetSeconds，不用空话补时长。只返回 JSON：{\"break\":{\"id\":\"break-01\",\"beforeTrackIndex\":1,\"type\":\"opening | middle | closing\",\"targetSeconds\":20,\"text\":\"可直接播出的口播\",\"sourceIds\":[\"事实ID\"],\"deliveryInstruction\":\"TTS演绎指令\"}}。",
+      "不得改变 id、beforeTrackIndex 或 type。内容决定长度，无最低秒数。歌曲信息不足时，优先选择已核验的歌手背景、对应专辑理念、风格或奖项；明确事实属于歌手、专辑还是歌曲，不把专辑风格推定为每首歌的声音。仍无有用材料才简短报歌，开场保留必要身份。targetSeconds 只估算正文自然播报长度，允许小于 5 秒；禁止用空话、减速、拖音或延长停顿凑时长。只返回 JSON：{\"break\":{\"id\":\"break-01\",\"beforeTrackIndex\":1,\"type\":\"opening | middle | closing\",\"targetSeconds\":20,\"text\":\"可直接播出的口播\",\"sourceIds\":[\"事实ID\"],\"deliveryInstruction\":\"TTS演绎指令\"}}。",
     ].join("\n\n"),
     user: JSON.stringify(safeHostShowWritingContext(request, placements, placement, breaks)),
   };
@@ -813,8 +820,8 @@ function parseHostShowPlacementPayload(payload: unknown, request: HostShowGenera
         : beforeTrackIndex === request.tracks.length
           ? "closing"
           : "middle";
-      const targetSeconds = Number.isFinite(Number(value.targetSeconds)) && Number(value.targetSeconds) >= 5 && Number(value.targetSeconds) <= 35
-        ? Math.round(Number(value.targetSeconds))
+      const targetSeconds = Number.isFinite(Number(value.targetSeconds)) && Number(value.targetSeconds) > 0
+        ? Number(value.targetSeconds)
         : null;
       const reason = typeof value.reason === "string" ? value.reason.trim().slice(0, 300) : "";
       if (!Number.isInteger(beforeTrackIndex) || beforeTrackIndex < 1 || beforeTrackIndex > request.tracks.length || !targetSeconds || !reason) {
@@ -848,29 +855,27 @@ function parseHostShowSingleBreakPayload(payload: unknown, request: HostShowGene
     if (!object) continue;
     const value = isPlainRecord(object.break) ? object.break : object;
     if (typeof value.text !== "string") continue;
-    const parsed = parseHostShowBreak(value, request, placement.beforeTrackIndex - 1, false);
+    const parsed = parseHostShowBreak(value, request, placement.beforeTrackIndex - 1);
     if (parsed.id !== placement.id
       || parsed.beforeTrackIndex !== placement.beforeTrackIndex
       || parsed.type !== placement.type) {
       throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", `show break ${placement.id} changed its locked placement`, { retryable: false }));
     }
-    return withMeasuredHostDuration(request, parsed);
+    return withEstimatedHostDuration(parsed);
   }
   throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", `provider response did not contain ${placement.id}`, { retryable: false }));
 }
 
-function parseHostShowBreak(value: unknown, request: HostShowGenerationRequest, index: number, enforceDuration: boolean): HostShowBreak {
+function parseHostShowBreak(value: unknown, request: HostShowGenerationRequest, index: number): HostShowBreak {
   if (!isPlainRecord(value)) throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "show break is invalid", { retryable: false }));
   const beforeTrackIndex = Number(value.beforeTrackIndex);
   const track = request.tracks[beforeTrackIndex - 1];
   const rawText = typeof value.text === "string" ? value.text.trim() : "";
   const type = value.type === "opening" || value.type === "middle" || value.type === "closing" ? value.type : null;
-  const targetSeconds = Number.isFinite(Number(value.targetSeconds)) && Number(value.targetSeconds) >= 5 && Number(value.targetSeconds) <= 35
-    ? Math.round(Number(value.targetSeconds))
-    : null;
+  const targetSeconds = estimateHostDurationSeconds(rawText);
   const rawSourceIds = Array.isArray(value.sourceIds) ? value.sourceIds.filter((id): id is string => typeof id === "string") : [];
   const allowedIds = new Set(track?.allowedFacts.map((fact) => fact.id) ?? []);
-  if (!track || !rawText || !type || !targetSeconds) {
+  if (!track || !rawText || !type) {
     throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", `show break ${index + 1} is incomplete`, { retryable: false }));
   }
   const text = normalizeSpokenYearDigits(normalizeSpokenEnglishCase(type === "opening" && request.openingGreeting
@@ -880,11 +885,6 @@ function parseHostShowBreak(value: unknown, request: HostShowGenerationRequest, 
   if (sourceIds.length === 0) {
     const metadata = track.allowedFacts.find((fact) => fact.id.includes(":metadata")) ?? track.allowedFacts[0];
     if (metadata) sourceIds.push(metadata.id);
-  }
-  const bounds = hostCharacterBounds(targetSeconds);
-  const count = Array.from(text).length;
-  if (enforceDuration && (count < 12 || count > bounds.max)) {
-    throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", `show break ${index + 1} does not match its duration`, { retryable: false }));
   }
   return {
     id: typeof value.id === "string" && value.id.trim() ? value.id.trim().slice(0, 80) : `break-${String(index + 1).padStart(2, "0")}`,
@@ -999,21 +999,12 @@ function applyHostBreakQualityFloor(
 
 function hostFactAvailability(track: HostShowGenerationRequest["tracks"][number]): HostFactAvailability {
   return track.allowedFacts.some((fact) => fact.source === "web" || !/:(?:metadata|album|year)$/.test(fact.id))
-    ? "rich"
+    ? "available"
     : "sparse";
 }
 
-function hostDurationRange(factAvailability: HostFactAvailability, type: HostShowBreak["type"]): { min: number; max: number } {
-  if (factAvailability === "rich") return { min: 25, max: 30 };
-  return type === "opening" ? { min: 12, max: 18 } : { min: 5, max: 10 };
-}
-
-function withMeasuredHostDuration(request: HostShowGenerationRequest, hostBreak: HostShowBreak): HostShowBreak {
-  const track = request.tracks[hostBreak.beforeTrackIndex - 1]!;
-  const range = hostDurationRange(hostFactAvailability(track), hostBreak.type);
-  const characterCount = Array.from(hostBreak.text.replace(/\s+/g, "")).length;
-  const targetSeconds = Math.min(range.max, Math.max(range.min, Math.round(characterCount / 3.25)));
-  return { ...hostBreak, targetSeconds };
+function withEstimatedHostDuration(hostBreak: HostShowBreak): HostShowBreak {
+  return { ...hostBreak, targetSeconds: estimateHostDurationSeconds(hostBreak.text) };
 }
 
 function fallbackHostShowBreak(request: HostShowGenerationRequest, placement: HostBreakPlacement): HostShowBreak {
@@ -1022,17 +1013,27 @@ function fallbackHostShowBreak(request: HostShowGenerationRequest, placement: Ho
   const explicitReleaseYear = Number.isInteger(track.releaseYear) && track.releaseYear! >= 1800 && track.releaseYear! <= 2099
     ? track.releaseYear
     : undefined;
-  const releaseYear = explicitReleaseYear ?? track.allowedFacts.flatMap((fact) => fact.value.match(/(?:18|19|20)\d{2}(?=年)/g) ?? [])
+  const releaseYear = explicitReleaseYear ?? track.allowedFacts.filter((fact) => fact.id.endsWith(":year") && fact.source !== "web").flatMap((fact) => fact.value.match(/(?:18|19|20)\d{2}(?=年)/g) ?? [])
     .map(Number)
     .find((year) => year >= 1800 && year <= 2099);
-  const details = [
-    releaseYear ? `发行于${releaseYear}年` : "",
-    album ? `收录在专辑《${album}》中` : "",
-  ].filter(Boolean);
-  const suffix = details.length > 0 ? `，${details.join("，")}` : "";
+  // A fallback is still an on-air moment. Rotate the sentence shape and use
+  // metadata sparingly so a sparse-fact show does not sound like a database
+  // export repeated for every song.
+  const variant = (placement.beforeTrackIndex - 1) % 4;
+  const detail = variant === 1 && releaseYear
+    ? `，这首歌在${releaseYear}年发行`
+    : variant === 2 && album
+      ? `，它收录在《${album}》里`
+      : "";
   const body = placement.type === "closing"
-    ? `今天的最后一首是${track.artist}的《${track.title}》${suffix}。`
-    : `接下来听${track.artist}的《${track.title}》${suffix}。`;
+    ? `最后一首，我们听${track.artist}的《${track.title}》${detail}。`
+    : variant === 0
+      ? `把${track.artist}的《${track.title}》接在这里${detail}。`
+      : variant === 1
+        ? `下面这首是${track.artist}的《${track.title}》${detail}。`
+        : variant === 2
+          ? `来听${track.artist}的《${track.title}》${detail}。`
+          : `这一段交给${track.artist}的《${track.title}》${detail}。`;
   const text = placement.type === "opening" && request.openingGreeting
     ? withOpeningGreetingAndIdentity(body, request.openingGreeting, request.hostProfile)
     : body;
@@ -1042,14 +1043,14 @@ function fallbackHostShowBreak(request: HostShowGenerationRequest, placement: Ho
       || (album && (fact.id.includes(":album") || fact.value.includes(album))))
     .map((fact) => fact.id);
   if (sourceIds.length === 0 && track.allowedFacts[0]) sourceIds.push(track.allowedFacts[0].id);
-  return withMeasuredHostDuration(request, {
+  return withEstimatedHostDuration({
     id: placement.id,
     beforeTrackIndex: placement.beforeTrackIndex,
     type: placement.type,
     targetSeconds: placement.targetSeconds,
     text: normalizeSpokenYearDigits(normalizeSpokenEnglishCase(text)),
     sourceIds: [...new Set(sourceIds)],
-    deliveryInstruction: "自然、简洁，音乐人、年份和专辑名说清楚。",
+    deliveryInstruction: "自然、简洁，句首直接进入音乐人和歌名，结尾轻收。",
     finalization: "metadata_fallback",
   });
 }
@@ -1179,13 +1180,6 @@ function parseHostObject(object: Record<string, unknown>, context: HostContextPa
   }
   if (text.length > maxTextLength) {
     throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "host text exceeds the configured length limit", { retryable: false }));
-  }
-  if (context.hostLengthSeconds !== undefined) {
-    const bounds = hostCharacterBounds(context.hostLengthSeconds);
-    const characterCount = Array.from(text).length;
-    if (characterCount < bounds.min || characterCount > bounds.max) {
-      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "host text does not match the planned speaking duration", { retryable: false }));
-    }
   }
   const rawFactIds = object.factIds ?? object.fact_ids ?? object.facts;
   const factIds = Array.isArray(rawFactIds) ? rawFactIds.filter((item): item is string => typeof item === "string") : [];

@@ -167,7 +167,7 @@ export interface MusicResearchRequest {
     topSongs: string[];
     inferredThemes: string[];
   };
-  tracks: Array<{ title: string; artist: string; exploration?: boolean }>;
+  tracks: Array<{ title: string; artist: string; album?: string; exploration?: boolean }>;
 }
 
 export interface MusicResearchFact {
