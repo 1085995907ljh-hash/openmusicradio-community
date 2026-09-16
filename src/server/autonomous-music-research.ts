@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { ProviderError } from "../providers/types.js";
 import { musicResearchTrackKey, type MusicResearchTrack, type MusicResearchReport, type MusicResearchReceipt, type ResearchedMusicFact } from "../shared/music-research.js";
 import { PublicMusicWebAccess, publicWebUrl, type MusicWebAccess, type WebPage } from "./music-web-access.js";
 
@@ -16,7 +18,7 @@ const RESEARCH_PROMPT = `你是中文音乐电台的资料编辑，有真正的 
 /** Adaptive research with actual search/read receipts, independent of model-native browsing. */
 export class AutonomousMusicResearchService {
   private readonly cache = new Map<string, { savedAt: number; receipt: MusicResearchReceipt }>();
-  constructor(private readonly web: MusicWebAccess = new PublicMusicWebAccess()) {}
+  constructor(private readonly web: MusicWebAccess = new PublicMusicWebAccess(), private readonly retryDelayMs = 1000) {}
 
   async research(tracks: readonly MusicResearchTrack[], options: { complete: ResearchCompletion; signal?: AbortSignal; cacheScope?: string }): Promise<MusicResearchReport> {
     const signal = options.signal ?? new AbortController().signal;
@@ -56,6 +58,7 @@ export class AutonomousMusicResearchService {
     let stalled = 0;
     let unresolvedAccess = false;
     let consecutiveSearchFailures = 0;
+    let modelFailures = 0;
     let failureCode: MusicResearchReceipt["failureCode"] = "invalid_action";
     const album = track.album?.trim();
     const hasAlbum = Boolean(album && album !== track.title.trim() && !/^(?:未知(?:专辑)?|unknown(?: album)?|n\/?a|null|-)$/i.test(album));
@@ -74,6 +77,7 @@ export class AutonomousMusicResearchService {
         signal.throwIfAborted();
         unresolvedAccess = true;
         failureCode = "search_unavailable";
+        receipt.attempts.push({ query, status: "failed", sourceUrls: [] });
         step.detail = error instanceof Error ? error.message : "搜索失败";
         history.push({ action: "search", query, error: step.detail, next: "换词或换来源继续，失败不等于没有资料" });
         if (++consecutiveSearchFailures >= 3) throw new Error("搜索通道连续不可用，请稍后重试；不能视为没有资料");
@@ -90,14 +94,21 @@ export class AutonomousMusicResearchService {
         let action: Record<string, unknown>;
         let modelReturned = false;
         try {
-          const stepSignal = AbortSignal.any([signal, AbortSignal.timeout(90_000)]);
-          const response = await complete(RESEARCH_PROMPT, JSON.stringify({ track, hasAlbum, history }), stepSignal);
+          const response = await complete(RESEARCH_PROMPT, JSON.stringify({ track, hasAlbum, history }), signal);
           modelReturned = true;
           action = JSON.parse(response.replace(/^```(?:json)?\s*|\s*```$/g, ""));
           if (!action || typeof action !== "object") throw new Error("调研动作无效");
-        } catch {
+          modelFailures = 0;
+        } catch (error) {
           signal.throwIfAborted();
-          failureCode = modelReturned ? "invalid_action" : "model_unavailable";
+          const invalidAction = modelReturned || (error instanceof ProviderError && error.code === "invalid_response");
+          failureCode = invalidAction ? "invalid_action" : "model_unavailable";
+          if (!invalidAction) {
+            if ((error instanceof ProviderError && !error.retryable) || ++modelFailures >= 5) throw error;
+            // Keep the same research context through transient transport failures.
+            await delay(this.retryDelayMs * 2 ** (modelFailures - 1), undefined, { signal });
+            continue;
+          }
           if (++stalled >= 3) throw new Error("调研模型未返回可执行动作");
           history.push({ error: "请返回一个有效的 search、read、finish 或 blocked JSON 动作。" });
           continue;

@@ -40,6 +40,7 @@ const DEFAULT_MAX_TEXT_LENGTH = 600;
 const PROVIDER_NAME = "openai-compatible";
 const MUSIC_RESEARCH_TIMEOUT_MS = 20_000;
 const WHOLE_SHOW_STAGE_ATTEMPTS = 3;
+const WHOLE_SHOW_TRANSPORT_ATTEMPTS = 5;
 const PROVIDER_RETRY_BASE_DELAY_MS = 1_500;
 const PROVIDER_RETRY_MAX_DELAY_MS = 15_000;
 
@@ -263,10 +264,9 @@ export class OpenAICompatibleHostProvider implements HostProvider {
           } catch (error) {
             const providerError = asProviderError(error);
             if (options.signal?.aborted) throw providerError;
-            if (providerError.retryable) {
-              const retryDelay = providerError.retryAfterMs
-                ?? Math.min(PROVIDER_RETRY_MAX_DELAY_MS, PROVIDER_RETRY_BASE_DELAY_MS * 2 ** Math.min(transportAttempt, 4));
-              transportAttempt += 1;
+            if (providerError.retryable && ++transportAttempt < WHOLE_SHOW_TRANSPORT_ATTEMPTS) {
+              const retryDelay = Math.min(PROVIDER_RETRY_MAX_DELAY_MS, providerError.retryAfterMs
+                ?? PROVIDER_RETRY_BASE_DELAY_MS * 2 ** (transportAttempt - 1));
               await waitForProviderRetry(retryDelay, options.signal);
               continue;
             }

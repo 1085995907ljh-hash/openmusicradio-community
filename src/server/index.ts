@@ -78,7 +78,7 @@ import { QwenTtsProvider } from "../providers/qwen-tts.js";
 import { ProviderError } from "../providers/types.js";
 import { LocalAiConfigStore, LLM_PROVIDER_IDS, TTS_PROVIDER_IDS, type LocalAiSettings } from "./local-ai-config.js";
 import { LocalConfiguredHostProvider, LocalConfiguredTtsProvider } from "./local-ai-providers.js";
-import { requireCompletedMusicResearch, musicResearchFactText, MusicResearchIncompleteError, type MusicResearchReport } from "../shared/music-research.js";
+import { musicResearchForWriting, musicResearchFactText, type MusicResearchReport } from "../shared/music-research.js";
 import { CloudAccessStore, ManagedAiConfigStore } from "./cloud-access.js";
 import { loadRadioHostReviewSkill, loadRadioHostSkill } from "./radio-host-skill.js";
 import {
@@ -3162,21 +3162,17 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         }
       : undefined;
     const researchProvider = hostProvider as HostProviderLike;
-    if (typeof researchProvider.research !== "function") {
-      throw new ServiceError("HOST_PROVIDER_ERROR", 503, "联网调研服务不可用，口播尚未开始生成。");
-    }
     const researchTracks = items.map((item) => ({
       title: item.title, artist: item.artist, album: item.album ?? undefined, exploration: item.liked !== true,
     }));
     let researchReport: MusicResearchReport;
     try {
-      const researched = await researchProvider.research({ scenePreset: spec.scenePreset, tracks: researchTracks }, { signal });
+      const researched = await researchProvider.research?.({ scenePreset: spec.scenePreset, tracks: researchTracks }, { signal });
       signal.throwIfAborted();
-      researchReport = requireCompletedMusicResearch(researched, researchTracks);
+      researchReport = musicResearchForWriting(researched, researchTracks);
     } catch (error) {
       if (signal.aborted) throw new ServiceError("REQUEST_ABORTED", 499, "请求已取消，口播尚未生成。");
-      const detail = error instanceof MusicResearchIncompleteError ? error.message : "联网调研服务请求失败，口播尚未生成。";
-      throw new ServiceError("HOST_PROVIDER_ERROR", 502, `${detail}请重试；已确认的歌单和顺序会保留，已完成的调研会复用。`);
+      researchReport = musicResearchForWriting(null, researchTracks);
     }
     items = items.map((item, index) => ({ ...item, hostResearch: researchReport.tracks[index]! }));
     if (typeof researchProvider.generateShow === "function") {

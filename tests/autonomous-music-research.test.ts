@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { AutonomousMusicResearchService, type ResearchCompletion } from "../src/server/autonomous-music-research.js";
 import { PublicMusicWebAccess, extractWebPage, isPublicAddress, parseSearchResults, publicWebUrl, searchExa, type MusicWebAccess } from "../src/server/music-web-access.js";
-import { musicResearchFactText, requireCompletedMusicResearch } from "../src/shared/music-research.js";
+import { musicResearchFactText, musicResearchForWriting, requireCompletedMusicResearch } from "../src/shared/music-research.js";
 
 const track = { title: "三人游", artist: "方大同", album: "橙月" };
 const url = "https://music.example.com/interview";
@@ -95,7 +95,7 @@ test("a blocked song source automatically expands to album and artist before sto
 
 test("model failures carry a safe category and a retry reuses successful songs", async () => {
   const queries: string[] = [];
-  const service = new AutonomousMusicResearchService({ ...web, search: async (query, signal) => { queries.push(query); return web.search(query, signal); } });
+  const service = new AutonomousMusicResearchService({ ...web, search: async (query, signal) => { queries.push(query); return web.search(query, signal); } }, 0);
   const tracks = [track, { ...track, title: "第二首" }];
   let failed = true;
   const complete: ResearchCompletion = async (_system, user) => {
@@ -124,6 +124,46 @@ test("all songs are researched beyond twelve and successful receipts are isolate
   report.tracks[0]!.facts.length = 0;
   assert.equal((await service.research(tracks, { complete })).tracks[0]?.facts.length, 1);
   assert.equal(searches, 15);
+});
+
+test("temporary model transport faults retry the same context without a separate research deadline", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const service = new AutonomousMusicResearchService(web, 0);
+  const report = await service.research([track], { signal: controller.signal, complete: async (_system, user, signal) => {
+    assert.equal(signal, controller.signal, "the caller controls cancellation, not a fixed 90-second timer");
+    if (++calls <= 4) throw new Error("network interruption");
+    return JSON.stringify(JSON.parse(user).history.some((step: { action: string }) => step.action === "read") ? finish : { action: "read", url });
+  } });
+  assert.equal(report.tracks[0]?.status, "researched");
+  assert.equal(calls, 6);
+});
+
+test("cancellation interrupts a model retry delay instead of producing degraded success", async () => {
+  const controller = new AbortController();
+  const task = new AutonomousMusicResearchService(web).research([track], { signal: controller.signal, complete: async () => {
+    setImmediate(() => controller.abort());
+    throw new Error("network interruption");
+  } });
+  await assert.rejects(task, /abort/i);
+});
+
+test("writing accepts incomplete research without inventing completion or losing other songs' facts", async () => {
+  const report = await new AutonomousMusicResearchService(web).research([track], { complete: completeActions([{ action: "read", url }, finish]) });
+  const missing = { title: "另一首", artist: "另一位歌手" };
+  const mixed = musicResearchForWriting(report, [missing, track]);
+  assert.equal(mixed.tracks[0]?.status, "failed");
+  assert.deepEqual(mixed.tracks[0]?.facts, []);
+  assert.equal(mixed.tracks[1]?.facts[0]?.evidenceQuote, quote);
+  assert.equal(mixed.tracks[1]?.status, "researched");
+  const partial = structuredClone(report);
+  partial.tracks[0]!.status = "failed";
+  partial.tracks[0]!.facts.push({ id: "web:invented", value: "没有实际读过的来源不可作为音乐事实。", sourceUrl: "https://invented.example.com" });
+  const usable = musicResearchForWriting(partial, [track]);
+  assert.equal(usable.tracks[0]?.status, "failed");
+  assert.equal(usable.tracks[0]?.facts.length, 1);
+  assert.equal(usable.tracks[0]?.facts[0]?.evidenceQuote, quote);
+  assert.equal(musicResearchForWriting(null, [track]).tracks[0]?.status, "failed");
 });
 
 test("cancellation and repeated unavailable search channels stop work without fabricated success", async () => {

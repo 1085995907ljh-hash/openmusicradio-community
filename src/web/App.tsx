@@ -547,7 +547,8 @@ function confirmRetryMessage(error: unknown): string {
   const detail = raw && raw !== "确认状态未知。" && raw !== "未观察到确认结果"
     ? raw.replace(/[。；;\s]+$/, "")
     : "开播准备没有完成";
-  return `${detail}。歌单已保留，可以重新确认。`;
+  const hostFailure = ["HOST_PROVIDER_ERROR", "TTS_PROVIDER_ERROR"].includes((error as { code?: string } | null)?.code ?? "");
+  return `${detail}。${hostFailure ? "歌单和顺序已保留，请点击“重新生成口播”继续。" : "歌单已保留，可以重新确认。"}`;
 }
 
 function isApiMusicSource(sourceId: SourceId | undefined): sourceId is ApiMusicSource {
@@ -699,6 +700,7 @@ function App() {
   const [notice, setNoticeState] = useState<AppNotice | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
+  const [failedHostPlan, setFailedHostPlan] = useState<string | null>(null);
   const [planUpdating, setPlanUpdating] = useState(false);
   const [keepPlaylist, setKeepPlaylist] = useState(false);
   const [playlistSavePromptOpen, setPlaylistSavePromptOpen] = useState(false);
@@ -2205,6 +2207,7 @@ function App() {
       return;
     }
     setIsConfirming(true);
+    setFailedHostPlan(null);
     setProcessComplete(false);
     setProcessCompletedSteps(0);
     setView("preparing");
@@ -2260,6 +2263,9 @@ function App() {
     } catch (error) {
       confirmController.abort();
       observationController.abort();
+      if (["HOST_PROVIDER_ERROR", "TTS_PROVIDER_ERROR"].includes((error as { code?: string } | null)?.code ?? "")) {
+        setFailedHostPlan(`${program.id}:${program.generation}:${program.planRevision ?? 0}`);
+      }
       if (error instanceof Error && (error as Error & { code?: string }).code === "PROGRAM_NOT_FOUND") {
         resetDraft();
         setNotice("本地服务已重新加载，旧节目草稿已失效。请重新创建节目。");
@@ -2616,6 +2622,7 @@ function App() {
   };
 
   const resetDraft = () => {
+    setFailedHostPlan(null);
     setProgram(null);
     setView("setup");
     setConnectionReviewOpen(false);
@@ -2664,6 +2671,7 @@ function App() {
     if (view === "generating") return <ProcessView mode="generating" complete={processComplete} completedSteps={processCompletedSteps} />;
     if (view === "preparing") return <ProcessView mode="preparing" complete={processComplete} completedSteps={processCompletedSteps} />;
     if (view === "confirm" && program) {
+      const canRetryHost = failedHostPlan === `${program.id}:${program.generation}:${program.planRevision ?? 0}`;
       const diagnostic = sources.find((source) => source.sourceId === program.spec.sourceId);
       const apiMusic = isApiMusicSource(program.spec.sourceId);
       const planArtifactsReady = apiMusic && hasMusicPlanArtifacts(program);
@@ -2682,7 +2690,8 @@ function App() {
         program={program}
         checks={checks}
         onExit={() => void handleExitProgram()}
-        onConfirm={requestProgramConfirmation}
+        onConfirm={canRetryHost ? () => void handleConfirm(keepPlaylist) : requestProgramConfirmation}
+        canRetryHost={canRetryHost}
         confirming={isConfirming}
         exiting={isStopping}
         updating={planUpdating}
@@ -3763,11 +3772,12 @@ function SourceGlyph({ sourceId }: { sourceId: SourceId }) {
 }
 
 type PlanEditorMode = "browse" | "batch" | "order";
-function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, updating, onReplace, onRegenerate, onReorder, onUndo }: {
+function ConfirmView({ program, checks, onExit, onConfirm, canRetryHost, confirming, exiting, updating, onReplace, onRegenerate, onReorder, onUndo }: {
   program: LocalProgram;
   checks: { source: boolean; player: boolean; service: boolean; host: boolean; tts: boolean };
   onExit: () => void;
   onConfirm: () => void;
+  canRetryHost: boolean;
   confirming: boolean;
   exiting: boolean;
   updating: boolean;
@@ -3933,7 +3943,7 @@ function ConfirmView({ program, checks, onExit, onConfirm, confirming, exiting, 
           </section>
         </div>
       )}
-      <div className="confirm-actions"><div className="plan-history-actions"><button className="secondary-button" type="button" onClick={() => void undoLastChange()} disabled={updating || !program.canUndoPlan}><Undo2 size={15} />撤销</button></div><p className={`confirm-commit-summary ${canConfirm ? "" : "is-blocked"}`}><Info size={14} />{actionMessage ?? confirmationStatusMessage}</p><button className="primary-button primary-button-wide" type="button" onClick={hasPendingOrder ? () => void saveOrder() : onConfirm} disabled={confirming || exiting || updating || !canConfirm}>{confirming ? <LoaderCircle size={16} className="spin" /> : hasPendingOrder ? <Check size={16} /> : <Play size={16} />}{confirming ? "正在生成口播" : updating ? "计划更新中" : hasPendingOrder ? "保存顺序" : "完成选歌并生成口播"}</button></div>
+      <div className="confirm-actions"><div className="plan-history-actions"><button className="secondary-button" type="button" onClick={() => void undoLastChange()} disabled={updating || !program.canUndoPlan}><Undo2 size={15} />撤销</button></div><p className={`confirm-commit-summary ${canConfirm ? "" : "is-blocked"}`}><Info size={14} />{actionMessage ?? confirmationStatusMessage}</p><button className="primary-button primary-button-wide" type="button" onClick={hasPendingOrder ? () => void saveOrder() : onConfirm} disabled={confirming || exiting || updating || !canConfirm}>{confirming ? <LoaderCircle size={16} className="spin" /> : hasPendingOrder ? <Check size={16} /> : <Play size={16} />}{confirming ? "正在生成口播" : updating ? "计划更新中" : hasPendingOrder ? "保存顺序" : canRetryHost ? "重新生成口播" : "完成选歌并生成口播"}</button></div>
     </div>
   );
 }

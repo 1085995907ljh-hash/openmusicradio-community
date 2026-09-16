@@ -17,7 +17,7 @@ export type SearchDiscovery = (query: string, signal: AbortSignal) => Promise<We
 /** Exa's hosted MCP supports anonymous discovery; an optional key raises its service quota. */
 export async function searchExa(query: string, signal: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<WebSearchResult[]> {
   const response = await fetchImpl("https://mcp.exa.ai/mcp", {
-    method: "POST", redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(25_000)]),
+    method: "POST", redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
     headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...(process.env.EXA_API_KEY ? { "x-api-key": process.env.EXA_API_KEY } : {}) },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "web_search_exa", arguments: { query, objective: "为音乐电台寻找可核验的歌曲创作背景、对应专辑理念和风格、音乐人背景。优先官方资料、原始访谈、可信媒体和音乐平台专辑介绍，排除歌词全文、粉丝评论和无来源解读。" } } }),
   });
@@ -74,7 +74,7 @@ export function publicWebUrl(value: string): string {
 /** Validate the addresses in the actual socket lookup, including every redirect. */
 export async function getPublicPage(value: string, signal: AbortSignal): Promise<{ url: string; text: string; contentType: string }> {
   let url = publicWebUrl(value);
-  const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(20_000)]);
+  const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(45_000)]);
   for (let redirects = 0; redirects <= 5; redirects++) {
     const result = await new Promise<{ location?: string; text: string; contentType: string }>((resolve, reject) => {
       const req = httpsRequest(url, {

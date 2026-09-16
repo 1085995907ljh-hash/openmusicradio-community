@@ -716,6 +716,26 @@ test("whole-show non-retryable provider failure is explicit and never returns au
   assert.deepEqual(result.breaks, []);
 });
 
+test("whole-show transport retries eventually return a recoverable failure rather than waiting forever", async () => {
+  let calls = 0;
+  const provider = new OpenAICompatibleHostProvider({
+    apiKey: "unit-test-key", mode: "responses", timeoutMs: 0,
+    fetchImpl: async () => {
+      calls++;
+      return new Response(JSON.stringify({ error: { message: "temporarily limited" } }), { status: 429, headers: { "content-type": "application/json", "retry-after": "0" } });
+    },
+  });
+  const result = await provider.generateShow({ scenePreset: "study", frequency: "low",
+    tracks: [{ trackIndex: 1, title: "歌曲一", artist: "音乐人一", exploration: false, allowedFacts: [{ id: "track:1:metadata", value: "歌曲《歌曲一》，艺术家是音乐人一。", source: "user" }] }],
+    skillInstruction: "整档撰稿契约", reviewInstruction: "整档监制契约",
+  });
+  assert.equal(calls, 5);
+  assert.equal(result.success, false);
+  assert.equal(result.error?.code, "rate_limited");
+  assert.equal(result.error?.retryable, true);
+  assert.deepEqual(result.breaks, []);
+});
+
 test("whole-show generation retries a relay rate-limit envelope until the stage succeeds", async () => {
   let calls = 0;
   const placement = { frequency: "low", placements: [{ id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 18, reason: "开场" }] };

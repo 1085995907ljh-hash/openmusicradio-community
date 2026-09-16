@@ -70,13 +70,14 @@ export function requireCompletedMusicResearch(value: unknown, tracks: readonly M
       || !["researched", "no_results"].includes(receipt.status)
       || !Number.isFinite(Date.parse(receipt.completedAt))
       || !Array.isArray(receipt.attempts) || receipt.attempts.length === 0
-      || receipt.attempts.some((attempt) => !attempt || attempt.status !== "completed" || typeof attempt.query !== "string" || !attempt.query.trim()
+      || !receipt.attempts.some((attempt) => attempt?.status === "completed")
+      || receipt.attempts.some((attempt) => !attempt || !["completed", "failed"].includes(attempt.status) || typeof attempt.query !== "string" || !attempt.query.trim()
         || !Array.isArray(attempt.sourceUrls) || attempt.sourceUrls.some((url) => typeof url !== "string" || !url.startsWith("https://")))
       || !Array.isArray(receipt.facts)
       || (receipt.status === "researched") !== (receipt.facts.length > 0)
       || receipt.facts.some((fact) => !fact || typeof fact.id !== "string" || !/^web:[A-Za-z0-9_-]+$/.test(fact.id)
         || typeof fact.value !== "string" || fact.value.trim().length < 12
-        || typeof fact.sourceUrl !== "string" || !receipt.attempts.some((attempt) => attempt.sourceUrls.includes(fact.sourceUrl)))) {
+        || typeof fact.sourceUrl !== "string" || !receipt.attempts.some((attempt) => attempt.status === "completed" && attempt.sourceUrls.includes(fact.sourceUrl)))) {
       const title = track.title.replace(/[\r\n]/g, " ").slice(0, 80);
       const reason = receipt?.failureCode && Object.hasOwn(RESEARCH_FAILURE_MESSAGES, receipt.failureCode)
         ? RESEARCH_FAILURE_MESSAGES[receipt.failureCode] : "调研记录不完整或未通过核验";
@@ -84,4 +85,32 @@ export function requireCompletedMusicResearch(value: unknown, tracks: readonly M
     }
   }
   return report;
+}
+
+/** Research gaps reduce the available material, not the ability to write a short introduction. */
+export function musicResearchForWriting(value: unknown, tracks: readonly MusicResearchTrack[]): MusicResearchReport {
+  const rows = value && typeof value === "object" && "tracks" in value && Array.isArray(value.tracks) ? value.tracks : [];
+  return { tracks: tracks.map((track) => {
+    const key = musicResearchTrackKey(track);
+    const receipt = rows.find((row): row is MusicResearchReceipt => Boolean(row && typeof row === "object" && row.trackKey === key));
+    if (receipt) {
+      try { return structuredClone(requireCompletedMusicResearch({ tracks: [receipt] }, [track]).tracks[0]!); } catch { /* Retain only independently valid material below. */ }
+    }
+    const attempts = (Array.isArray(receipt?.attempts) ? receipt.attempts : []).filter((attempt) => attempt
+      && typeof attempt.query === "string" && attempt.query.trim()
+      && ["completed", "failed"].includes(attempt.status)
+      && Array.isArray(attempt.sourceUrls) && attempt.sourceUrls.every((url) => typeof url === "string" && url.startsWith("https://")));
+    const facts = (Array.isArray(receipt?.facts) ? receipt.facts : []).filter((fact) => {
+      try {
+        requireCompletedMusicResearch({ tracks: [{ ...receipt, trackKey: key, status: "researched", completedAt: new Date().toISOString(),
+          attempts: attempts.filter((attempt) => attempt.status === "completed"), facts: [fact] }] }, [track]);
+        return true;
+      } catch { return false; }
+    });
+    return { trackKey: key, status: "failed" as const, completedAt: new Date().toISOString(), attempts: structuredClone(attempts), facts: structuredClone(facts),
+      steps: (Array.isArray(receipt?.steps) ? receipt.steps : []).filter((step) => step && ["search", "read"].includes(step.action) && typeof step.target === "string" && ["completed", "failed"].includes(step.status))
+        .map(({ action, target, status }) => ({ action, target, status })),
+      failureCode: receipt?.failureCode && Object.hasOwn(RESEARCH_FAILURE_MESSAGES, receipt.failureCode) ? receipt.failureCode : "invalid_action" as const,
+      completionReason: "调研存在缺口，仅使用通过核验的资料与已确认的歌曲身份撰稿。" };
+  }) };
 }

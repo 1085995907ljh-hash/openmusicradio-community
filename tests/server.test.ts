@@ -82,12 +82,13 @@ function groundedHostProvider() {
 
 const readyTtsProvider = { configured: true, state: "ready", synthesize() { return { success: true, status: "ready", audio: Buffer.from("RIFF0000WAVE") }; } };
 
-test("account confirmation requires complete per-song research before writing and recovers without changing the playlist", async (context) => {
+test("research gaps allow writing while genuine model failure preserves the playlist for retry", async (context) => {
   const songs = Array.from({ length: 20 }, (_, index) => ({ id: String(97000 + index), title: `调研曲目${index}`, artists: [{ id: String(index), name: `调研艺人${index}` }], durationMs: 180_000 }));
   let hostCalls = 0;
   let ttsCalls = 0;
   let playlistWrites = 0;
   let researchTrackCount = 0;
+  let modelUnavailable = true;
   let stored: string[] = [];
   const hostProvider = {
     configured: true,
@@ -95,12 +96,13 @@ test("account confirmation requires complete per-song research before writing an
     generate() { hostCalls++; throw new Error("whole-show path expected"); },
     generateShow(request: { tracks: Array<{ title: string; artist: string; allowedFacts: Array<{ id: string }> }> }) {
       hostCalls++;
+      if (modelUnavailable) throw new ProviderError({ provider: "test", code: "network_error", message: "temporarily offline", retryable: true });
       request.tracks.forEach((track, index) => {
-        assert.deepEqual(track.allowedFacts.filter((fact) => fact.id.startsWith("web:")).map((fact) => fact.id), [`web:checked_${index}`]);
+        assert.deepEqual(track.allowedFacts.filter((fact) => fact.id.startsWith("web:")).map((fact) => fact.id), index === request.tracks.length - 1 ? [] : [`web:checked_${index}`]);
       });
       return { success: true, breaks: [0, request.tracks.length - 1].map((index) => ({
         id: `break-${index}`, beforeTrackIndex: index + 1, type: index === 0 ? "opening" : "closing",
-        targetSeconds: 30, text: `${index === 0 ? "下午好" : "最后一首"}，${request.tracks[index]!.artist}的《${request.tracks[index]!.title}》。`, sourceIds: [`web:checked_${index}`],
+        targetSeconds: 30, text: `${index === 0 ? "下午好" : "最后一首"}，${request.tracks[index]!.artist}的《${request.tracks[index]!.title}》。`, sourceIds: request.tracks[index]!.allowedFacts.map((fact) => fact.id),
       })) };
     },
   };
@@ -124,9 +126,10 @@ test("account confirmation requires complete per-song research before writing an
   const originalIds = program.rundown.map((track: { id: string }) => track.id);
   assert.ok(originalIds.length > 12);
   const confirm = (operationId: string) => fetch(`${base}/programs/${program.id}/confirm`, { method: "POST", headers, body: JSON.stringify({ generation: program.generation, planRevision: program.planRevision, operationId }) });
-  for (const mode of ["missing", "legacy-array", "partial", "failed"] as const) {
+  for (const mode of ["missing", "legacy-array", "partial", "failed", "network"] as const) {
     hostProvider.research = mode === "missing" ? undefined : (request) => {
       const result = completedResearch(request);
+      if (mode === "network") throw new Error("research network unavailable");
       if (mode === "legacy-array") return [];
       if (mode === "partial") result.tracks.pop();
       if (mode === "failed") return { tracks: result.tracks.map((track, index) => index === result.tracks.length - 1 ? { ...track, status: "failed", failureCode: "source_unavailable", completionReason: "private upstream response must not leak" } : track) };
@@ -135,22 +138,20 @@ test("account confirmation requires complete per-song research before writing an
     const response = await confirm(`research-${mode}`);
     assert.ok(response.status >= 500);
     const error = (await json(response)).error;
-    assert.match(error, /调研/);
-    if (mode === "failed") {
-      assert.match(error, /第 \d+ 首《调研曲目\d+》.*原文暂时无法读取/);
-      assert.doesNotMatch(error, /private upstream/);
-    }
-    assert.equal(hostCalls, 0);
+    assert.match(error, /整档主持文案生成失败.*模型接口/);
+    assert.doesNotMatch(error, /private upstream/);
     assert.equal(ttsCalls, 0);
     assert.equal(playlistWrites, 0);
     const current = (await json(await fetch(`${base}/program`, { headers }))).program;
     assert.deepEqual(current.rundown.map((track: { id: string }) => track.id), originalIds);
     assert.ok(current.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
   }
+  assert.equal(hostCalls, 5, "research faults must not prevent the model from trying to write");
+  modelUnavailable = false;
   hostProvider.research = (request) => {
     researchTrackCount = request.tracks.length;
     return { tracks: completedResearch(request).tracks.map((receipt, index) => ({
-      ...receipt, status: "researched", attempts: [{ query: receipt.attempts[0]!.query, status: "completed", sourceUrls: [`https://example.com/source/${index}`] }],
+      ...receipt, status: index === request.tracks.length - 1 ? "failed" : "researched", attempts: [{ query: receipt.attempts[0]!.query, status: "completed", sourceUrls: index === request.tracks.length - 1 ? [] : [`https://example.com/source/${index}`] }],
       facts: [{ id: `web:checked_${index}`, value: `这是一条只属于当前资料记录的公开音乐背景信息，编号${index}。`, sourceUrl: `https://example.com/source/${index}` }],
     })) };
   };
@@ -158,10 +159,12 @@ test("account confirmation requires complete per-song research before writing an
   assert.equal(recovered.status, 200);
   const result = (await json(recovered)).program;
   assert.equal(researchTrackCount, originalIds.length);
-  assert.equal(hostCalls, 1);
+  assert.equal(hostCalls, 6);
   assert.ok(ttsCalls > 0);
   assert.deepEqual(result.rundown.map((track: { id: string }) => track.id), originalIds);
-  assert.ok(result.rundown.every((track: { hostResearch?: { status: string } }) => track.hostResearch?.status === "researched"));
+  assert.ok(result.rundown.slice(0, -1).every((track: { hostResearch?: { status: string } }) => track.hostResearch?.status === "researched"));
+  assert.equal(result.rundown.at(-1).hostResearch.status, "failed");
+  assert.deepEqual(result.rundown.at(-1).hostResearch.facts, [], "unverified research must not enter the script");
   const shortClosing = result.rundown.at(-1).hostScript;
   assert.equal(shortClosing.plannedDurationSeconds, estimateHostDurationSeconds(shortClosing.text));
   assert.ok(shortClosing.plannedDurationSeconds < 5, "persisted web-backed short copy must not be padded to the model's target");

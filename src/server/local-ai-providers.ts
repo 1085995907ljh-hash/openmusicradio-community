@@ -6,7 +6,6 @@ import { hostPreviewText, hostTtsInstruction, MUSIC_GENRE_IDS, MUSIC_GENRES, typ
 import type { RundownAdjustmentConversationMessage, RundownAdjustmentIntent, RundownAdjustmentTrack } from "../core/rundown-adjustment.js";
 import { LocalAiConfigStore, type LlmProviderId, type TtsProviderId } from "./local-ai-config.js";
 import { AutonomousMusicResearchService } from "./autonomous-music-research.js";
-import { requireCompletedMusicResearch } from "../shared/music-research.js";
 
 const OPENAI_VOICES: Record<HostProfileId, string> = { anxuan: "coral", anran: "nova", anya: "shimmer", xiaocheng: "onyx", longxin: "alloy", longhao: "echo" };
 const AZURE_VOICES: Record<HostProfileId, string> = { anxuan: "zh-CN-XiaoxiaoNeural", anran: "zh-CN-XiaoyiNeural", anya: "zh-CN-XiaochenMultilingualNeural", xiaocheng: "zh-CN-YunxiNeural", longxin: "zh-CN-YunyangNeural", longhao: "zh-CN-YunjianNeural" };
@@ -45,7 +44,7 @@ export class LocalConfiguredHostProvider {
       cacheScope: JSON.stringify(settings.llm),
       complete: (system, user, signal) => model.researchAction(system, user, { signal }),
     });
-    return requireCompletedMusicResearch(report, request.tracks);
+    return report;
   }
 
   async generatePlaylistNames(request: Parameters<OpenAICompatibleHostProvider["generatePlaylistNames"]>[0], options: { signal?: AbortSignal } = {}) {

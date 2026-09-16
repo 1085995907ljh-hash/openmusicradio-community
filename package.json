@@ -18,6 +18,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:e2e:host-ducking": "node scripts/e2e-host-ducking.mjs",
+    "test:e2e:host-recovery": "node scripts/e2e-host-recovery.mjs",
     "check": "npm run test && npm run build && npm run build:desktop-pet"
   },
   "dependencies": {
