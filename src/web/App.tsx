@@ -68,7 +68,8 @@ import {
   HOST_MUSIC_START_DELAY_SECONDS,
   releaseTitlesMatch,
 } from "../core/host-script-planning";
-import { advanceEnvelopeElapsed, envelopeVolume, musicBedDelayRemainingMs } from "./audio-envelope.js";
+import { musicBedDelayRemainingMs } from "./audio-envelope.js";
+import { musicAudioGraph, playMusic, resumeMusicContext, setMusicOutputDevice, setMusicVolume } from "./music-audio.js";
 import { RadioHostAvatar } from "./RadioHostPet";
 import { resolveRadioHostPetMood } from "./radio-host-pet.js";
 import { isBroadcastNavigationLocked } from "./topbar-policy.js";
@@ -765,7 +766,6 @@ function App() {
   }, []);
   const audioTokenRef = useRef(0);
   const musicAudioTokenRef = useRef(0);
-  const musicVolumeRampRef = useRef<number | null>(null);
   const musicStallTimerRef = useRef<number | null>(null);
   const hostMusicStartTimerRef = useRef<number | null>(null);
   const webDuckOwnerRef = useRef<string | null>(null);
@@ -806,6 +806,7 @@ function App() {
     const applyOutput = async () => {
       const elements = [musicAudioRef.current, audioRef.current, durationCueAudioRef.current].filter((item): item is HTMLAudioElement => Boolean(item));
       try {
+        await setMusicOutputDevice(audioOutputId);
         await Promise.all(elements.map(async (element) => {
           const sinkElement = element as HTMLAudioElement & { setSinkId?: (sinkId: string) => Promise<void> };
           if (typeof sinkElement.setSinkId === "function") await sinkElement.setSinkId(audioOutputId);
@@ -936,32 +937,9 @@ function App() {
     : 0;
 
   const rampMusicVolume = useCallback((target: number, durationMs: number) => {
-    if (musicVolumeRampRef.current !== null) window.clearInterval(musicVolumeRampRef.current);
-    musicVolumeRampRef.current = null;
     const music = musicAudioRef.current;
     if (!music) return;
-    const start = music.volume;
-    if (durationMs <= 0) {
-      music.volume = target;
-      return;
-    }
-    const stepMs = 50;
-    let elapsedMs = 0;
-    const tick = () => {
-      if (musicAudioRef.current !== music) {
-        if (musicVolumeRampRef.current !== null) window.clearInterval(musicVolumeRampRef.current);
-        musicVolumeRampRef.current = null;
-        return;
-      }
-      elapsedMs = advanceEnvelopeElapsed(elapsedMs, stepMs, durationMs);
-      music.volume = Math.max(0, Math.min(1, envelopeVolume(start, target, elapsedMs, durationMs)));
-      if (elapsedMs >= durationMs) {
-        music.volume = target;
-        if (musicVolumeRampRef.current !== null) window.clearInterval(musicVolumeRampRef.current);
-        musicVolumeRampRef.current = null;
-      }
-    };
-    musicVolumeRampRef.current = window.setInterval(tick, stepMs);
+    setMusicVolume(music, target, durationMs);
   }, []);
 
   const duckWebMusic = useCallback((owner: string) => {
@@ -1062,8 +1040,6 @@ function App() {
     pendingMusicRef.current = null;
     seamlessMusicKeyRef.current = null;
     musicAudioTokenRef.current += 1;
-    if (musicVolumeRampRef.current !== null) window.clearInterval(musicVolumeRampRef.current);
-    musicVolumeRampRef.current = null;
     if (hostMusicStartTimerRef.current !== null) window.clearTimeout(hostMusicStartTimerRef.current);
     hostMusicStartTimerRef.current = null;
     webDuckOwnerRef.current = null;
@@ -1090,7 +1066,7 @@ function App() {
       music.currentTime = 0;
       music.removeAttribute("src");
       music.load();
-      music.volume = 1;
+      setMusicVolume(music, 1);
     }
     const durationCue = durationCueAudioRef.current;
     if (durationCue) {
@@ -1115,7 +1091,7 @@ function App() {
     music.src = url;
     music.load();
     try {
-      await music.play();
+      await playMusic(music);
       if (token !== musicAudioTokenRef.current) return false;
       pendingMusicRef.current = null;
       setAudioPlaying(true);
@@ -1138,12 +1114,10 @@ function App() {
     const music = musicAudioRef.current;
     if (!music) return;
     musicAudioTokenRef.current += 1;
-    if (musicVolumeRampRef.current !== null) window.clearInterval(musicVolumeRampRef.current);
-    musicVolumeRampRef.current = null;
     webDuckOwnerRef.current = key;
     music.pause();
     music.currentTime = 0;
-    music.volume = HOST_MUSIC_DUCK_VOLUME;
+    setMusicVolume(music, HOST_MUSIC_DUCK_VOLUME);
     music.removeAttribute("src");
     music.load();
     pendingMusicRef.current = { url, key };
@@ -1155,8 +1129,9 @@ function App() {
     hostMusicStartTimerRef.current = null;
     const pending = pendingMusicRef.current;
     if (!pending || pending.key !== key) return;
-    const played = await setMusicFromSource(pending.url, pending.key);
-    if (played) restoreWebMusic(key);
+    // The restore starts when speech ends, even if the next music URL is still loading.
+    restoreWebMusic(key);
+    await setMusicFromSource(pending.url, pending.key);
   }, [restoreWebMusic, setMusicFromSource]);
 
   const startMusicBehindHost = useCallback((key: string, delaySeconds: number, hostAudio?: HTMLAudioElement) => {
@@ -1242,6 +1217,7 @@ function App() {
   }, []);
 
   const enableAudio = useCallback(async () => {
+    resumeMusicContext();
     const pendingMusic = pendingMusicRef.current;
     const pending = pendingAudioRef.current;
     const audio = audioRef.current;
@@ -1256,7 +1232,7 @@ function App() {
     }
     if (!pending && !pendingMusic && music?.currentSrc) {
       try {
-        await music.play();
+        await playMusic(music);
         setAudioPlaying(true);
         setAudioNeedsGesture(false);
         setAudioError(null);
@@ -1273,10 +1249,8 @@ function App() {
     if (pending.mode === "host" && !pending.sourceId) {
       const queuedMusic = pendingMusicRef.current;
       if (queuedMusic?.key === pending.key && music) {
-        if (musicVolumeRampRef.current !== null) window.clearInterval(musicVolumeRampRef.current);
-        musicVolumeRampRef.current = null;
         webDuckOwnerRef.current = pending.key;
-        music.volume = HOST_MUSIC_DUCK_VOLUME;
+        setMusicVolume(music, HOST_MUSIC_DUCK_VOLUME);
       } else {
         duckWebMusic(pending.key);
       }
@@ -1324,7 +1298,7 @@ function App() {
       if (pending) {
         void setMusicFromSource(pending.url, pending.key);
       } else if (music.currentSrc) {
-        void music.play().catch(() => setAudioNeedsGesture(true));
+        void playMusic(music).catch(() => setAudioNeedsGesture(true));
       } else if (fixtureAudioRef.current) {
         void setMusicFromSource(fixtureAudioRef.current.url, fixtureAudioRef.current.key);
       }
@@ -2895,7 +2869,7 @@ function App() {
         />
       )}
       <audio
-        key="meyda-audio-graph-v2"
+        key="music-mixer-graph-v3"
         ref={musicAudioRef}
         onPlay={(event) => {
           clearMusicStallTimer();
@@ -4074,15 +4048,11 @@ interface VisualizerFeatures {
   rms: number;
 }
 interface VisualizerRuntime {
-  context: AudioContext | null;
-  sources: WeakMap<HTMLMediaElement, AudioNode>;
   analyzers: WeakMap<HTMLMediaElement, MeydaAnalyzerInstance>;
   features: WeakMap<HTMLMediaElement, VisualizerFeatures>;
 }
-const visualizerGlobal = globalThis as typeof globalThis & { __openMusicRadioVisualizerV2?: VisualizerRuntime };
-const visualizerRuntime = visualizerGlobal.__openMusicRadioVisualizerV2 ??= {
-  context: null,
-  sources: new WeakMap(),
+const visualizerGlobal = globalThis as typeof globalThis & { __openMusicRadioVisualizerV3?: VisualizerRuntime };
+const visualizerRuntime = visualizerGlobal.__openMusicRadioVisualizerV3 ??= {
   analyzers: new WeakMap(),
   features: new WeakMap(),
 };
@@ -4102,14 +4072,9 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
     let features: VisualizerFeatures | null = null;
     let drawCount = 0;
     if (audio && active) try {
-      visualizerRuntime.context ??= new AudioContext();
-      source = visualizerRuntime.sources.get(audio) ?? null;
-      if (!source) {
-        source = visualizerRuntime.context.createMediaElementSource(audio);
-        source.connect(visualizerRuntime.context.destination);
-        visualizerRuntime.sources.set(audio, source);
-      }
-      frequencyAnalyzer = visualizerRuntime.context.createAnalyser();
+      const graph = musicAudioGraph(audio);
+      source = graph.output;
+      frequencyAnalyzer = graph.context.createAnalyser();
       frequencyAnalyzer.fftSize = 256;
       frequencyAnalyzer.smoothingTimeConstant = .68;
       source.connect(frequencyAnalyzer);
@@ -4119,7 +4084,7 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
       if (!meydaAnalyzer) {
         const featureTarget = features;
         meydaAnalyzer = Meyda.createMeydaAnalyzer({
-          audioContext: visualizerRuntime.context,
+          audioContext: graph.context,
           source,
           bufferSize: 1024,
           hopSize: 512,
@@ -4137,7 +4102,7 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
       meydaAnalyzer.start();
       canvas.dataset.analyserMode = "meyda-media-element";
       delete canvas.dataset.analyserError;
-      void visualizerRuntime.context.resume().catch(() => undefined);
+      resumeMusicContext();
     } catch (error) {
       meydaAnalyzer = null;
       features = null;

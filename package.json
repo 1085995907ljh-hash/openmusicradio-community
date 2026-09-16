@@ -17,6 +17,7 @@
     "dev:qqmusic": "uv run --no-project --python 3.12 --with 'qqmusic-api-python==0.7.2' --with 'typing-extensions==4.16.0' python scripts/qqmusic-service.py",
     "build": "tsc --noEmit && vite build",
     "test": "node --import tsx --test tests/*.test.ts",
+    "test:e2e:host-ducking": "node scripts/e2e-host-ducking.mjs",
     "check": "npm run test && npm run build && npm run build:desktop-pet"
   },
   "dependencies": {
