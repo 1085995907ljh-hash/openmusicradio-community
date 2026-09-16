@@ -28,10 +28,24 @@ export interface MusicResearchReceipt {
   facts: ResearchedMusicFact[];
   steps?: Array<{ action: "search" | "read"; target: string; status: "completed" | "failed"; detail?: string }>;
   completionReason?: string;
+  failureCode?: "search_unavailable" | "source_unavailable" | "model_unavailable" | "invalid_action" | "invalid_evidence";
 }
 
 export interface MusicResearchReport {
   tracks: MusicResearchReceipt[];
+}
+
+const RESEARCH_FAILURE_MESSAGES: Record<NonNullable<MusicResearchReceipt["failureCode"]>, string> = {
+  search_unavailable: "搜索服务暂时不可用",
+  source_unavailable: "资料原文暂时无法读取",
+  model_unavailable: "调研模型请求失败或超时",
+  invalid_action: "调研模型未完成有效的搜索和阅读",
+  invalid_evidence: "候选资料未通过原文核验",
+};
+
+/** Only controlled diagnostics may reach the UI, never upstream bodies or model output. */
+export class MusicResearchIncompleteError extends Error {
+  constructor(message: string) { super(message); this.name = "MusicResearchIncompleteError"; }
 }
 
 export function musicResearchTrackKey(track: MusicResearchTrack): string {
@@ -46,10 +60,10 @@ export function musicResearchFactText(fact: ResearchedMusicFact): string {
 /** A fact list alone cannot prove that every selected song was researched. */
 export function requireCompletedMusicResearch(value: unknown, tracks: readonly MusicResearchTrack[]): MusicResearchReport {
   if (!value || typeof value !== "object" || !("tracks" in value) || !Array.isArray(value.tracks)) {
-    throw new Error("联网调研没有返回逐曲记录，口播尚未开始生成。");
+    throw new MusicResearchIncompleteError("联网调研没有返回逐曲记录，口播尚未开始生成。");
   }
   const report = value as MusicResearchReport;
-  if (report.tracks.length !== tracks.length) throw new Error("部分歌曲尚未完成联网调研，口播尚未开始生成。");
+  if (report.tracks.length !== tracks.length) throw new MusicResearchIncompleteError("部分歌曲尚未完成联网调研，口播尚未开始生成。");
   for (const [index, track] of tracks.entries()) {
     const receipt = report.tracks[index];
     if (!receipt || receipt.trackKey !== musicResearchTrackKey(track)
@@ -63,7 +77,10 @@ export function requireCompletedMusicResearch(value: unknown, tracks: readonly M
       || receipt.facts.some((fact) => !fact || typeof fact.id !== "string" || !/^web:[A-Za-z0-9_-]+$/.test(fact.id)
         || typeof fact.value !== "string" || fact.value.trim().length < 12
         || typeof fact.sourceUrl !== "string" || !receipt.attempts.some((attempt) => attempt.sourceUrls.includes(fact.sourceUrl)))) {
-      throw new Error(`第 ${index + 1} 首歌曲的联网调研未完成或记录无效，口播尚未开始生成。请重试。`);
+      const title = track.title.replace(/[\r\n]/g, " ").slice(0, 80);
+      const reason = receipt?.failureCode && Object.hasOwn(RESEARCH_FAILURE_MESSAGES, receipt.failureCode)
+        ? RESEARCH_FAILURE_MESSAGES[receipt.failureCode] : "调研记录不完整或未通过核验";
+      throw new MusicResearchIncompleteError(`第 ${index + 1} 首《${title}》联网调研未完成：${reason}。口播尚未开始生成。`);
     }
   }
   return report;

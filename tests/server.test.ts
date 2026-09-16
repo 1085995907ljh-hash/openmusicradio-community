@@ -129,12 +129,17 @@ test("account confirmation requires complete per-song research before writing an
       const result = completedResearch(request);
       if (mode === "legacy-array") return [];
       if (mode === "partial") result.tracks.pop();
-      if (mode === "failed") return { tracks: result.tracks.map((track, index) => index === result.tracks.length - 1 ? { ...track, status: "failed" } : track) };
+      if (mode === "failed") return { tracks: result.tracks.map((track, index) => index === result.tracks.length - 1 ? { ...track, status: "failed", failureCode: "source_unavailable", completionReason: "private upstream response must not leak" } : track) };
       return result;
     };
     const response = await confirm(`research-${mode}`);
     assert.ok(response.status >= 500);
-    assert.match((await json(response)).error, /调研/);
+    const error = (await json(response)).error;
+    assert.match(error, /调研/);
+    if (mode === "failed") {
+      assert.match(error, /第 \d+ 首《调研曲目\d+》.*原文暂时无法读取/);
+      assert.doesNotMatch(error, /private upstream/);
+    }
     assert.equal(hostCalls, 0);
     assert.equal(ttsCalls, 0);
     assert.equal(playlistWrites, 0);

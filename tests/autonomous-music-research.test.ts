@@ -75,6 +75,44 @@ test("an unavailable source can be replaced by another source with genuine evide
   assert.equal(report.tracks[0]?.steps?.filter((step) => step.status === "failed").length, 1);
 });
 
+test("a blocked song source automatically expands to album and artist before stopping", async () => {
+  const queries: string[] = [];
+  const alternative = "https://label.example.com/artist";
+  const service = new AutonomousMusicResearchService({
+    search: async (query) => { queries.push(query); return [{ title: "资料", url: query.includes("访谈") ? alternative : url, snippet: "" }]; },
+    read: async (requested) => { if (requested === url) throw new Error("HTTP 403"); return { ...page, url: alternative }; },
+  });
+  const report = await service.research([track], { complete: completeActions([
+    { action: "read", url }, { action: "blocked", reason: "歌曲页面被拦截" },
+    { action: "blocked", reason: "专辑页面也不可用" },
+    { action: "read", url: alternative }, { ...finish, facts: [{ ...finish.facts[0], url: alternative }] },
+  ]) });
+  assert.equal(requireCompletedMusicResearch(report, [track]).tracks[0]?.status, "researched");
+  assert.equal(queries.length, 3);
+  assert.match(queries[1]!, /橙月.*专辑/);
+  assert.match(queries[2]!, /方大同.*访谈/);
+});
+
+test("model failures carry a safe category and a retry reuses successful songs", async () => {
+  const queries: string[] = [];
+  const service = new AutonomousMusicResearchService({ ...web, search: async (query, signal) => { queries.push(query); return web.search(query, signal); } });
+  const tracks = [track, { ...track, title: "第二首" }];
+  let failed = true;
+  const complete: ResearchCompletion = async (_system, user) => {
+    const input = JSON.parse(user);
+    if (failed && input.track.title === "第二首") throw new Error("private upstream response must not leak");
+    return JSON.stringify(input.history.some((step: { action: string }) => step.action === "read") ? finish : { action: "read", url });
+  };
+  const report = await service.research(tracks, { complete });
+  assert.equal(report.tracks[1]?.failureCode, "model_unavailable");
+  assert.throws(() => requireCompletedMusicResearch(report, tracks), /第 2 首《第二首》.*模型请求失败或超时/);
+  failed = false;
+  const recovered = await service.research(tracks, { complete });
+  assert.doesNotThrow(() => requireCompletedMusicResearch(recovered, tracks));
+  assert.equal(queries.filter((query) => query.startsWith("三人游")).length, 1);
+  assert.equal(queries.filter((query) => query.startsWith("第二首")).length, 2);
+});
+
 test("all songs are researched beyond twelve and successful receipts are isolated cached copies", async () => {
   let searches = 0;
   const service = new AutonomousMusicResearchService({ ...web, search: async (...args) => { searches++; return web.search(...args); } });

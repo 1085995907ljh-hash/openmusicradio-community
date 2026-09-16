@@ -56,6 +56,7 @@ export class AutonomousMusicResearchService {
     let stalled = 0;
     let unresolvedAccess = false;
     let consecutiveSearchFailures = 0;
+    let failureCode: MusicResearchReceipt["failureCode"] = "invalid_action";
     const album = track.album?.trim();
     const hasAlbum = Boolean(album && album !== track.title.trim() && !/^(?:未知(?:专辑)?|unknown(?: album)?|n\/?a|null|-)$/i.test(album));
     const search = async (query: string, scope: string) => {
@@ -72,6 +73,7 @@ export class AutonomousMusicResearchService {
       } catch (error) {
         signal.throwIfAborted();
         unresolvedAccess = true;
+        failureCode = "search_unavailable";
         step.detail = error instanceof Error ? error.message : "搜索失败";
         history.push({ action: "search", query, error: step.detail, next: "换词或换来源继续，失败不等于没有资料" });
         if (++consecutiveSearchFailures >= 3) throw new Error("搜索通道连续不可用，请稍后重试；不能视为没有资料");
@@ -86,12 +88,16 @@ export class AutonomousMusicResearchService {
       while (true) {
         signal.throwIfAborted();
         let action: Record<string, unknown>;
+        let modelReturned = false;
         try {
           const stepSignal = AbortSignal.any([signal, AbortSignal.timeout(90_000)]);
-          action = JSON.parse((await complete(RESEARCH_PROMPT, JSON.stringify({ track, hasAlbum, history }), stepSignal)).replace(/^```(?:json)?\s*|\s*```$/g, ""));
+          const response = await complete(RESEARCH_PROMPT, JSON.stringify({ track, hasAlbum, history }), stepSignal);
+          modelReturned = true;
+          action = JSON.parse(response.replace(/^```(?:json)?\s*|\s*```$/g, ""));
           if (!action || typeof action !== "object") throw new Error("调研动作无效");
         } catch {
           signal.throwIfAborted();
+          failureCode = modelReturned ? "invalid_action" : "model_unavailable";
           if (++stalled >= 3) throw new Error("调研模型未返回可执行动作");
           history.push({ error: "请返回一个有效的 search、read、finish 或 blocked JSON 动作。" });
           continue;
@@ -131,6 +137,7 @@ export class AutonomousMusicResearchService {
             } catch (error) {
               signal.throwIfAborted();
               unresolvedAccess = true;
+              failureCode = "source_unavailable";
               step.detail = error instanceof Error ? error.message : "读取失败";
               history.push({ action: "read", url, error: step.detail, next: "换来源或搜索定位原始文章，不能引用搜索摘要补缺口" });
             }
@@ -155,7 +162,7 @@ export class AutonomousMusicResearchService {
                 return [];
               }
             });
-            if (rejected.length && !facts.length) throw new Error(rejected.join("\n"));
+            if (rejected.length && !facts.length) { failureCode = "invalid_evidence"; throw new Error(rejected.join("\n")); }
             if (!facts.length && (!scopes.has("song") || !scopes.has("artist") || (hasAlbum && !scopes.has("album")))) throw new Error("没有事实前必须完成歌曲、有效专辑、歌手的补查");
             if (!facts.length && unresolvedAccess) throw new Error("仍有访问失败，不能宣称没有资料；继续找替代来源或返回 blocked");
             receipt.facts = [...new Map(facts.map((fact) => [fact.id, fact])).values()];
@@ -163,6 +170,18 @@ export class AutonomousMusicResearchService {
             receipt.completionReason = action.reason + (rejected.length ? ` 已剔除 ${rejected.length} 条未通过原文核验的候选事实。` : "");
             break;
           } else if (action.action === "blocked") {
+            // A blocked song page is not a reason to abandon the artist/album.
+            // Enforce the same actual supplementary searches required for no_results.
+            const fallback = !scopes.has("song") ? { scope: "song", query: `${track.title.trim()} ${track.artist.trim()} 创作背景` }
+              : hasAlbum && !scopes.has("album") ? { scope: "album", query: `${track.artist.trim()} ${album} 专辑 创作理念` }
+              : !scopes.has("artist") ? { scope: "artist", query: `${track.artist.trim()} 音乐 风格 访谈` } : null;
+            if (fallback && !seenActions.has(`search:${fallback.query}`) && consecutiveSearchFailures < 3) {
+              seenActions.add(`search:${fallback.query}`);
+              history.push({ error: "尚未补查完毕，继续查专辑或歌手；读取替代来源后再判断是否有可靠资料。" });
+              await search(fallback.query, fallback.scope);
+              stalled = 0;
+              continue;
+            }
             throw new Error(typeof action.reason === "string" ? action.reason : "资料访问仍有缺口");
           } else throw new Error("不支持的调研动作");
           stalled = 0;
@@ -174,6 +193,7 @@ export class AutonomousMusicResearchService {
       }
     } catch (error) {
       signal.throwIfAborted();
+      receipt.failureCode = failureCode;
       receipt.completionReason = error instanceof Error ? error.message : "调研失败";
     }
     receipt.completedAt = new Date().toISOString();

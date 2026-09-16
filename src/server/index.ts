@@ -78,7 +78,7 @@ import { QwenTtsProvider } from "../providers/qwen-tts.js";
 import { ProviderError } from "../providers/types.js";
 import { LocalAiConfigStore, LLM_PROVIDER_IDS, TTS_PROVIDER_IDS, type LocalAiSettings } from "./local-ai-config.js";
 import { LocalConfiguredHostProvider, LocalConfiguredTtsProvider } from "./local-ai-providers.js";
-import { requireCompletedMusicResearch, musicResearchFactText, type MusicResearchReport } from "../shared/music-research.js";
+import { requireCompletedMusicResearch, musicResearchFactText, MusicResearchIncompleteError, type MusicResearchReport } from "../shared/music-research.js";
 import { CloudAccessStore, ManagedAiConfigStore } from "./cloud-access.js";
 import { loadRadioHostReviewSkill, loadRadioHostSkill } from "./radio-host-skill.js";
 import {
@@ -3175,7 +3175,8 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       researchReport = requireCompletedMusicResearch(researched, researchTracks);
     } catch (error) {
       if (signal.aborted) throw new ServiceError("REQUEST_ABORTED", 499, "请求已取消，口播尚未生成。");
-      throw new ServiceError("HOST_PROVIDER_ERROR", 502, "歌曲联网调研未完成，口播尚未生成。请重试；已确认的歌单和顺序会保留。");
+      const detail = error instanceof MusicResearchIncompleteError ? error.message : "联网调研服务请求失败，口播尚未生成。";
+      throw new ServiceError("HOST_PROVIDER_ERROR", 502, `${detail}请重试；已确认的歌单和顺序会保留，已完成的调研会复用。`);
     }
     items = items.map((item, index) => ({ ...item, hostResearch: researchReport.tracks[index]! }));
     if (typeof researchProvider.generateShow === "function") {
