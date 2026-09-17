@@ -15,6 +15,7 @@ export type ProviderErrorCode =
   | "timeout"
   | "unauthorized"
   | "rate_limited"
+  | "quota_exceeded"
   | "business_error"
   | "unsupported"
   | "network_error";

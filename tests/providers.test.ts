@@ -737,6 +737,28 @@ test("whole-show transport retries eventually return a recoverable failure rathe
   assert.deepEqual(result.breaks, []);
 });
 
+test("managed daily allowance is distinguished from an upstream rate limit and is not retried", async () => {
+  let calls = 0;
+  const provider = new OpenAICompatibleHostProvider({
+    apiKey: "unit-test-key", mode: "responses", timeoutMs: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ error: { type: "quota_exceeded", message: "Daily managed AI allowance has been used" } }), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const result = await provider.generateShow({
+    scenePreset: "study", frequency: "low",
+    tracks: [{ trackIndex: 1, title: "歌曲一", artist: "音乐人一", exploration: false, allowedFacts: [{ id: "track:1:metadata", value: "歌曲《歌曲一》，艺术家是音乐人一。", source: "user" }] }],
+    skillInstruction: "整档撰稿契约", reviewInstruction: "整档监制契约",
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.error?.code, "quota_exceeded");
+  assert.equal(result.error?.retryable, false);
+});
+
 test("whole-show generation retries a relay rate-limit envelope until the stage succeeds", async () => {
   let calls = 0;
   const placement = { frequency: "low", placements: [{ id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 18, reason: "开场" }] };

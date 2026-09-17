@@ -500,13 +500,18 @@ export class OpenAICompatibleHostProvider implements HostProvider {
 
     const status = Number(response.status ?? 200);
     const bodyResult = await readResponseBody(response);
+    const businessFailure = findBusinessFailure(bodyResult.json);
+    const quotaExceeded = businessFailure?.code === "quota_exceeded"
+      || /daily managed ai allowance|daily .* allowance|quota exceeded/i.test(businessFailure?.message ?? "");
+    if (quotaExceeded) {
+      throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "quota_exceeded", "托管 AI 每日额度已用完", { status, retryable: false }));
+    }
     if (status < 200 || status >= 300 || response.ok === false) {
       throw httpError(PROVIDER_NAME, status, response.headers);
     }
     if (bodyResult.json === undefined) {
       throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "provider returned invalid JSON", { retryable: false }));
     }
-    const businessFailure = findBusinessFailure(bodyResult.json);
     if (businessFailure) {
       const failureText = `${businessFailure.code ?? ""} ${businessFailure.message}`.toLowerCase();
       const rateLimited = /rate[\s_-]*limit|too many requests|限流/.test(failureText);

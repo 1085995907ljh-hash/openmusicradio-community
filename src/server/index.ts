@@ -624,11 +624,12 @@ function hostProviderFailure(error: unknown, stage: string): ServiceError {
     timeout: `${stage}超时：模型在限定时间内没有返回结果，可以重试。`,
     unauthorized: `${stage}失败：模型服务拒绝了当前 API Key。`,
     rate_limited: `${stage}失败：模型服务当前限流，请稍后重试。`,
+    quota_exceeded: `${stage}失败：托管模型今日额度已用完，请稍后再试或更换模型服务。`,
     business_error: `${stage}失败：模型服务拒绝了本次生成请求。`,
     unsupported: `${stage}失败：当前模型或接口不支持所需能力。`,
     network_error: `${stage}失败：本地服务无法连接模型接口。`,
   };
-  const status = error.code === "timeout" ? 504 : error.code === "rate_limited" ? 429 : 502;
+  const status = error.code === "timeout" ? 504 : error.code === "rate_limited" || error.code === "quota_exceeded" ? 429 : 502;
   return new ServiceError("HOST_PROVIDER_ERROR", status, messages[error.code]);
 }
 
