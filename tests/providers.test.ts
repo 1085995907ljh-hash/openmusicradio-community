@@ -1122,7 +1122,7 @@ test("selected Mandarin host uses its exact Qwen Audio Plus model and voice", as
     voice: "qwen-audio-3.0-tts-plus-longchengyiwei",
     format: "mp3",
     sample_rate: 24_000,
-    rate: 1,
+    rate: 1.08,
     pitch: 1,
     volume: 54,
     instruction: hostTtsInstruction("xiaocheng"),
@@ -1134,7 +1134,7 @@ test("selected Mandarin host uses its exact Qwen Audio Plus model and voice", as
   assert.equal(longxinResult.voice, "qwen-audio-3.0-tts-plus-longhexuanlan");
   const longxinBody = requestBody as Record<string, any> | null;
   assert.equal(longxinBody?.input.voice, "qwen-audio-3.0-tts-plus-longhexuanlan");
-  assert.equal(longxinBody?.input.rate, 1.05);
+  assert.equal(longxinBody?.input.rate, 0.95);
 });
 
 test("host pace and pitch stay fixed across all five music atmospheres", async () => {
@@ -1155,11 +1155,11 @@ test("host pace and pitch stay fixed across all five music atmospheres", async (
   }
 
   assert.deepEqual(inputs.map(({ rate, pitch, volume }) => ({ rate, pitch, volume })), [
-    { rate: 1, pitch: 1, volume: 54 },
-    { rate: 1, pitch: 1, volume: 55 },
-    { rate: 1, pitch: 1, volume: 59 },
-    { rate: 1, pitch: 1, volume: 57 },
-    { rate: 1, pitch: 1, volume: 61 },
+    { rate: 1.08, pitch: 1, volume: 54 },
+    { rate: 1.08, pitch: 1, volume: 55 },
+    { rate: 1.08, pitch: 1, volume: 59 },
+    { rate: 1.08, pitch: 1, volume: 57 },
+    { rate: 1.08, pitch: 1, volume: 61 },
   ]);
 });
 

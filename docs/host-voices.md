@@ -5,8 +5,8 @@
 | 主持人 | Plus 音色后缀 | 语速 | 固定表达基调 |
 | --- | --- | --- | --- |
 | 龙浩 | longhuifengyi | 0.98 | 温暖柔和、真诚亲近 |
-| 龙小诚 | longchengyiwei | 1.00 | 沉稳清楚、笃定亲切 |
-| 龙鑫 | longhexuanlan | 1.05 | 清爽阳光、轻微笑意 |
+| 龙小诚 | longchengyiwei | 1.08 | 沉稳清楚、笃定亲切、稍快利落 |
+| 龙鑫 | longhexuanlan | 0.95 | 清爽阳光、轻微笑意、从容自然 |
 | 龙安宣 | longhongxiaoxiao | 1.03 | 爽朗自信、热忱有力 |
 | 龙安雅 | longchenghongling | 1.00 | 知性从容、温和有兴味 |
 | 龙安燃 | longfengxindie | 1.06 | 热情灵动、开心好奇 |

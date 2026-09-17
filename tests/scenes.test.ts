@@ -57,7 +57,7 @@ test("host order keeps the radio lineup readable and exposes all fixed voices", 
   assert.equal(HOST_PROFILES.longhao.voice, "qwen-audio-3.0-tts-plus-longhuifengyi");
   assert.equal(HOST_PROFILES.longxin.model, "qwen-audio-3.0-tts-plus");
   assert.equal(HOST_PROFILES.longxin.voice, "qwen-audio-3.0-tts-plus-longhexuanlan");
-  assert.equal(HOST_PROFILES.longxin.ttsRate, 1.05);
+  assert.equal(HOST_PROFILES.longxin.ttsRate, 0.95);
   assert.equal(HOST_PROFILES.anya.model, "qwen-audio-3.0-tts-plus");
   assert.equal(HOST_PROFILES.anya.voice, "qwen-audio-3.0-tts-plus-longchenghongling");
   assert.equal(HOST_PROFILES.anran.ttsRate, 1.06);
@@ -70,7 +70,7 @@ test("each host profile has a static voice preview package", async () => {
 test("each host profile has a fixed duration-reached voice cue", async () => {
   assert.equal(HOST_DURATION_REACHED_TEXT, "本档节目设定的时间到了，听完这首歌，我们就结束今天的节目。");
   await Promise.all(HOST_PROFILE_IDS.map(async (profileId) => {
-    assert.equal(hostDurationReachedCueUrl(profileId), `/hosts/cues/duration-reached/${profileId}.mp3?v=20260917`);
+    assert.equal(hostDurationReachedCueUrl(profileId), `/hosts/cues/duration-reached/${profileId}.mp3?v=20260917-2`);
     const url = new URL(`../public${hostDurationReachedCueUrl(profileId)}`, import.meta.url);
     await access(url, constants.R_OK);
     const audio = await readFile(url);
@@ -88,7 +88,7 @@ test("host delivery stays consistent and fits the complete instruction budget", 
     }
     assert.match(instruction, /按语意自然起伏和停顿，读完即止。$/);
     assert.ok(Array.from(instruction).reduce((n, c) => n + (c.codePointAt(0)! > 127 ? 2 : 1), 0) <= 100);
-    assert.ok(HOST_PROFILES[profileId].ttsRate >= 0.98 && HOST_PROFILES[profileId].ttsRate <= 1.06);
+    assert.ok(HOST_PROFILES[profileId].ttsRate >= 0.95 && HOST_PROFILES[profileId].ttsRate <= 1.08);
   }
 });
 

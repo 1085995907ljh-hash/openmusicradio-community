@@ -19,8 +19,8 @@ export interface HostProfileOption {
 
 export const HOST_PROFILES: Readonly<Record<HostProfileId, HostProfileOption>> = Object.freeze({
   longhao: { id: "longhao", name: "龙浩", genderSymbol: "♂", trait: "温和细腻", age: 29, mbti: "INFJ", scenePreset: "late_night", model: "qwen-audio-3.0-tts-plus", voice: "qwen-audio-3.0-tts-plus-longhuifengyi", ttsRate: 0.98 },
-  xiaocheng: { id: "xiaocheng", name: "龙小诚", genderSymbol: "♂", trait: "沉稳理性", age: 31, mbti: "ISTJ", scenePreset: "study", model: "qwen-audio-3.0-tts-plus", voice: "qwen-audio-3.0-tts-plus-longchengyiwei", ttsRate: 1.00 },
-  longxin: { id: "longxin", name: "龙鑫", genderSymbol: "♂", trait: "清新有活力", age: 23, mbti: "ESFP", scenePreset: "commute", model: "qwen-audio-3.0-tts-plus", voice: "qwen-audio-3.0-tts-plus-longhexuanlan", ttsRate: 1.05 },
+  xiaocheng: { id: "xiaocheng", name: "龙小诚", genderSymbol: "♂", trait: "沉稳理性", age: 31, mbti: "ISTJ", scenePreset: "study", model: "qwen-audio-3.0-tts-plus", voice: "qwen-audio-3.0-tts-plus-longchengyiwei", ttsRate: 1.08 },
+  longxin: { id: "longxin", name: "龙鑫", genderSymbol: "♂", trait: "清新有活力", age: 23, mbti: "ESFP", scenePreset: "commute", model: "qwen-audio-3.0-tts-plus", voice: "qwen-audio-3.0-tts-plus-longhexuanlan", ttsRate: 0.95 },
   anxuan: { id: "anxuan", name: "龙安宣", genderSymbol: "♀", trait: "爽朗坚定", age: 27, mbti: "ENFJ", scenePreset: "workout", model: "qwen-audio-3.0-tts-plus", voice: "qwen-audio-3.0-tts-plus-longhongxiaoxiao", ttsRate: 1.03 },
   anya: { id: "anya", name: "龙安雅", genderSymbol: "♀", trait: "知性从容", age: 30, mbti: "INTJ", scenePreset: "commute", model: "qwen-audio-3.0-tts-plus", voice: "qwen-audio-3.0-tts-plus-longchenghongling", ttsRate: 1.00 },
   anran: { id: "anran", name: "龙安燃", genderSymbol: "♀", trait: "热情外向", age: 25, mbti: "ENFP", scenePreset: "party", model: "qwen-audio-3.0-tts-plus", voice: "qwen-audio-3.0-tts-plus-longfengxindie", ttsRate: 1.06 },
@@ -30,8 +30,8 @@ export type HostTtsMoment = "opening" | "song_note" | "next_preview" | "scene_bo
 
 const HOST_TTS_PERSONAS: Readonly<Record<HostProfileId, string>> = Object.freeze({
   longhao: "温暖柔和，真诚亲近，像和熟人聊音乐，语速舒缓自然。",
-  xiaocheng: "沉稳清楚，笃定亲切，像朋友认真分享发现，语速平稳自然。",
-  longxin: "清爽阳光，带轻微笑意，像朋友兴致勃勃地分享，语速轻快。",
+  xiaocheng: "沉稳清楚，笃定亲切，像朋友认真分享发现，语速稍快利落。",
+  longxin: "清爽阳光，带轻微笑意，像朋友轻松分享，语速从容自然。",
   anxuan: "爽朗自信，热忱有力，像朋友干脆地推荐好歌，语速明快。",
   anya: "知性从容，温和有兴味，像朋友娓娓分享见解，语速自然。",
   anran: "热情灵动，开心好奇，像发现好歌就想分享的朋友，语速轻快。",
@@ -58,14 +58,14 @@ export function hostPreviewText(profileId: HostProfileId): string {
 }
 
 export function hostPreviewUrl(profileId: HostProfileId): string {
-  return `/hosts/previews/${profileId}.mp3?v=20260917`;
+  return `/hosts/previews/${profileId}.mp3?v=20260917-2`;
 }
 
 export const HOST_DURATION_REACHED_TEXT = "本档节目设定的时间到了，听完这首歌，我们就结束今天的节目。";
 
 export function hostDurationReachedCueUrl(profileId: HostProfileId): string {
   const resolvedProfileId = HOST_PROFILES[profileId] ? profileId : DEFAULT_HOST_PROFILE;
-  return `/hosts/cues/duration-reached/${resolvedProfileId}.mp3?v=20260917`;
+  return `/hosts/cues/duration-reached/${resolvedProfileId}.mp3?v=20260917-2`;
 }
 
 export function hostOpeningIdentity(profileId: HostProfileId): string {
