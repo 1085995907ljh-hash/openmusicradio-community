@@ -63,7 +63,7 @@ try {
       if (path === "/api/program" || path.startsWith("/api/programs/")) return json({ program });
       if (path === "/api/health") return json({ ok: true });
       if (path === "/api/access/status") return json({ connected: true, configured: true });
-      if (path === "/api/ai/config") return json({ config: { llm: { provider: "deepseek", model: "deepseek-v4-flash", hasKey: true }, tts: { provider: "qwen", hasKey: true } } });
+      if (path === "/api/ai/config") return json({ config: { llm: { provider: "deepseek", model: "deepseek-flash", hasKey: true }, tts: { provider: "qwen", hasKey: true } } });
       if (path === "/api/sources") return json({ sources: [] });
       return json({ ok: true });
     });

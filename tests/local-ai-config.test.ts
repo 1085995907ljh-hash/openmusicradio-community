@@ -43,12 +43,12 @@ test("managed access uses the shared cloud service and rejects implicit local pr
   }
 });
 
-test("managed access advertises DeepSeek V4 Flash by default", () => {
+test("managed access advertises the current DeepSeek Flash model by default", () => {
   const previousModel = process.env.ONE_RADIO_MANAGED_LLM_MODEL;
   delete process.env.ONE_RADIO_MANAGED_LLM_MODEL;
   try {
     const store = new CloudAccessStore("/unused/cloud-access.json", "unused-test-keychain", async () => { throw new Error("network must not be called"); });
-    assert.equal(store.serviceMetadata().llmModel, "deepseek-v4-flash");
+    assert.equal(store.serviceMetadata().llmModel, "deepseek-flash");
   } finally {
     if (previousModel === undefined) delete process.env.ONE_RADIO_MANAGED_LLM_MODEL;
     else process.env.ONE_RADIO_MANAGED_LLM_MODEL = previousModel;

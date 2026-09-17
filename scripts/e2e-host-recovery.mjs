@@ -38,7 +38,7 @@ try {
       if (path === "/api/programs/progress") return json({ progress: { completedSteps: phase === "on_air" ? 4 : 1, status: phase === "on_air" ? "completed" : "running" } });
       if (path === "/api/health") return json({ ok: true, providers: { host: { configured: true, state: "ready" }, tts: { configured: true, state: "ready" } } });
       if (path === "/api/access/status") return json({ configured: true, connected: true });
-      if (path === "/api/ai/config") return json({ config: { llm: { provider: "deepseek", model: "deepseek-v4-flash", hasKey: true }, tts: { provider: "qwen", hasKey: true } } });
+      if (path === "/api/ai/config") return json({ config: { llm: { provider: "deepseek", model: "deepseek-flash", hasKey: true }, tts: { provider: "qwen", hasKey: true } } });
       if (path === "/api/sources") return json({ sources: [] });
       if (path === "/api/netease/status") return json({ status: { configured: true, authenticated: true, state: "ready" } });
       if (path === "/api/host/preview") return json({ host: null, audio: { status: "unavailable" } });

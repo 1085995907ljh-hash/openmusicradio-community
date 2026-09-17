@@ -3045,7 +3045,7 @@ function NoticeToast({ notice, onDismiss }: { notice: AppNotice; onDismiss: () =
 
 const LLM_OPTIONS: Array<{ id: AiConfigStatus["llm"]["provider"]; label: string; model: string }> = [
   { id: "openai", label: "OpenAI", model: "gpt-5.4-mini" },
-  { id: "deepseek", label: "DeepSeek", model: "deepseek-v4-flash" },
+  { id: "deepseek", label: "DeepSeek", model: "deepseek-flash" },
   { id: "qwen", label: "通义千问", model: "qwen-plus" },
   { id: "anthropic", label: "Anthropic", model: "claude-sonnet-4-6" },
   { id: "gemini", label: "Google Gemini", model: "gemini-3.5-flash" },
