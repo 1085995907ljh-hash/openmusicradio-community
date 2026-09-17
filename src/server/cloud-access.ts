@@ -8,7 +8,10 @@ import { LocalAiConfigStore } from "./local-ai-config.js";
 
 const DEFAULT_CONFIG_PATH = join(homedir(), ".one-radio", "cloud-access.json");
 const DEFAULT_KEYCHAIN_SERVICE = "dev.openmusicradio.cloud-access";
-const DEFAULT_CLOUD_BASE_URL = "https://one-radio-llm-proxy.soluna-notm302.workers.dev";
+// The managed endpoint is intentionally deployment-specific. Keeping a
+// provider URL in the client would couple new installs to the retired
+// Cloudflare Worker.
+const DEFAULT_CLOUD_BASE_URL = "";
 const LOCAL_PREVIEW_BASE_URL = "local-preview://managed";
 const LOCAL_PREVIEW_CODES = new Set([
   "OMR-NEON01",
@@ -166,7 +169,7 @@ export class CloudAccessStore {
 
   serviceMetadata() {
     return {
-      llmModel: process.env.ONE_RADIO_MANAGED_LLM_MODEL?.trim() || "deepseek-flash",
+      llmModel: process.env.ONE_RADIO_MANAGED_LLM_MODEL?.trim() || "deepseek-v4.1-flash",
       ttsModel: process.env.ONE_RADIO_MANAGED_TTS_MODEL?.trim() || "cosyvoice-v2",
       managed: true as const,
     };

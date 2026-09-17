@@ -1,0 +1,37 @@
+edition: 3.0.0
+name: openmusicradio-aliyun-gateway
+access: default
+
+vars:
+  region: ${env('ALIYUN_REGION', 'cn-hangzhou')}
+  serviceName: ${env('ALIYUN_FC_SERVICE', 'openmusicradio')}
+  functionName: ${env('ALIYUN_FC_FUNCTION', 'ai-gateway')}
+
+resources:
+  gateway:
+    component: fc3
+    props:
+      region: ${vars.region}
+      serviceName: ${vars.serviceName}
+      functionName: ${vars.functionName}
+      description: OpenMusicRadio Bailian AI gateway
+      runtime: nodejs20
+      code: ./
+      handler: src/index.handler
+      memorySize: 512
+      timeout: 120
+      internetAccess: true
+      environmentVariables:
+        DASHSCOPE_API_KEY: ${env('DASHSCOPE_API_KEY')}
+        DASHSCOPE_WORKSPACE_ID: ${env('DASHSCOPE_WORKSPACE_ID', '')}
+        DASHSCOPE_BASE_URL: ${env('DASHSCOPE_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')}
+        DASHSCOPE_TTS_BASE_URL: ${env('DASHSCOPE_TTS_BASE_URL', '')}
+        AUTH_SECRET: ${env('ONE_RADIO_AUTH_SECRET')}
+        PROXY_TOKEN: ${env('ONE_RADIO_PROXY_TOKEN', '')}
+        INVITE_CODES: ${env('ONE_RADIO_INVITE_CODES')}
+      triggers:
+        - triggerName: http
+          triggerType: http
+          triggerConfig:
+            authType: anonymous
+            methods: [GET, POST]

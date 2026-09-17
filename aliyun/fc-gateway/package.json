@@ -1,0 +1,6 @@
+{
+  "name": "openmusicradio-aliyun-gateway",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" }
+}

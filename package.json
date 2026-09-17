@@ -15,6 +15,8 @@
     "build:desktop-pet": "swift build -c release --package-path native/OneRadioPet",
     "dev:netease": "HOST=127.0.0.1 PORT=4320 CORS_ALLOW_ORIGIN=http://127.0.0.1:5173,http://localhost:5173 ENABLE_PROXY=false ENABLE_GENERAL_UNBLOCK=false ENABLE_FLAC=false node scripts/netease-service.cjs",
     "dev:qqmusic": "uv run --no-project --python 3.12 --with 'qqmusic-api-python==0.7.2' --with 'typing-extensions==4.16.0' python scripts/qqmusic-service.py",
+    "deploy:aliyun-gateway": "npx --yes @serverless-devs/s deploy -t aliyun/fc-gateway/s.yaml",
+    "invite:create": "node scripts/create-invite.mjs",
     "build": "tsc --noEmit && vite build",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:e2e:host-ducking": "node scripts/e2e-host-ducking.mjs",

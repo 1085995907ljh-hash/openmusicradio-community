@@ -29,11 +29,11 @@ test("managed access uses the shared cloud service and rejects implicit local pr
     }));
     const store = new CloudAccessStore(configPath, "unused-test-keychain", async () => { throw new Error("network must not be called"); });
     const status = await store.status();
-    assert.equal(status.configured, true);
+    assert.equal(status.configured, false);
     assert.equal(status.connected, false);
-    assert.equal(status.state, "invitation_required");
-    assert.match(status.detail ?? "", /正式邀请码/);
-    assert.equal(await store.baseUrl(), "https://one-radio-llm-proxy.soluna-notm302.workers.dev");
+    assert.equal(status.state, "unconfigured");
+    assert.match(status.detail ?? "", /尚未配置/);
+    assert.equal(await store.baseUrl(), "");
   } finally {
     if (previousDeviceToken === undefined) delete process.env.ONE_RADIO_DEVICE_TOKEN;
     else process.env.ONE_RADIO_DEVICE_TOKEN = previousDeviceToken;
@@ -48,7 +48,7 @@ test("managed access advertises the current DeepSeek Flash model by default", ()
   delete process.env.ONE_RADIO_MANAGED_LLM_MODEL;
   try {
     const store = new CloudAccessStore("/unused/cloud-access.json", "unused-test-keychain", async () => { throw new Error("network must not be called"); });
-    assert.equal(store.serviceMetadata().llmModel, "deepseek-flash");
+    assert.equal(store.serviceMetadata().llmModel, "deepseek-v4.1-flash");
   } finally {
     if (previousModel === undefined) delete process.env.ONE_RADIO_MANAGED_LLM_MODEL;
     else process.env.ONE_RADIO_MANAGED_LLM_MODEL = previousModel;
