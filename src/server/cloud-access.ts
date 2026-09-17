@@ -170,7 +170,7 @@ export class CloudAccessStore {
   serviceMetadata() {
     return {
       llmModel: process.env.ONE_RADIO_MANAGED_LLM_MODEL?.trim() || "deepseek-v4.1-flash",
-      ttsModel: process.env.ONE_RADIO_MANAGED_TTS_MODEL?.trim() || "cosyvoice-v2",
+      ttsModel: process.env.ONE_RADIO_MANAGED_TTS_MODEL?.trim() || "qwen-audio-3.0-tts-plus",
       managed: true as const,
     };
   }
