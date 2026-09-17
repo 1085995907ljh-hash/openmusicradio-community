@@ -8,7 +8,9 @@ export interface HostBreakPlan {
 }
 
 export const HOST_MUSIC_START_DELAY_SECONDS = 5;
-export const HOST_MUSIC_DUCK_DB = -18;
+// Keep the music bed clearly behind speech. This is an amplitude gain, so
+// -24 dB leaves about 6.3% of the original music level during hosting.
+export const HOST_MUSIC_DUCK_DB = -24;
 export const HOST_MUSIC_DUCK_VOLUME = dbToGain(HOST_MUSIC_DUCK_DB);
 export const HOST_MUSIC_RESTORE_DURATION_MS = 2_000;
 
