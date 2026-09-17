@@ -5,8 +5,8 @@ import { dbToGain, HOST_MUSIC_DUCK_DB, HOST_MUSIC_DUCK_VOLUME, HOST_MUSIC_RESTOR
 import { musicBedDelayRemainingMs } from "../src/web/audio-envelope.js";
 
 test("host speech uses a quiet music bed and a two-second restore", () => {
-  assert.equal(HOST_MUSIC_DUCK_DB, -24);
-  assert.equal(Number(HOST_MUSIC_DUCK_VOLUME.toFixed(4)), 0.0631);
+  assert.equal(HOST_MUSIC_DUCK_DB, -10);
+  assert.equal(Number(HOST_MUSIC_DUCK_VOLUME.toFixed(4)), 0.3162);
   assert.equal(HOST_MUSIC_RESTORE_DURATION_MS, 2_000);
 });
 

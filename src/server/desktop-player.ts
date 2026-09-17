@@ -62,8 +62,8 @@ interface PlayerConfig {
 
 const execFileAsync = promisify(execFile);
 // Desktop players expose volume as menu steps rather than a normalized gain.
-// Five steps gives the host a comparable safety margin to the browser mixer.
-const DUCK_STEPS = 5;
+// Three steps keeps the reduction closer to the browser's moderate ducking.
+const DUCK_STEPS = 3;
 const LEASE_TTL_MS = 30_000;
 const DEFAULT_LEASE_PATH = join(tmpdir(), `one-radio-volume-leases-${typeof process.getuid === "function" ? process.getuid() : "user"}.json`);
 const PLAYER_CONFIG: Record<DesktopPlayerSource, PlayerConfig> = {

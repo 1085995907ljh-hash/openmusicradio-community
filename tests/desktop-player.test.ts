@@ -54,7 +54,7 @@ test("desktop scripts target only fixed app processes and localized control menu
   assert.match(scripts[3], /menu item "下一个"/);
 });
 
-test("duck uses five app-volume steps and only its lease can restore", async () => {
+test("duck uses three app-volume steps and only its lease can restore", async () => {
   const scripts: string[] = [];
   const outputs = ["OK|2", "OK|2"];
   const controller = new DesktopPlayerController(async (script) => {
@@ -65,7 +65,7 @@ test("duck uses five app-volume steps and only its lease can restore", async () 
   const ducked = await controller.duck("netease_music", "host-1");
   assert.equal(ducked.state, "ducked");
   assert.equal(ducked.controlledElements, 2);
-  assert.match(scripts[0], /repeat 5 times/);
+  assert.match(scripts[0], /repeat 3 times/);
   assert.match(scripts[0], /menu item "降低音量"/);
 
   const replayed = await controller.duck("netease_music", "host-1");
@@ -94,7 +94,7 @@ test("restore without a matching active duck never raises app volume", async () 
 });
 
 test("malformed desktop automation responses fail closed", async () => {
-  const outputs = ["OK|garbage", "OK|6", "OK|5|extra", "UNKNOWN"];
+  const outputs = ["OK|garbage", "OK|4", "OK|3|extra", "UNKNOWN"];
   const controller = new DesktopPlayerController(async () => outputs.shift() ?? "FAILED");
 
   assert.equal((await controller.duck("qq_music", "host-1")).state, "failed");
