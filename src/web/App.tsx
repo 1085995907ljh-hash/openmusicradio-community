@@ -55,6 +55,7 @@ import {
   HOST_PROFILE_IDS,
   HOST_PROFILES,
   hostDurationReachedCueUrl,
+  hostPreviewUrl,
   MAX_MUSIC_GENRES,
   MUSIC_GENRE_IDS,
   MUSIC_GENRES,
@@ -1499,7 +1500,7 @@ function App() {
     setLastError(null);
     let preview: HTMLAudioElement | null = null;
     try {
-      preview = new Audio(`/hosts/previews/${profileId}.mp3`);
+      preview = new Audio(hostPreviewUrl(profileId));
       voicePreviewAudioRef.current = preview;
       await new Promise<void>((resolve, reject) => {
         const finish = () => resolve();

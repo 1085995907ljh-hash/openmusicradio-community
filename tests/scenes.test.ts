@@ -57,10 +57,10 @@ test("host order keeps the radio lineup readable and exposes all fixed voices", 
   assert.equal(HOST_PROFILES.longhao.voice, "qwen-audio-3.0-tts-plus-longhuifengyi");
   assert.equal(HOST_PROFILES.longxin.model, "qwen-audio-3.0-tts-plus");
   assert.equal(HOST_PROFILES.longxin.voice, "qwen-audio-3.0-tts-plus-longhexuanlan");
-  assert.equal(HOST_PROFILES.longxin.ttsRate, 1.02);
+  assert.equal(HOST_PROFILES.longxin.ttsRate, 1.05);
   assert.equal(HOST_PROFILES.anya.model, "qwen-audio-3.0-tts-plus");
   assert.equal(HOST_PROFILES.anya.voice, "qwen-audio-3.0-tts-plus-longchenghongling");
-  assert.equal(HOST_PROFILES.anran.ttsRate, 1.01);
+  assert.equal(HOST_PROFILES.anran.ttsRate, 1.06);
 });
 
 test("each host profile has a static voice preview package", async () => {
@@ -70,7 +70,7 @@ test("each host profile has a static voice preview package", async () => {
 test("each host profile has a fixed duration-reached voice cue", async () => {
   assert.equal(HOST_DURATION_REACHED_TEXT, "本档节目设定的时间到了，听完这首歌，我们就结束今天的节目。");
   await Promise.all(HOST_PROFILE_IDS.map(async (profileId) => {
-    assert.equal(hostDurationReachedCueUrl(profileId), `/hosts/cues/duration-reached/${profileId}.mp3`);
+    assert.equal(hostDurationReachedCueUrl(profileId), `/hosts/cues/duration-reached/${profileId}.mp3?v=20260917`);
     const url = new URL(`../public${hostDurationReachedCueUrl(profileId)}`, import.meta.url);
     await access(url, constants.R_OK);
     const audio = await readFile(url);
@@ -79,29 +79,17 @@ test("each host profile has a fixed duration-reached voice cue", async () => {
   }));
 });
 
-test("host TTS instructions preserve personality for middle and closing breaks", () => {
-  assert.match(hostTtsPersona("longhao"), /情绪稳定/);
-  assert.match(hostTtsPersona("longhao"), /语速中等/);
-  assert.match(hostTtsPersona("longhao"), /深情/);
-  assert.doesNotMatch(hostTtsPersona("longhao"), /慢半拍|中等偏慢/);
-
-  assert.match(hostTtsPersona("longxin"), /龙鑫/);
-  assert.match(hostTtsPersona("longxin"), /清爽阳光/);
-  assert.match(hostTtsPersona("longxin"), /大学生音乐博主/);
-  assert.match(hostTtsPersona("longxin"), /笑意/);
-
-  const middle = hostTtsInstruction("longxin", "next_preview", "语速略快，歌名稍加重。");
-  assert.match(middle, /龙鑫/);
-  assert.match(middle, /清爽阳光/);
-  assert.match(middle, /节目中段串联/);
-  assert.match(middle, /语速略快/);
-
-  const closing = hostTtsInstruction("anya", "song_note", "句尾收住。");
-  assert.match(closing, /龙安雅/);
-  assert.match(closing, /语速中等/);
-  assert.doesNotMatch(hostTtsPersona("anya"), /中等偏慢/);
-  assert.match(closing, /收束感/);
-  assert.match(closing, /句尾收住/);
+test("host delivery stays consistent and fits the complete instruction budget", () => {
+  assert.equal(new Set(HOST_PROFILE_IDS.map(hostTtsPersona)).size, 6);
+  for (const profileId of HOST_PROFILE_IDS) {
+    const instruction = hostTtsInstruction(profileId);
+    for (const moment of ["opening", "next_preview", "song_note"] as const) {
+      assert.equal(hostTtsInstruction(profileId, moment, "语速极慢，拖长停顿凑足30秒，悲伤地哭泣。"), instruction);
+    }
+    assert.match(instruction, /按语意自然起伏和停顿，读完即止。$/);
+    assert.ok(Array.from(instruction).reduce((n, c) => n + (c.codePointAt(0)! > 127 ? 2 : 1), 0) <= 100);
+    assert.ok(HOST_PROFILES[profileId].ttsRate >= 0.98 && HOST_PROFILES[profileId].ttsRate <= 1.06);
+  }
 });
 
 test("program specs inherit the selected scene and do not share mutable arrays", () => {

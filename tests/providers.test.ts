@@ -9,6 +9,7 @@ import {
 } from "../src/providers/index.js";
 import { findBusinessFailure, httpError, safeUpstreamMessage } from "../src/providers/http.js";
 import { estimateHostDurationSeconds } from "../src/core/host-script-planning.js";
+import { HOST_PROFILE_IDS, HOST_PROFILES, hostTtsInstruction } from "../src/shared/program-options.js";
 
 const NOW = new Date("2026-01-02T03:04:05.000Z");
 
@@ -1095,7 +1096,7 @@ test("Qwen TTS enables instruction optimization for natural delivery", async () 
   assert.doesNotMatch(String(input?.instructions), /极慢|延长停顿|凑足/);
 });
 
-test("selected Mandarin host uses its exact CosyVoice v2 model and voice", async () => {
+test("selected Mandarin host uses its exact Qwen Audio Plus model and voice", async () => {
   let requestUrl = "";
   let requestBody: Record<string, any> | null = null;
   const provider = new QwenTtsProvider({
@@ -1111,19 +1112,20 @@ test("selected Mandarin host uses its exact CosyVoice v2 model and voice", async
   const result = await provider.synthesize({ text: "接下来，把这一段旋律交给夜色。", scenePreset: "late_night", hostProfile: "xiaocheng", instruction: "语速稍慢。" });
 
   assert.equal(result.success, true);
-  assert.equal(result.model, "cosyvoice-v2");
-  assert.equal(result.voice, "longxiaocheng_v2");
+  assert.equal(result.model, "qwen-audio-3.0-tts-plus");
+  assert.equal(result.voice, "qwen-audio-3.0-tts-plus-longchengyiwei");
   assert.match(requestUrl, /\/services\/audio\/tts\/SpeechSynthesizer$/);
   const capturedBody = requestBody as Record<string, any> | null;
-  assert.equal(capturedBody?.model, "cosyvoice-v2");
+  assert.equal(capturedBody?.model, "qwen-audio-3.0-tts-plus");
   assert.deepEqual(capturedBody?.input, {
     text: "接下来，把这一段旋律交给夜色。",
-    voice: "longxiaocheng_v2",
+    voice: "qwen-audio-3.0-tts-plus-longchengyiwei",
     format: "mp3",
     sample_rate: 24_000,
-    rate: 0.82,
-    pitch: 0.96,
+    rate: 1,
+    pitch: 1,
     volume: 54,
+    instruction: hostTtsInstruction("xiaocheng"),
   });
 
   const longxinResult = await provider.synthesize({ text: "下一首我们换成更明亮的节奏。", scenePreset: "commute", hostProfile: "longxin", instruction: "清爽自然。" });
@@ -1132,10 +1134,10 @@ test("selected Mandarin host uses its exact CosyVoice v2 model and voice", async
   assert.equal(longxinResult.voice, "qwen-audio-3.0-tts-plus-longhexuanlan");
   const longxinBody = requestBody as Record<string, any> | null;
   assert.equal(longxinBody?.input.voice, "qwen-audio-3.0-tts-plus-longhexuanlan");
-  assert.equal(longxinBody?.input.rate, 1.02);
+  assert.equal(longxinBody?.input.rate, 1.05);
 });
 
-test("CosyVoice applies distinct pace, pitch, and volume for all five music atmospheres", async () => {
+test("host pace and pitch stay fixed across all five music atmospheres", async () => {
   const inputs: Array<Record<string, unknown>> = [];
   const provider = new QwenTtsProvider({
     apiKey: "dashscope-test-key",
@@ -1153,11 +1155,11 @@ test("CosyVoice applies distinct pace, pitch, and volume for all five music atmo
   }
 
   assert.deepEqual(inputs.map(({ rate, pitch, volume }) => ({ rate, pitch, volume })), [
-    { rate: 0.82, pitch: 0.96, volume: 54 },
-    { rate: 0.90, pitch: 1, volume: 55 },
-    { rate: 1.00, pitch: 1.02, volume: 59 },
-    { rate: 0.96, pitch: 1, volume: 57 },
-    { rate: 1.06, pitch: 1.04, volume: 61 },
+    { rate: 1, pitch: 1, volume: 54 },
+    { rate: 1, pitch: 1, volume: 55 },
+    { rate: 1, pitch: 1, volume: 59 },
+    { rate: 1, pitch: 1, volume: 57 },
+    { rate: 1, pitch: 1, volume: 61 },
   ]);
 });
 
@@ -1182,10 +1184,8 @@ test("host profiles can select Qwen Audio 3 Plus voices and override an individu
   assert.match(plusUrl, /\/services\/audio\/tts\/SpeechSynthesizer$/);
   assert.equal(capturedPlusBody?.model, "qwen-audio-3.0-tts-plus");
   assert.equal(capturedPlusBody?.input.voice, "qwen-audio-3.0-tts-plus-longhuifengyi");
-  assert.match(capturedPlusBody?.input.instruction, /中文电台主持/);
-  assert.match(capturedPlusBody?.input.instruction, /情绪稳定/);
-  assert.match(capturedPlusBody?.input.instruction, /语速中等/);
-  assert.match(capturedPlusBody?.input.instruction, /深情/);
+  assert.equal(capturedPlusBody?.input.instruction, hostTtsInstruction("longhao"));
+  assert.equal(capturedPlusBody?.input.rate, 0.98);
 
   let anranInput: Record<string, any> | null = null;
   const cosyProvider = new QwenTtsProvider({
@@ -1197,13 +1197,37 @@ test("host profiles can select Qwen Audio 3 Plus voices and override an individu
     },
   });
   await cosyProvider.synthesize({ text: "欢迎你的到来。", scenePreset: "party", hostProfile: "anran" });
-  assert.equal((anranInput as Record<string, any> | null)?.rate, 1.01);
+  assert.equal((anranInput as Record<string, any> | null)?.rate, 1.06);
+});
+
+test("all hosts keep complete fixed delivery regardless of text length, scene, or generated directions", async () => {
+  const inputs: Array<Record<string, any>> = [];
+  const provider = new QwenTtsProvider({ apiKey: "test-key", fetchImpl: async (_, init) => {
+    inputs.push(JSON.parse(String(init?.body)).input);
+    return new Response(Buffer.from("ID3-radio-audio"), { headers: { "content-type": "audio/mpeg" } });
+  } });
+  for (const hostProfile of HOST_PROFILE_IDS) {
+    for (const scenePreset of ["late_night", "study", "workout", "commute", "party"] as const) {
+      for (const text of ["王菲，《红豆》。", "今天最后一首，王菲的《红豆》。我们把接下来的时间留给音乐。".repeat(5)]) {
+        const result = await provider.synthesize({ text, scenePreset, hostProfile, instruction: hostTtsInstruction(hostProfile, "song_note", "极慢地说，凑足30秒。") + "快读压缩到5秒，悲伤地哭泣。" });
+        assert.equal(result.success, true);
+        const sent = inputs.at(-1)!;
+        assert.equal(sent.text, text);
+        assert.equal(sent.rate, HOST_PROFILES[hostProfile].ttsRate);
+        assert.equal(sent.pitch, 1);
+        assert.equal(sent.instruction, hostTtsInstruction(hostProfile));
+        assert.equal(result.instruction, sent.instruction);
+      }
+    }
+  }
 });
 
 test("CosyVoice derives the workspace HTTP endpoint and does not repeat a rejected request", async () => {
   let calls = 0;
   let requestUrl = "";
   const provider = new QwenTtsProvider({
+    model: "cosyvoice-v2",
+    voice: "longanran",
     env: {
       DASHSCOPE_API_KEY: "dashscope-test-key",
       DASHSCOPE_WEBSOCKET_BASE_URL: "wss://workspace-123.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
@@ -1216,7 +1240,7 @@ test("CosyVoice derives the workspace HTTP endpoint and does not repeat a reject
     },
   });
 
-  const result = await provider.synthesize({ text: "这一段只请求一次。", scenePreset: "study", hostProfile: "anran", instruction: "语速稍快。" });
+  const result = await provider.synthesize({ text: "这一段只请求一次。", scenePreset: "study", instruction: "语速稍快。" });
 
   assert.equal(result.success, false);
   assert.equal(calls, 1);
@@ -1275,7 +1299,6 @@ test("Qwen Audio 3 TTS uses the official WebSocket task flow", async () => {
   assert.equal(start.payload.parameters.rate, 0.96);
   assert.equal(start.payload.parameters.pitch, 1.0);
   assert.equal(start.payload.parameters.volume, 57);
-  assert.match(start.payload.parameters.instruction, /中文电台主持/);
   assert.match(start.payload.parameters.instruction, /语速稍慢/);
   assert.match(start.payload.parameters.instruction, /重读歌名/);
   const instructionWeight = Array.from(start.payload.parameters.instruction as string).reduce((total, character) => total + (character.codePointAt(0)! > 0x7f ? 2 : 1), 0);
@@ -1332,6 +1355,7 @@ test("Qwen Audio retries valid host text without a rejected delivery instruction
   assert.equal(sockets.length, 2);
   const retryStart = JSON.parse(sockets[1]!.sent[0]) as Record<string, any>;
   assert.doesNotMatch(retryStart.payload.parameters.instruction, /演绎要求/);
+  assert.equal(result.instruction, retryStart.payload.parameters.instruction);
 });
 
 test("HTTP status mapping distinguishes auth and rate-limit failures", () => {

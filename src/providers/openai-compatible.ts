@@ -1,7 +1,7 @@
 import type { HostContextPack } from "../shared/contracts.js";
 import { estimateHostDurationSeconds, evenlySpacedHostBreakIndices, middleHostBreakCount, normalizeSpokenEnglishCase, normalizeSpokenYearDigits } from "../core/host-script-planning.js";
 import { getSceneConfig } from "../core/scenes.js";
-import { DEFAULT_HOST_PROFILE, HOST_PROFILES, hostOpeningIdentity, type HostProfileId } from "../shared/program-options.js";
+import { DEFAULT_HOST_PROFILE, HOST_PROFILES, hostOpeningIdentity, hostTtsInstruction, type HostProfileId } from "../shared/program-options.js";
 import {
   OPENAI_API_MODES,
   ProviderError,
@@ -640,7 +640,7 @@ function safeHostShowRequest(request: HostShowGenerationRequest): Record<string,
     openingIdentity: hostOpeningIdentity(hostProfileId),
     musicAtmosphere: scene.label,
     hostLanguageDirection: scene.hostLanguageDirection,
-    ttsDirection: scene.ttsDirection,
+    ttsDirection: hostTtsInstruction(hostProfileId),
     tracks: request.tracks.map((track) => ({
       trackIndex: track.trackIndex,
       title: track.title,

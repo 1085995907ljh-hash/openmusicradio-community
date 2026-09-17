@@ -31,7 +31,7 @@ const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 const ENDPOINT_PATH = "/services/aigc/multimodal-generation/generation";
 const SPEECH_SYNTHESIZER_PATH = "/services/audio/tts/SpeechSynthesizer";
 const PROVIDER_NAME = "qwen-tts";
-const RADIO_VOICE_INSTRUCTION = "中文电台主持。自然语速，读完即止。";
+const RADIO_VOICE_INSTRUCTION = "像和朋友聊音乐，自然语速，读完即止。";
 const COMPACT_SCENE_INSTRUCTIONS: Readonly<Record<TtsSynthesisRequest["scenePreset"], string>> = Object.freeze({
   late_night: "温暖舒展，句尾放松。",
   study: "清楚克制，重音准确。",
@@ -47,15 +47,14 @@ function instructionWeight(value: string): number {
 }
 
 function boundedInstruction(scenePreset: TtsSynthesisRequest["scenePreset"], deliveryInstruction?: string): string {
-  const prefix = `${RADIO_VOICE_INSTRUCTION}${COMPACT_SCENE_INSTRUCTIONS[scenePreset]}`;
-  const dynamic = sanitizeInstruction(deliveryInstruction ?? "");
-  if (!dynamic) return prefix;
-  let result = `${prefix}演绎：`;
-  for (const character of dynamic) {
-    if (instructionWeight(result + character) > MAX_INSTRUCTION_WEIGHT) break;
-    result += character;
+  const value = sanitizeInstruction(deliveryInstruction || `${RADIO_VOICE_INSTRUCTION}${COMPACT_SCENE_INSTRUCTIONS[scenePreset]}`);
+  let result = "";
+  // Preserve complete clauses, never cut a word or extract isolated keywords.
+  for (const clause of value.match(/[^，。；！？,;!?]+[，。；！？,;!?]?/g) ?? []) {
+    if (instructionWeight(result + clause) > MAX_INSTRUCTION_WEIGHT) break;
+    result += clause;
   }
-  return result;
+  return result ? result.replace(/[，；,;]$/, "。") : RADIO_VOICE_INSTRUCTION;
 }
 
 export class QwenTtsProvider implements TtsProvider {
@@ -111,11 +110,9 @@ export class QwenTtsProvider implements TtsProvider {
     const instruction = isScenePreset(scenePreset) ? SCENE_INSTRUCTIONS[scenePreset] : "";
     const selectedProfile = request?.hostProfile ? HOST_PROFILES[request.hostProfile] : null;
     const selectedProfileId = selectedProfile?.id;
-    const ttsInstruction = compactDeliveryInstruction([
-      selectedProfileId ? hostTtsInstruction(selectedProfileId) : "",
-      naturalHostDeliveryInstruction(request?.instruction),
-    ].filter(Boolean).join(" "));
-    const personaFallbackInstruction = selectedProfileId ? compactDeliveryInstruction(hostTtsInstruction(selectedProfileId)) : undefined;
+    let ttsInstruction = selectedProfileId
+      ? hostTtsInstruction(selectedProfileId)
+      : isScenePreset(scenePreset) ? boundedInstruction(scenePreset, naturalHostDeliveryInstruction(request?.instruction)) : "";
     const model = selectedProfile?.model ?? this.model;
     const voice = selectedProfile?.voice ?? this.voice;
     try {
@@ -152,17 +149,17 @@ export class QwenTtsProvider implements TtsProvider {
       const voiceParameters = {
         ...baseVoiceParameters,
         volume: boostedHostTtsVolume(baseVoiceParameters.volume),
-        ...(selectedProfile?.ttsRate === undefined ? {} : { rate: selectedProfile.ttsRate }),
+        ...(selectedProfile ? { rate: selectedProfile.ttsRate, pitch: 1 } : {}),
       };
       try {
         audio = await this.requestAudio(request.text.trim(), scenePreset, request.signal, ttsInstruction, model, voice, voiceParameters);
       } catch (error) {
         const failure = asProviderError(error);
-        if (model.startsWith("cosyvoice-") || !request.instruction || failure.code !== "business_error" || request.signal?.aborted) throw failure;
-        // Qwen Audio 3 can reject otherwise valid text when an instruction is
-        // too specific. Preserve the script and fixed voice by retrying with a
-        // compact host persona instead of dropping to a generic scene voice.
-        audio = await this.requestAudio(request.text.trim(), scenePreset, request.signal, personaFallbackInstruction, model, voice, voiceParameters);
+        if (selectedProfile || model.startsWith("cosyvoice-") || !request.instruction || failure.code !== "business_error" || request.signal?.aborted) throw failure;
+        // Unprofiled callers may supply unsupported directions. Retry once with
+        // a safe complete instruction and report the one actually used.
+        ttsInstruction = boundedInstruction(scenePreset);
+        audio = await this.requestAudio(request.text.trim(), scenePreset, request.signal, ttsInstruction, model, voice, voiceParameters);
       }
       return {
         provider: PROVIDER_NAME,
@@ -174,7 +171,7 @@ export class QwenTtsProvider implements TtsProvider {
         voice,
         language: "Chinese",
         scenePreset,
-        instruction: ttsInstruction ?? instruction,
+        instruction: model.startsWith("cosyvoice-") ? "" : ttsInstruction,
         audio,
         buffer: audio,
         audioBuffer: audio,
@@ -237,7 +234,7 @@ export class QwenTtsProvider implements TtsProvider {
           text,
           voice,
           language_type: "Chinese",
-          instructions: `${RADIO_VOICE_INSTRUCTION}${deliveryInstruction || SCENE_INSTRUCTIONS[scenePreset]}`,
+          instructions: deliveryInstruction || RADIO_VOICE_INSTRUCTION,
           optimize_instructions: true,
         },
       }),
@@ -390,32 +387,7 @@ function sanitizeInstruction(value: string): string {
     .replace(/[“”„‟"'‘’]/g, "")
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 160);
-}
-
-function compactDeliveryInstruction(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const normalized = sanitizeInstruction(value.replace(/按自然语速播报，读完即止。/g, ""));
-  const patterns = [
-    /(?:声线|声调|声音)[^，。；]{0,12}/g,
-    /语速[^，。；]{0,12}/g,
-    /(?:情绪|语气)[^，。；]{0,12}/g,
-    /[^，。；]{0,8}深情[^，。；]{0,8}/g,
-    /(?:呼吸|笑意|咬字|节奏|力度)[^，。；]{0,12}/g,
-    /(?:句间|停顿|稍停)[^，。；]{0,12}/g,
-    /(?:重读|重音)[^，。；]{0,12}/g,
-    /(?:句尾|末句)[^，。；]{0,12}/g,
-  ];
-  const clauses: string[] = [];
-  for (const pattern of patterns) {
-    for (const match of (normalized.match(pattern) ?? []).slice(0, 1)) {
-      if (!clauses.includes(match)) clauses.push(match);
-      if (clauses.join("，").length >= 64) break;
-    }
-    if (clauses.join("，").length >= 64) break;
-  }
-  return (clauses.length > 0 ? clauses.join("，") : "自然口语").slice(0, 72) + "。";
+    .trim();
 }
 
 function isAllowedAudioHost(hostname: string): boolean {

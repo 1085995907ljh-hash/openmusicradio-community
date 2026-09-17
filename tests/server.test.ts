@@ -3502,8 +3502,9 @@ test("confirmation prepares every locked TTS asset and on-air preview never synt
   const confirmed = (await json(await post(`/programs/${created.id}/confirm`, { generation: created.generation, operationId: "preview-confirm" }))).program;
   const previewBody = { programId: created.id, generation: confirmed.generation, trackId: confirmed.currentTrack.id };
   assert.ok(confirmed.rundown.every((track: { hostMoment?: string; hostScript?: { audioReady?: boolean } }) => !track.hostMoment || track.hostScript?.audioReady === true));
-  assert.ok(ttsInstructions.every((instruction) => /龙鑫/.test(instruction) && /清爽阳光/.test(instruction)));
-  assert.ok(ttsInstructions.some((instruction) => /节目中段串联/.test(instruction)));
+  assert.ok(ttsInstructions.every((instruction) => /清爽阳光/.test(instruction) && /轻微笑意/.test(instruction) && /读完即止。$/.test(instruction)));
+  assert.equal(new Set(ttsInstructions).size, 1);
+  assert.ok(ttsInstructions.every((instruction) => !/节目中段串联|凑足|目标时长/.test(instruction)));
   const callsAfterConfirmation = ttsCalls;
   const firstPreview = await json(await post("/host/preview", previewBody));
   const secondPreview = await json(await post("/host/preview", previewBody));
