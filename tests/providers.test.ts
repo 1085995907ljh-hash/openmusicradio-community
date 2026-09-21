@@ -260,6 +260,42 @@ test("whole-show generation drafts and reviews each break sequentially without a
   assert.ok(bodies.every((body) => /ttsDirection/.test(JSON.stringify(body))));
 });
 
+test("whole-show review accepts a structured decision object from a compatible chat model", async () => {
+  const responses = [
+    { frequency: "low", placements: [{ id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 12, reason: "开场" }] },
+    { break: { id: "break-01", beforeTrackIndex: 1, type: "opening", targetSeconds: 12, text: "晚上好，先听音乐人一的《歌曲一》。", sourceIds: ["track:1:metadata"], deliveryInstruction: "自然。" } },
+  ];
+  let requestCount = 0;
+  const provider = new OpenAICompatibleHostProvider({
+    apiKey: "unit-test-key",
+    mode: "chat_completions",
+    fetchImpl: async (_input, init) => {
+      requestCount += 1;
+      const payload = requestCount === 3 ? { decision: "approved", issues: [] } : responses.shift();
+      return jsonResponse({ choices: [{ message: { content: payload } }] });
+    },
+  });
+
+  const result = await provider.generateShow({
+    scenePreset: "study",
+    frequency: "low",
+    tracks: [{
+      trackIndex: 1,
+      title: "歌曲一",
+      artist: "音乐人一",
+      exploration: false,
+      allowedFacts: [{ id: "track:1:metadata", value: "歌曲一由音乐人一演唱。", source: "user" as const }],
+    }],
+    skillInstruction: "整档撰稿契约",
+    reviewInstruction: "整档监制契约",
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.breaks.length, 1);
+  assert.equal(result.breaks[0]?.finalization, "draft_approved");
+  assert.equal(requestCount, 3);
+});
+
 test("whole-show copy accepts natural duration estimates and repairs unknown source ids", async () => {
   const bodies: Array<Record<string, unknown>> = [];
   const placements = {

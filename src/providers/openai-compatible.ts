@@ -909,18 +909,44 @@ function normalizeHostProfile(profileId: HostProfileId | undefined): HostProfile
 function parseHostShowReviewPayload(payload: unknown, breaks: HostShowBreak[]): { approved: boolean; issues: HostShowReviewIssue[] } {
   for (const candidate of collectResponseCandidates(payload)) {
     const object = extractJsonObject(candidate);
-    if (!object || typeof object.approved !== "boolean") continue;
+    if (!object) continue;
     const allowedIds = new Set(breaks.map((item) => item.id));
     const issues = Array.isArray(object.issues) ? object.issues.map((issue): HostShowReviewIssue | null => {
       if (!isPlainRecord(issue)) return null;
-      const breakId = typeof issue.breakId === "string" ? issue.breakId.trim() : "";
-      const problem = typeof issue.problem === "string" ? issue.problem.trim().slice(0, 300) : "";
-      const direction = typeof issue.direction === "string" ? issue.direction.trim().slice(0, 300) : "";
+      const breakId = typeof issue.breakId === "string" ? issue.breakId.trim() : breaks.length === 1 ? breaks[0]!.id : "";
+      const problem = typeof issue.problem === "string"
+        ? issue.problem.trim().slice(0, 300)
+        : typeof issue.issue === "string" ? issue.issue.trim().slice(0, 300) : "";
+      const direction = typeof issue.direction === "string"
+        ? issue.direction.trim().slice(0, 300)
+        : typeof issue.suggestion === "string" ? issue.suggestion.trim().slice(0, 300)
+          : typeof issue.fixDirection === "string" ? issue.fixDirection.trim().slice(0, 300)
+            : typeof issue.fix === "string" ? issue.fix.trim().slice(0, 300) : "";
       return allowedIds.has(breakId) && problem && direction ? { breakId, problem, direction } : null;
     }).filter((issue): issue is HostShowReviewIssue => issue !== null) : [];
-    if (object.approved && issues.length === 0) return { approved: true, issues: [] };
-    if (object.approved) throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "producer approval included rejected breaks", { retryable: false }));
-    if (issues.length === 0) throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "producer rejection did not include actionable issues", { retryable: false }));
+    // The current Skill contract uses { stage, approved, issues }, while older
+    // deployed prompts and some compatible models use { ok } or { decision }.
+    // Normalize those equivalent approval shapes so a valid review is not
+    // mistaken for a provider failure during a whole-show generation.
+    const approved = typeof object.approved === "boolean"
+      ? object.approved
+      : object.ok === true || object.pass === true || ["approve", "approved", "pass", "passed"].includes(typeof object.decision === "string" ? object.decision.trim().toLowerCase() : "");
+    const rejected = object.approved === false || object.pass === false || ["reject", "rejected", "fail", "failed"].includes(typeof object.decision === "string" ? object.decision.trim().toLowerCase() : "");
+    if (approved && issues.length === 0) return { approved: true, issues: [] };
+    if (approved) throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "producer approval included rejected breaks", { retryable: false }));
+    if (rejected && issues.length === 0 && (typeof object.problemBreakId === "string" || breaks.length === 1)) {
+      const breakId = typeof object.problemBreakId === "string" ? object.problemBreakId.trim() : breaks[0]!.id;
+      const problem = typeof object.reason === "string"
+        ? object.reason.trim().slice(0, 300)
+        : typeof object.issue === "string" ? object.issue.trim().slice(0, 300) : "";
+      const direction = typeof object.suggestion === "string"
+        ? object.suggestion.trim().slice(0, 300)
+        : typeof object.fixDirection === "string" ? object.fixDirection.trim().slice(0, 300)
+          : typeof object.fix === "string" ? object.fix.trim().slice(0, 300) : "";
+      if (allowedIds.has(breakId) && problem && direction) return { approved: false, issues: [{ breakId, problem, direction }] };
+    }
+    if (rejected && issues.length === 0) throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "producer rejection did not include actionable issues", { retryable: false }));
+    if (!approved && !rejected) continue;
     if (new Set(issues.map((issue) => issue.breakId)).size !== issues.length) {
       throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "producer returned duplicate issues for one break", { retryable: false }));
     }
@@ -1092,7 +1118,7 @@ export function extractJsonObject(value: unknown): Record<string, unknown> | und
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const record = value as Record<string, unknown>;
     const isContentPart = typeof record.type === "string" || typeof record.role === "string";
-    if (!isContentPart && (typeof record.text === "string" || typeof record.approved === "boolean" || isPlainRecord(record.break) || Array.isArray(record.candidates) || Array.isArray(record.breaks) || Array.isArray(record.placements) || Array.isArray(record.factIds) || Array.isArray(record.fact_ids) || Array.isArray(record.facts))) return record;
+    if (!isContentPart && (typeof record.text === "string" || isReviewPayloadRecord(record) || isPlainRecord(record.break) || Array.isArray(record.candidates) || Array.isArray(record.breaks) || Array.isArray(record.placements) || Array.isArray(record.factIds) || Array.isArray(record.fact_ids) || Array.isArray(record.facts))) return record;
   }
   if (typeof value !== "string") return undefined;
   const source = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
@@ -1322,13 +1348,22 @@ function collectResponseCandidates(payload: unknown): unknown[] {
     }
     if (typeof value !== "object") return;
     const record = value as Record<string, unknown>;
-    if (typeof record.text === "string" || typeof record.approved === "boolean" || isPlainRecord(record.break) || Array.isArray(record.placements) || Array.isArray(record.breaks) || Array.isArray(record.factIds) || Array.isArray(record.fact_ids) || Array.isArray(record.facts)) result.push(record);
+    if (typeof record.text === "string" || isReviewPayloadRecord(record) || isPlainRecord(record.break) || Array.isArray(record.placements) || Array.isArray(record.breaks) || Array.isArray(record.factIds) || Array.isArray(record.fact_ids) || Array.isArray(record.facts)) result.push(record);
     for (const [key, child] of Object.entries(record)) {
       if (["output", "output_text", "choices", "message", "content", "data", "result", "response", "text", "factIds", "fact_ids", "facts"].includes(key)) visit(child, depth + 1);
     }
   };
   visit(payload, 0);
   return result;
+}
+
+function isReviewPayloadRecord(record: Record<string, unknown>): boolean {
+  const decision = typeof record.decision === "string" ? record.decision.trim().toLowerCase() : "";
+  return typeof record.approved === "boolean"
+    || typeof record.ok === "boolean"
+    || typeof record.pass === "boolean"
+    || ["approve", "approved", "pass", "passed", "reject", "rejected", "fail", "failed"].includes(decision)
+    || Array.isArray(record.issues) && (typeof record.stage === "string" || typeof record.reason === "string" || typeof record.rationale === "string");
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
