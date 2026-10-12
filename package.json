@@ -21,16 +21,23 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "test:e2e:host-ducking": "node scripts/e2e-host-ducking.mjs",
     "test:e2e:host-recovery": "node scripts/e2e-host-recovery.mjs",
-    "check": "npm run test && npm run build && npm run build:desktop-pet"
+    "check": "npm run test && npm run build && npm run build:desktop-pet",
+    "test:e2e": "node scripts/e2e.mjs",
+    "test:e2e:qq-qr": "node scripts/e2e-qq-qr.mjs",
+    "test:e2e:auth-state": "node scripts/e2e-auth-state.mjs",
+    "test:e2e:confirm-recovery": "node scripts/e2e-confirm-recovery.mjs",
+    "test:visual:onair": "node scripts/visual-onair-check.mjs && node scripts/visual-preparing-check.mjs"
   },
   "dependencies": {
     "@neteasecloudmusicapienhanced/api": "4.39.0",
+    "@react-three/fiber": "^9.7.0",
     "@vitejs/plugin-react": "latest",
     "linkedom": "0.18.13",
     "lucide-react": "latest",
     "meyda": "^5.6.3",
     "react": "latest",
     "react-dom": "latest",
+    "three": "^0.180.0",
     "vite": "latest",
     "ws": "^8.21.2"
   },
@@ -38,6 +45,7 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@types/three": "^0.186.0",
     "@types/ws": "^8.18.1",
     "playwright": "^1.62.1",
     "pngjs": "^5.0.0",

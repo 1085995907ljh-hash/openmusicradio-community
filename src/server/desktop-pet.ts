@@ -58,7 +58,7 @@ export function desktopPetStateForProgram(state: ProgramState, mood?: DesktopPet
     version: 1,
     programId: state.id,
     generation: state.generation,
-    profileId: state.spec.hostProfile ?? "anxuan",
+    profileId: state.spec.desktopPetProfile ?? state.spec.hostProfile ?? "anxuan",
     mood: resolvedMood,
     message: currentMessage.slice(0, 600),
     ...(resolvedMood === "speaking" && typeof speechDurationSeconds === "number" && Number.isFinite(speechDurationSeconds) && speechDurationSeconds > 0 ? { speechDurationSeconds } : {}),

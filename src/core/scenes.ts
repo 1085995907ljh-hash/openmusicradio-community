@@ -48,7 +48,7 @@ export const SCENE_CONFIGS: Record<ScenePreset, SceneConfig> = {
     preset: "late_night",
     label: "放松",
     goal: "Let the music settle gently without losing its shape.",
-    sceneDescription: "A relaxed set with soft transitions, restrained peaks, and generous breathing room.",
+    sceneDescription: "A relaxed set of songs with soft transitions, restrained peaks, and generous breathing room. Exclude religious music, sleep/hypnosis audio, and functional stress-relief music.",
     hostDensity: "low",
     hostCadence: "Every 2-4 tracks, with a 10-22 second line.",
     sentenceSeconds: { min: 10, max: 22 },
@@ -63,7 +63,7 @@ export const SCENE_CONFIGS: Record<ScenePreset, SceneConfig> = {
       cooldown: { min: 0.2, max: 0.4 },
       closing: { min: 0.15, max: 0.3 },
     },
-    avoid: ["abrupt jumps", "shouted delivery", "busy transitions"],
+    avoid: ["abrupt jumps", "shouted delivery", "busy transitions", "religious music", "sleep/hypnosis audio", "functional stress-relief music"],
   },
   study: {
     preset: "study",
@@ -183,6 +183,7 @@ export interface ProgramSpecInput {
   hostProfile?: HostProfileId;
   musicGenres?: MusicGenreId[];
   desktopPetEnabled?: boolean;
+  desktopPetProfile?: HostProfileId;
 }
 
 export function buildProgramSpec(input: ProgramSpecInput): ProgramSpec {
@@ -205,6 +206,7 @@ export function buildProgramSpec(input: ProgramSpecInput): ProgramSpec {
     hostProfile: input.hostProfile ?? DEFAULT_HOST_PROFILE,
     musicGenres: recommendationMode === "genre" ? [...(input.musicGenres ?? [])] : [],
     desktopPetEnabled: input.desktopPetEnabled ?? false,
+    desktopPetProfile: input.desktopPetProfile ?? input.hostProfile ?? DEFAULT_HOST_PROFILE,
   };
 }
 

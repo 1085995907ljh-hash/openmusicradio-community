@@ -82,6 +82,37 @@ function groundedHostProvider() {
 
 const readyTtsProvider = { configured: true, state: "ready", synthesize() { return { success: true, status: "ready", audio: Buffer.from("RIFF0000WAVE") }; } };
 
+test("playlist recommendation falls back without research and remains ready after full regeneration", async (context) => {
+  const songs = Array.from({ length: 30 }, (_, index) => ({ id: `recommendation-${index}`, title: `歌曲${index}`, album: { name: "测试专辑" }, artists: [{ id: `artist-${index}`, name: `艺人${index}` }], durationMs: 180_000, styleTags: ["pop"] }));
+  const token = "recommendation-fallback-test";
+  const service = await createService({ port: 0, localControlToken: token, neteaseProvider: planningProvider(songs, []), hostProvider: groundedHostProvider(), ttsProvider: readyTtsProvider });
+  await service.start();
+  context.after(() => service.stop());
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const headers = { "content-type": "application/json", "x-one-radio-control-token": token };
+  const created = await fetch(`${base}/programs`, { method: "POST", headers, body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "commute", sceneDescription: "", hostDensity: "low", energyCurve: "steady", avoid: [], familiarityRatio: 0 } }) });
+  const payload = await json(created);
+  assert.equal(created.status, 201, JSON.stringify(payload));
+  const waitForCopy = async () => {
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const state = (await json(await fetch(`${base}/programs/${payload.program.id}`, { headers }))).program;
+      if (state.playlistRecommendation?.status === "ready") {
+        assert.ok(state.playlistRecommendation.text.trim());
+        assert.ok(Array.from(state.playlistRecommendation.text).length <= 100);
+        assert.deepEqual(state.playlistRecommendation.sources, []);
+        return state;
+      }
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.fail("recommendation did not finish");
+  };
+  const first = await waitForCopy();
+  const regenerated = await fetch(`${base}/programs/${first.id}/regenerate`, { method: "POST", headers, body: JSON.stringify({ generation: first.generation, planRevision: first.planRevision, operationId: "fallback-regenerate" }) });
+  assert.equal(regenerated.status, 200, JSON.stringify(await json(regenerated)));
+  const second = await waitForCopy();
+  assert.notDeepEqual(second.rundown.map((track: { id: string }) => track.id), first.rundown.map((track: { id: string }) => track.id));
+});
+
 test("research gaps allow writing while genuine model failure preserves the playlist for retry", async (context) => {
   const songs = Array.from({ length: 20 }, (_, index) => ({ id: String(97000 + index), title: `调研曲目${index}`, artists: [{ id: String(index), name: `调研艺人${index}` }], durationMs: 180_000 }));
   let hostCalls = 0;
@@ -1731,6 +1762,84 @@ test("NetEase planning excludes played exploration tracks but still permits like
   assert.ok(program.rundown.every((track: { id: string }) => !previousIds.has(track.id) || track.id === previousSongs[0]!.id));
 });
 
+test("account rundown distributes familiar and discovery songs after final ordering", async (context) => {
+  const songs = Array.from({ length: 24 }, (_, index) => ({
+    id: String(94_000 + index), title: `穿插歌曲 ${index}`,
+    artists: [{ id: String(95_000 + index), name: `穿插艺人 ${index}` }],
+    durationMs: 180_000,
+  }));
+  const token = "distributed-rundown-token";
+  const service = await createLocalService({
+    port: 0, localControlToken: token,
+    neteaseProvider: planningProvider(songs, songs.slice(0, 12).map((song) => song.id)),
+    hostProvider: groundedHostProvider(), ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+  const response = await fetch(`http://127.0.0.1:${service.port}/api/programs`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-one-radio-control-token": token },
+    body: JSON.stringify({ spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "late_night", sceneDescription: "", hostDensity: "low", energyCurve: "low", avoid: [], familiarityRatio: 40 } }),
+  });
+  assert.equal(response.status, 201);
+  const { rundown } = (await json(response)).program as { rundown: Array<{ liked: boolean }> };
+  const familiarTotal = rundown.filter((item) => item.liked).length;
+  assert.ok(familiarTotal > 0 && familiarTotal < rundown.length);
+  let familiarCount = 0;
+  rundown.forEach((item, index) => {
+    familiarCount += Number(item.liked);
+    assert.ok(Math.abs(familiarCount - (index + 1) * familiarTotal / rundown.length) < 1);
+  });
+});
+
+test("relaxation filters functional audio from initial recommendations, replacement and regeneration", async (context) => {
+  const badSongs = [
+    { title: "大自然的声音", artist: "催眠曲", album: "自然声音" },
+    { title: "道家·清心咒·降火护肝", artist: "无为先生", album: "道家音乐" },
+    { title: "好长的忧伤", artist: "时光留声机", album: "减压纯音乐" },
+  ].map((song, index) => ({ id: `relax-bad-${index}`, title: song.title, artists: [{ id: `bad-artist-${index}`, name: song.artist }], album: { name: song.album }, durationMs: 180_000 }));
+  const goodSongs = Array.from({ length: 60 }, (_, index) => ({ id: `relax-good-${index}`, title: `轻柔歌曲 ${index}`, artists: [{ id: `relax-artist-${index}`, name: `歌手 ${index}` }], durationMs: 180_000 }));
+  const queries: string[] = [];
+  const inspectedPlaylists: string[] = [];
+  const token = "relaxation-filter-token";
+  const service = await createLocalService({
+    port: 0, localControlToken: token,
+    neteaseProvider: {
+      ...planningProvider([...badSongs, ...goodSongs], badSongs.map((song) => song.id)),
+      searchPlaylists(query: string) {
+        queries.push(query);
+        return { playlists: [{ id: "sleep-list", name: "深度睡眠助眠音乐" }, { id: "good-list", name: "轻柔流行歌曲" }] };
+      },
+      playlistDetail(id: string) {
+        inspectedPlaylists.push(id);
+        return { id, name: "轻柔流行歌曲", tracks: [...badSongs, ...goodSongs] };
+      },
+    },
+    hostProvider: groundedHostProvider(), ttsProvider: readyTtsProvider,
+  });
+  await service.start();
+  context.after(() => service.stop());
+  const post = (path: string, body: unknown) => fetch(`http://127.0.0.1:${service.port}/api${path}`, { method: "POST", headers: { "content-type": "application/json", "x-one-radio-control-token": token }, body: JSON.stringify(body) });
+  const createdResponse = await post("/programs", { spec: { sourceId: "netease_music", durationMinutes: 30, scenePreset: "late_night", recommendationMode: "atmosphere", sceneDescription: "", hostDensity: "low", energyCurve: "low", avoid: [], familiarityRatio: 0 } });
+  assert.equal(createdResponse.status, 201);
+  let program = (await json(createdResponse)).program;
+  const assertClean = () => {
+    assert.ok(program.rundown.length > 0);
+    assert.ok(program.rundown.every((song: { id: string }) => song.id.startsWith("relax-good-")));
+  };
+  assertClean();
+  for (const action of ["replace", "regenerate"]) {
+    const response = await post(`/programs/${program.id}/${action}`, { generation: program.generation, planRevision: program.planRevision, operationId: `relax-${action}`, ...(action === "replace" ? { trackId: program.rundown[0].id } : {}) });
+    const payload = await json(response);
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    program = payload.program;
+    assertClean();
+  }
+  assert.ok(queries.length > 0);
+  assert.ok(queries.every((query) => !/冥想|睡前|New Age/i.test(query)));
+  assert.ok(!inspectedPlaylists.includes("sleep-list"));
+});
+
 test("music atmosphere changes the account rundown arc without changing the candidate pool", async (context) => {
   const songs = Array.from({ length: 16 }, (_, index) => ({
     id: String(4_150 + index),
@@ -1771,7 +1880,9 @@ test("music atmosphere changes the account rundown arc without changing the cand
   await stop(relaxed, "atmosphere-relaxed-stop");
   resetServerTestProfileDir();
   const party = await create("party", "atmosphere-party");
-  assert.notDeepEqual(relaxed.rundown.map((track: { id: string }) => track.id), party.rundown.map((track: { id: string }) => track.id));
+  // Without musical metadata the scene must not turn recommendation rank into
+  // fictional song energy. Only the program's intended arc changes.
+  assert.deepEqual(relaxed.rundown.map((track: { id: string }) => track.id), party.rundown.map((track: { id: string }) => track.id));
   assert.ok(relaxed.rundown[0].arrangementTargetEnergy < party.rundown[0].arrangementTargetEnergy);
   assert.ok(relaxed.rundown.every((track: { energy: number; energyMeasured?: boolean }) => track.energy === 0.5 && track.energyMeasured === false));
   assert.ok(party.rundown.every((track: { energy: number; energyMeasured?: boolean }) => track.energy === 0.5 && track.energyMeasured === false));
@@ -2868,6 +2979,50 @@ test("program creation reports real completed stages before returning the previe
   assert.equal(hostCalls, 0);
 });
 
+test("generation cancellation aborts creation and preserves the draft when cancelling confirmation", async (context) => {
+  const songs = Array.from({ length: 8 }, (_, index) => ({ id: String(7000 + index), title: `取消测试 ${index}`, artists: [{ id: "7", name: "测试歌手" }], durationMs: 240000 }));
+  const provider = planningProvider(songs, []);
+  let block = true;
+  let entered!: () => void;
+  let started = new Promise<void>((resolve) => { entered = resolve; });
+  const token = "cancel-generation-test";
+  const service = await createLocalService({ port: 0, localControlToken: token,
+    neteaseProvider: { ...provider, async account(signal?: AbortSignal) {
+      if (block) { entered(); await new Promise<void>((_resolve, reject) => {
+        if (signal?.aborted) reject(new Error("aborted"));
+        else signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }); }
+      return { uid: "7" };
+    } }, hostProvider: groundedHostProvider(), ttsProvider: readyTtsProvider });
+  await service.start();
+  context.after(() => service.stop());
+  const base = `http://127.0.0.1:${service.port}/api`;
+  const post = (path: string, body: unknown) => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json", "x-one-radio-control-token": token }, body: JSON.stringify(body) });
+  const spec = { sourceId: "netease_music", durationMinutes: 30, scenePreset: "study", sceneDescription: "", hostDensity: "high", energyCurve: "steady", avoid: [], familiarityRatio: 0 };
+  const creation = post("/programs", { spec, operationId: "cancel-create" });
+  await started;
+  assert.equal((await post("/programs/cancel-generation", { operationId: "cancel-create", mode: "generating" })).status, 200);
+  assert.equal((await creation).ok, false);
+  block = false;
+  const draft = (await json(await post("/programs", { spec, operationId: "create-after-cancel" }))).program;
+  assert.equal(draft.status, "awaiting_confirmation");
+  block = true;
+  started = new Promise<void>((resolve) => { entered = resolve; });
+  const confirming = post(`/programs/${draft.id}/confirm`, { operationId: "cancel-confirm", generation: draft.generation, planRevision: draft.planRevision ?? 0 });
+  await started;
+  const cancelled = await json(await post("/programs/cancel-generation", { operationId: "cancel-confirm", mode: "preparing", programId: draft.id }));
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(cancelled.program.status, "awaiting_confirmation");
+  assert.deepEqual(cancelled.program.rundown.map((item: { id: string }) => item.id), draft.rundown.map((item: { id: string }) => item.id));
+  assert.equal((await confirming).ok, false);
+  block = false;
+  assert.equal((await post("/programs/cancel-generation", { operationId: "cancel-before-create", mode: "generating" })).status, 200);
+  assert.equal((await post("/programs", { spec, operationId: "cancel-before-create" })).ok, false, "a late create request must not restart cancelled work");
+  const current = (await json(await fetch(`${base}/program`, { headers: { "x-one-radio-control-token": token } }))).program;
+  assert.equal(current.id, draft.id);
+  assert.equal(current.status, "awaiting_confirmation");
+});
+
 test("producer rate limit after confirmation preserves the plan and exposes the real failure class", async (context) => {
   const songs = Array.from({ length: 8 }, (_, index) => ({
     id: String(9_900 + index),
@@ -3098,6 +3253,7 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   let hostCalls = 0;
   let ttsCalls = 0;
   let playlistNamingCalls = 0;
+  let recommendationResearchCalls = 0;
   let blockAccountRead = false;
   let accountReadStarted: (() => void) | null = null;
   const songs = Array.from({ length: 16 }, (_, index) => ({
@@ -3181,6 +3337,11 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
     },
     async adjustRundown({ tracks }: { tracks: Array<{ id: string }> }) { return tracks.map((track) => track.id).reverse(); },
     generatePlaylistNames() { playlistNamingCalls += 1; throw new Error("private tracks must stay local"); },
+    researchPlaylist(request: { tracks: MusicResearchTrack[] }) { recommendationResearchCalls += 1; return { tracks: request.tracks.map(track => ({ trackKey: musicResearchTrackKey(track), status: "researched", completedAt: new Date().toISOString(), attempts: [{ query: track.title, status: "completed", sourceUrls: ["https://example.com/music"] }], facts: [{ id: "web:playlist-fact", value: "艺人介绍了作品的创作背景。", sourceUrl: "https://example.com/music" }] })) }; },
+    async writePlaylistRecommendation() {
+      if (recommendationResearchCalls === 2) throw new ProviderError({ code: "timeout", provider: "test", message: "timeout", retryable: true });
+      return JSON.stringify({ text: "这份歌单邀请你把注意力放回音乐，认识歌曲背后的艺人，也感受不同作品之间的联系。".repeat(6), factIds: ["web:playlist-fact"] });
+    },
   };
   let ttsGate: Promise<void> | null = null;
   let releaseTtsGate!: () => void;
@@ -3212,6 +3373,7 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
     createProgram("netease-create-1"),
   ]);
   assert.equal(concurrentReplay.id, first.id);
+  assert.equal(recommendationResearchCalls, 1, "initial playlist and idempotent replay research only once");
   assert.equal((await fetch(`${base}/programs/progress?operationId=netease-create-1`)).status, 401);
   const completedProgress = await json(await fetch(`${base}/programs/progress?operationId=netease-create-1`, { headers: { "x-one-radio-control-token": "netease-program-token" } }));
   assert.deepEqual(completedProgress.progress, {
@@ -3260,6 +3422,7 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   assert.deepEqual(replaced.rundown.filter((_: unknown, index: number) => index !== replacedIndex).map((track: { id: string }) => track.id), adjustmentReplay.rundown.filter((_: unknown, index: number) => index !== replacedIndex).map((track: { id: string }) => track.id));
   assert.ok(replaced.rundown.every((track: { hostScript?: unknown }) => !track.hostScript));
   assert.equal(replaced.canUndoPlan, true);
+  assert.equal(recommendationResearchCalls, 1, "reorder and single replacement preserve recommendation");
   assert.equal(replaced.canRedoPlan, false);
   const undone = (await json(await post(`/programs/${first.id}/undo`, { generation: first.generation, planRevision: 3, operationId: "plan-undo" }))).program;
   assert.deepEqual(undone.rundown.map((track: { id: string }) => track.id), adjustmentReplay.rundown.map((track: { id: string }) => track.id));
@@ -3273,6 +3436,15 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   const fullRecommendationPayload = await json(fullRecommendationResponse);
   assert.equal(fullRecommendationResponse.status, 200, JSON.stringify(fullRecommendationPayload));
   const fullyRecommended = fullRecommendationPayload.program;
+  assert.equal(recommendationResearchCalls, 2, "full regeneration refreshes recommendation");
+  const recommendationDeadline = Date.now() + 2000;
+  let recommendation = fullyRecommended.playlistRecommendation;
+  while (recommendation.status !== "ready" && Date.now() < recommendationDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    recommendation = (await json(await fetch(`${base}/programs/${first.id}`, { headers: { "x-one-radio-control-token": "netease-program-token" } }))).program.playlistRecommendation;
+  }
+  assert.equal(recommendation.status, "ready", "writer timeout must not roll back the new playlist");
+  assert.ok(Array.from(recommendation.text).length <= 100);
   assert.equal(fullyRecommended.rundown.length, redone.rundown.length);
   assert.ok(fullyRecommended.rundown.every((track: { id: string }) => !beforeFullRecommendationIds.has(track.id)), "full recommendation must replace every current song");
   const restoredBeforeBatch = (await json(await post(`/programs/${first.id}/undo`, { generation: first.generation, planRevision: 6, operationId: "plan-undo-full-recommendation" }))).program;
@@ -3280,6 +3452,7 @@ test("NetEase programs create a temporary playlist per run, unless the listener 
   const selectedTrackIds = [restoredBeforeBatch.rundown[0].id, restoredBeforeBatch.rundown[2].id];
   const regenerated = (await json(await post(`/programs/${first.id}/regenerate`, { generation: first.generation, planRevision: 7, operationId: "plan-regenerate", replaceTrackIds: selectedTrackIds }))).program;
   assert.equal(regenerated.rundown.length, replaced.rundown.length);
+  assert.equal(recommendationResearchCalls, 2, "batch replacement does not refresh recommendation");
   assert.ok(selectedTrackIds.every((id) => regenerated.rundown.every((track: { id: string }) => track.id !== id)), "batch replacement must remove every selected song");
   assert.deepEqual(regenerated.rundown.filter((_: unknown, index: number) => ![0, 2].includes(index)).map((track: { id: string }) => track.id), restoredBeforeBatch.rundown.filter((_: unknown, index: number) => ![0, 2].includes(index)).map((track: { id: string }) => track.id), "batch replacement must preserve unselected songs in place");
   assert.ok(regenerated.rundown.every((track: { id: string }) => track.id !== replacedId), "recommendation refresh must not restore a track the listener deleted");

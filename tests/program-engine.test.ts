@@ -11,6 +11,7 @@ import {
 
 const BASE_TIME = Date.parse("2026-01-02T03:04:05.000Z");
 
+
 function spec(overrides: Record<string, unknown> = {}) {
   return {
     sourceId: "fixture" as const,

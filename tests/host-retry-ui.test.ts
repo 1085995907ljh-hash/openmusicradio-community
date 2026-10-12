@@ -32,7 +32,7 @@ test("confirmation keeps host generation private and exposes explicit playlist e
   assert.doesNotMatch(source, />英文歌曲</);
   assert.doesNotMatch(source, />指定风格</);
   assert.doesNotMatch(source, />指定歌手</);
-  assert.match(source, /完成选歌并生成口播/);
+  assert.match(source, /确认并生成/);
   assert.match(source, /onUndo/);
   assert.doesNotMatch(source, /onRedo/);
   assert.doesNotMatch(source, />重做</);

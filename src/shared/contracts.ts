@@ -47,6 +47,8 @@ export interface ProgramSpec {
   musicGenres?: MusicGenreId[];
   /** Launch the native desktop companion after this program is confirmed. */
   desktopPetEnabled?: boolean;
+  /** Desktop appearance, independent of the program's host voice. */
+  desktopPetProfile?: HostProfileId;
 }
 
 export interface Track {
@@ -206,6 +208,12 @@ export interface ProgramState {
   canRedoPlan?: boolean;
   /** The unique account playlist name reserved for this draft before remote creation. */
   plannedPlaylistName?: string;
+  playlistRecommendation?: {
+    status: "researching" | "writing" | "ready" | "failed";
+    text?: string;
+    sources?: Array<{ title: string; url: string }>;
+    generatedAt?: string;
+  };
   playlist?: ProgramPlaylistReceipt;
   planSummary?: ProgramPlanSummary;
   listenerProfile?: ProgramListenerProfile;

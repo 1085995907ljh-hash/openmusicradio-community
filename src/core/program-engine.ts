@@ -227,6 +227,7 @@ export class ProgramEngine {
     return this.state ? cloneProgramState(this.state) : null;
   }
 
+
   reset(): void {
     this.state = null;
     this.currentTrackEndsAtMs = null;
@@ -660,6 +661,7 @@ function normalizeAndValidateSpec(input: ProgramSpec | ProgramSpecInput): Progra
     hostProfile: raw.hostProfile,
     musicGenres: raw.musicGenres,
     desktopPetEnabled: raw.desktopPetEnabled,
+    desktopPetProfile: raw.desktopPetProfile,
   });
   return {
     ...spec,

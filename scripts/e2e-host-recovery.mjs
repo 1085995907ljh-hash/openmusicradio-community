@@ -45,7 +45,7 @@ try {
       return json({ ok: true });
     });
     await page.goto("http://127.0.0.1:5188/?skipIntro=1", { waitUntil: "domcontentloaded" });
-    const initialButton = page.getByRole("button", { name: "完成选歌并生成口播", exact: true });
+    const initialButton = page.getByRole("button", { name: "确认并生成", exact: true });
     await initialButton.click();
     await page.getByRole("button", { name: "不保存，播完删除", exact: true }).click();
     const retry = page.getByRole("button", { name: "重新生成口播", exact: true });

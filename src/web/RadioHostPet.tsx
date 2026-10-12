@@ -10,12 +10,12 @@ const HOST_PET_ASSETS: Readonly<Record<HostProfileId, string>> = Object.freeze({
 });
 
 const HOST_PORTRAIT_ASSETS: Readonly<Record<HostProfileId, string>> = Object.freeze({
-  anxuan: "/hosts/portraits/long-anxuan-v5.png",
-  anran: "/hosts/portraits/long-anran-v5.png",
-  anya: "/hosts/portraits/long-anya-v5.png",
-  longxin: "/hosts/portraits/long-xin-v5.png",
-  xiaocheng: "/hosts/portraits/long-xiaocheng-v5.png",
-  longhao: "/hosts/portraits/long-hao-v5.png",
+  anxuan: "/hosts/portraits/anxuan-illustration-v1.png",
+  anran: "/hosts/portraits/anran-illustration-v1.png",
+  anya: "/hosts/portraits/anya-illustration-v1.png",
+  longxin: "/hosts/portraits/longxin-illustration-v1.png",
+  xiaocheng: "/hosts/portraits/xiaocheng-illustration-v1.png",
+  longhao: "/hosts/portraits/longhao-illustration-v1.png",
 });
 
 export function RadioHostAvatar({ profileId, portrait = false }: { profileId: HostProfileId; portrait?: boolean }) {

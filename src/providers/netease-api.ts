@@ -390,7 +390,16 @@ export class NeteaseApiProvider {
     const songId = requireInputId(id, "song id");
     const level = options.level?.trim() || "standard";
     if (!/^[a-zA-Z0-9_]+$/.test(level)) throw invalidInput("song quality level is invalid");
-    const root = asRecord(await this.request("/song/url/v1", { id: songId, level }, options.signal), "song URL response");
+    let payload: unknown;
+    try {
+      payload = await this.request("/song/url/v1", { id: songId, level }, options.signal);
+    } catch (error) {
+      // Some connector builds omit v1. Use the official legacy endpoint only
+      // for that compatibility case, never to bypass account or trial limits.
+      if (!(error instanceof ProviderError) || error.code !== "unsupported" || level !== "standard") throw error;
+      payload = await this.request("/song/url", { id: songId, br: "128000" }, options.signal);
+    }
+    const root = asRecord(payload, "song URL response");
     const entries = asArray(root.data, "song URL data");
     if (entries.length !== 1) throw invalidResponse("song URL data must contain exactly one item");
     const entry = asRecord(entries[0], "song URL item");

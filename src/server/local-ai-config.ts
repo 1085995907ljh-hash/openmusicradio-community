@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { REASONING_EFFORTS, type ReasoningEffort } from "../providers/types.js";
 
-export const LLM_PROVIDER_IDS = ["openai", "deepseek", "qwen", "anthropic", "gemini", "custom"] as const;
+export const LLM_PROVIDER_IDS = ["openai", "deepseek", "anthropic", "gemini", "custom"] as const;
 export type LlmProviderId = (typeof LLM_PROVIDER_IDS)[number];
 export const TTS_PROVIDER_IDS = ["qwen", "openai", "azure"] as const;
 export type TtsProviderId = (typeof TTS_PROVIDER_IDS)[number];
@@ -34,11 +34,9 @@ const environmentCustomBaseUrl = (() => {
 })();
 const environmentLlmProvider: LlmProviderId = environmentLlmBaseUrl?.includes("deepseek")
   ? "deepseek"
-  : environmentLlmBaseUrl?.includes("dashscope")
-    ? "qwen"
-    : environmentCustomBaseUrl && !/^https:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(environmentCustomBaseUrl)
-      ? "custom"
-      : "openai";
+  : environmentCustomBaseUrl && !/^https:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(environmentCustomBaseUrl)
+    ? "custom"
+    : "openai";
 
 const DEFAULTS: LocalAiSettings = {
   llm: {
@@ -167,7 +165,6 @@ export function environmentSecret(account: string): string | undefined {
   const values: Record<string, string | undefined> = {
     "llm:openai": process.env.OPENAI_API_KEY,
     "llm:deepseek": process.env.DEEPSEEK_API_KEY,
-    "llm:qwen": process.env.DASHSCOPE_API_KEY,
     "llm:anthropic": process.env.ANTHROPIC_API_KEY,
     "llm:gemini": process.env.GEMINI_API_KEY,
     "llm:custom": process.env.OPENAI_API_KEY,

@@ -418,6 +418,17 @@ export class OpenAICompatibleHostProvider implements HostProvider {
       .map((fact, index) => ({ ...fact, id: `web:${index + 1}` }));
   }
 
+  /** Write from previously verified research using the configured model API. */
+  async writePlaylistRecommendation(system: string, user: string, signal: AbortSignal): Promise<string> {
+    const mode = this.mode === "auto" ? "responses" : this.mode;
+    const payload = await this.request(mode, { system, user }, signal, false, 2_400);
+    for (const candidate of collectResponseCandidates(payload)) {
+      const object = extractJsonObject(candidate);
+      if (object && typeof object.text === "string" && Array.isArray(object.factIds)) return JSON.stringify(object);
+    }
+    throw new ProviderError(providerErrorInfo(PROVIDER_NAME, "invalid_response", "recommendation model returned no copy", { retryable: true }));
+  }
+
   /** The application executes these actions; no model-native web tool is needed. */
   async researchAction(system: string, user: string, options: HostGenerationOptions = {}): Promise<string> {
     const mode = this.mode === "auto" ? "responses" : this.mode;

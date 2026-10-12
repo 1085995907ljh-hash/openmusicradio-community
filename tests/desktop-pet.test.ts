@@ -61,6 +61,15 @@ test("desktop pet derives bounded user-visible state from the program", () => {
   assert.equal(failed.mood, "error");
 });
 
+test("desktop appearance is independent of the host voice, with legacy fallback", () => {
+  const state = program("independent-appearance");
+  state.spec.desktopPetProfile = "longxin";
+  assert.equal(desktopPetStateForProgram(state).profileId, "longxin");
+  assert.equal(state.spec.hostProfile, "anya");
+  delete state.spec.desktopPetProfile;
+  assert.equal(desktopPetStateForProgram(state).profileId, "anya");
+});
+
 test("desktop pet launches once, respects manual exit for the same program, and returns for a new program", () => {
   const directory = mkdtempSync(join(tmpdir(), "one-radio-pet-"));
   const statePath = join(directory, "state.json");

@@ -1,3 +1,7 @@
+import type { ProgramSpec } from "../shared/contracts.js";
+
+type RecommendationContext = Pick<ProgramSpec, "scenePreset"> & Partial<Pick<ProgramSpec, "recommendationMode" | "musicGenres">>;
+
 interface RecommendationTextCandidate {
   title?: unknown;
   name?: unknown;
@@ -18,18 +22,48 @@ const CHINESE_REMIX_RE = /(?:remix|re-?mix|bootleg|mashup|mix版|混音版|加�
 const DJ_OR_CAR_AUDIO_RE = /车\s*载|(?:^|[^a-z0-9])d\.?\s*j\.?(?=$|[^a-z0-9])/i;
 const EXPLORATION_VERSION_RE = /(?:remix|re-?mix|bootleg|mashup|mix版|混音版|加速版|加快版|降调版|升调版|slowed|sped\s*up|speed\s*up|\blive\b|\bconcert\b|演唱会|现场(?:版|录音)?|\bversion\b|\bver\.?(?=$|[\s)\]）】》>])|\bremaster(?:ed)?\b|\bradio\s+edit\b|\bextended\s+(?:mix|edit)\b|\bacoustic\b|(?:不插电|重制|重新录制|加长|剪辑|伴奏|纯音乐|翻唱|男声|女声|合唱|独唱|录音室|原声)\s*版)/i;
 
-export function disallowedRecommendationReason(value: unknown): string | null {
+// Match functional/religious metadata, not generic words such as calm, piano,
+// instrumental, dream, prayer or sleep that also occur in ordinary song titles.
+const RELIGIOUS_MUSIC_RE = /宗教|佛教|佛乐|佛曲|佛音|梵音|念佛|诵经|颂经|经文|道教|道家|道乐|清心咒|大悲咒|金刚经|心经|神咒|赞美诗|圣歌|圣咏|\b(?:religious|worship|devotional|gospel|hymns?|christian music|gregorian chant|buddhist|taoist|mantra)\b/i;
+const FUNCTIONAL_RELAXATION_RE = /催眠曲|催眠音乐|催眠音樂|助眠|安眠曲|睡眠音乐|睡眠音樂|深度睡眠|快速入睡|睡眠.{0,8}入睡|\d+分钟入睡|白噪音|白噪声|冥想|脑波|腦波|(?:减压|減壓|解压|解壓|疗愈|療癒|療愈|治愈|治癒).{0,12}(?:纯音乐|純音樂|器乐|器樂|音乐|音樂|音频|音頻)|(?:纯音乐|純音樂|器乐|器樂).{0,12}(?:减压|減壓|解压|解壓|疗愈|療癒|療愈)|\b(?:sleep(?:ing)? music|deep sleep|sleep aid|hypnosis|hypnotic music|meditation|binaural beats|white noise|stress relief|healing music)\b/i;
+
+const MC_ARTIST_RE = /(?:^|[\s/&,、，])m\.?\s*c\.?(?=$|[^a-z0-9])/i;
+const UNKNOWN_ALBUM_RE = /^(?:未知(?:专辑|專輯)?|不详|不詳|暂无(?:专辑|專輯)?|无专辑|無專輯|unknown(?:\s+album)?|untitled(?:\s+album)?|n\/?a|null|undefined|[-—]+)$/i;
+const NON_SONG_AUDIO_RE = /(?:宝宝|寶寶|婴儿|嬰兒|婴幼儿|嬰幼兒).{0,4}(?:笑声|笑聲|哭声|哭聲)|\bbaby\s+(?:laugh(?:ter|ing)?|cry(?:ing)?)\b|(?:搞笑|魔性|整蛊|整蠱|提示|通知|来电|來電|手机|手機)(?:音效|铃声|鈴聲)|(?:社会|社會|精神小伙|情感|伤感|傷感)(?:语录|語錄)|喊麦|喊麥/i;
+
+export function hasKnownRecommendationAlbum(value: unknown): boolean {
+  const record = unwrapRecord(value);
+  const album = isRecord(record?.album) ? record.album.name : record?.album;
+  return typeof album === "string" && album.trim().length > 0
+    && !UNKNOWN_ALBUM_RE.test(album.normalize("NFKC").trim());
+}
+
+export function disallowedRecommendationReason(value: unknown, context?: RecommendationContext): string | null {
   const text = recommendationText(value);
   if (!text) return null;
+  const record = unwrapRecord(value);
+  const artists: string[] = [];
+  addString(artists, record?.artist);
+  if (Array.isArray(record?.artists)) {
+    for (const artist of record.artists) addString(artists, isRecord(artist) ? artist.name : artist);
+  }
+  if (artists.some((artist) => MC_ARTIST_RE.test(artist.normalize("NFKC")))) return "MC artist";
+  if (record && "album" in record && !hasKnownRecommendationAlbum(record)) return "unknown album";
+  if (NON_SONG_AUDIO_RE.test(text)) return "non-song audio or spoken internet content";
   if (DJ_OR_CAR_AUDIO_RE.test(recommendationContentText(value))) return "DJ or car audio signal";
   if (LOW_QUALITY_CHINESE_DANCE_RE.test(text)) return "low quality Chinese dance/remix signal";
   if (DJ_VERSION_RE.test(text)) return "DJ version/remix signal";
   if (CHINESE_REMIX_RE.test(text) && /[\p{Script=Han}]/u.test(text)) return "Chinese remix signal";
+  const isRelaxationAtmosphere = context?.scenePreset === "late_night"
+    && context.recommendationMode !== "genre"
+    && (context.recommendationMode === "atmosphere" || !context.musicGenres?.length);
+  if (isRelaxationAtmosphere && RELIGIOUS_MUSIC_RE.test(text)) return "religious music in relaxation atmosphere";
+  if (isRelaxationAtmosphere && FUNCTIONAL_RELAXATION_RE.test(text)) return "sleep or functional relaxation audio";
   return null;
 }
 
-export function isDisallowedRecommendationCandidate(value: unknown): boolean {
-  return disallowedRecommendationReason(value) !== null;
+export function isDisallowedRecommendationCandidate(value: unknown, context?: RecommendationContext): boolean {
+  return disallowedRecommendationReason(value, context) !== null;
 }
 
 export function isExplorationVersionCandidate(value: unknown): boolean {

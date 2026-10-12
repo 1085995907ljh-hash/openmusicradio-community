@@ -3,11 +3,270 @@
  * enrichment: signal-led opening film · nav: N9 channel rail · designed-as-app
  * contrast: pass (40-41) · slop: pass (1-58) · mobile: pass (34, 49, 50-57)
  */
+@import url("https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&display=swap");
 @import "../../tokens.css";
 
 html,
 body {
   overflow-x: clip;
+}
+
+/* Last-pass override: keep the masthead horizontal on every workflow step and
+   contain Program Settings 02 inside the viewport. */
+@media (min-width: 64rem) {
+  .app-shell .topbar,
+  .app-shell:has(.setup-settings-screen) .topbar { grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr) auto; grid-template-areas: "brand stages actions"; gap: 1.5rem; height: 4.75rem; min-height: 4.75rem; padding: 0 var(--shell-gutter); border: 0; border-bottom: 1px solid color-mix(in oklch, var(--product-cyan) 20%, var(--color-rule)); border-radius: 0; background: color-mix(in oklch, var(--color-paper-2) 94%, var(--product-cyan)); box-shadow: 0 8px 24px rgb(0 0 0 / .16); backdrop-filter: none; }
+  .app-shell .brand-block { grid-area: brand; min-width: 0; }
+  .app-shell .top-stage-nav,
+  .app-shell:has(.setup-settings-screen) .top-stage-nav { position: static; grid-area: stages; justify-self: center; display: flex; flex-direction: row; width: min(100%, 42rem); height: 2.55rem; min-height: 0; margin: 0; padding: 0; transform: none; opacity: 1; border: 1px solid color-mix(in oklch, var(--product-cyan) 18%, var(--color-rule)); border-radius: 4px; background: color-mix(in oklch, var(--color-paper) 84%, var(--product-cyan)); }
+  .app-shell .top-stage,
+  .app-shell:has(.setup-settings-screen) .top-stage { flex: 1 1 0; width: auto; min-width: 0; height: 100%; min-height: 0; justify-content: center; padding: 0 .55rem; border-radius: 0; }
+  .app-shell:has(.setup-settings-screen) .top-stage-index small,
+  .app-shell:has(.setup-settings-screen) .top-stage-copy,
+  .app-shell:has(.setup-settings-screen) .top-stage-check { display: inline-flex; }
+  .app-shell .top-stage + .top-stage { border-left: 1px solid color-mix(in oklch, var(--product-cyan) 13%, transparent); }
+  .app-shell .top-stage-active,
+  .app-shell:has(.setup-settings-screen) .top-stage-active { border-radius: 0; background: var(--product-cyan-soft); box-shadow: inset 0 -2px var(--product-cyan); }
+  .app-shell .topbar-actions { grid-area: actions; padding: 0; border: 0; }
+  .app-shell:has(.setup-settings-screen) { height: 100dvh; min-height: 0; overflow: hidden; }
+  .app-shell:has(.setup-settings-screen) .page-frame { height: calc(100dvh - 4.75rem); min-height: 0; overflow: hidden; }
+  .app-shell:has(.setup-settings-screen) .main-content { height: 100%; min-height: 0; padding: 1.6rem var(--shell-gutter) 1.25rem; overflow: hidden; }
+  .app-shell:has(.setup-settings-screen) .setup-layout,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen { height: 100%; min-height: 0; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .section-intro { margin-bottom: 1rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-form { height: calc(100% - 4.5rem); min-height: 0; grid-template-rows: minmax(0, 1fr) 3rem; gap: 1rem 1.25rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-console { min-height: 0; overflow: hidden; padding: 1rem; border: 1px solid rgb(218 245 255 / .13); border-radius: 4px; background: rgb(5 10 20 / .56); box-shadow: none; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .console-panel-heading { margin-bottom: .7rem; padding-bottom: .55rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-grid { gap: .5rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-option { padding: .45rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-option .host-avatar { max-height: 6.3rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-card-copy { min-height: 3.55rem; }
+}
+
+/* Topbar redesign: a quiet rail with independent workflow nodes. */
+@media (min-width: 64rem) {
+  .app-shell .topbar,
+  .app-shell:has(.setup-settings-screen) .topbar {
+    grid-template-columns: 15rem minmax(0, 1fr) 3rem;
+    grid-template-areas: "brand stages actions";
+    gap: 2rem;
+    height: 4.25rem;
+    min-height: 4.25rem;
+    padding-inline: clamp(1.25rem, 3vw, 3.5rem);
+    border: 0;
+    border-bottom: 1px solid rgb(218 245 255 / .1);
+    background: rgb(5 8 15 / .86);
+    box-shadow: inset 0 -1px rgb(255 255 255 / .025);
+  }
+
+  .app-shell .brand-block { gap: .65rem; }
+  .app-shell .brand-mark { width: 2rem; height: 2rem; background: transparent; border-color: rgb(218 245 255 / .35); }
+  .app-shell .brand-name { font-size: .7rem; letter-spacing: .08em; }
+  .app-shell .brand-subtitle { color: rgb(184 193 211 / .62); font-size: .52rem; }
+
+  .app-shell .top-stage-nav,
+  .app-shell:has(.setup-settings-screen) .top-stage-nav {
+    position: relative;
+    justify-self: center;
+    width: min(100%, 48rem);
+    height: 2.4rem;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    isolation: isolate;
+  }
+
+  .app-shell .top-stage-nav::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    left: 2rem;
+    right: 2rem;
+    top: 50%;
+    height: 1px;
+    background: rgb(137 151 177 / .28);
+  }
+
+  .app-shell .top-stage,
+  .app-shell:has(.setup-settings-screen) .top-stage {
+    position: relative;
+    display: inline-flex;
+    flex: 1 1 0;
+    height: 2.4rem;
+    gap: .45rem;
+    padding: 0 .5rem;
+    border: 0;
+    background: transparent;
+    color: rgb(145 157 181 / .72);
+  }
+
+  .app-shell .top-stage-index { width: 1.45rem; height: 1.45rem; border-radius: 50%; border-color: rgb(137 151 177 / .4); background: rgb(12 16 26 / .96); font-size: .56rem; }
+  .app-shell .top-stage-copy strong { color: inherit; font-size: .62rem; font-weight: 560; letter-spacing: .03em; }
+  .app-shell .top-stage + .top-stage { border-left: 0; }
+  .app-shell .top-stage-active,
+  .app-shell:has(.setup-settings-screen) .top-stage-active { color: #e8e4ff; background: transparent; box-shadow: none; }
+  .app-shell .top-stage-active .top-stage-index { color: #f0ebff; border-color: #9c85f7; background: #5e4bb5; box-shadow: 0 0 0 4px rgb(156 133 247 / .12), 0 0 18px rgb(156 133 247 / .28); }
+  .app-shell .top-stage-active::after { display: none; }
+  .app-shell .top-stage-done .top-stage-index { color: #c5b9ff; border-color: rgb(156 133 247 / .55); background: rgb(55 45 99 / .72); }
+  .app-shell .top-stage-check { color: #b8a6ff; }
+  .app-shell .topbar-actions .icon-button.topbar-tool { width: 2.35rem; height: 2.35rem; border: 1px solid rgb(137 151 177 / .35); border-radius: 50%; color: rgb(214 222 240 / .9); background: rgb(11 15 24 / .92); }
+  .app-shell .topbar-actions .icon-button.topbar-tool:hover { border-color: #9c85f7; color: #eee9ff; background: rgb(58 45 108 / .4); }
+}
+
+/* Final cool-state palette for Program Settings 02. */
+@media (min-width: 64rem) {
+  .app-shell:has(.setup-settings-screen) { --settings-accent: #a78bfa; --settings-accent-soft: rgb(167 139 250 / .13); }
+  .app-shell:has(.setup-settings-screen) .topbar { border-bottom-color: rgb(167 139 250 / .28); }
+  .app-shell:has(.setup-settings-screen) .top-stage-active { color: #eee9ff; background: var(--settings-accent-soft); box-shadow: inset 0 -2px var(--settings-accent); }
+  .app-shell:has(.setup-settings-screen) .top-stage-done .top-stage-index { color: var(--settings-accent); border-color: rgb(167 139 250 / .5); }
+  .app-shell:has(.setup-settings-screen) .main-content { padding-top: 1.15rem; padding-bottom: .5rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .section-intro { margin-bottom: .7rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .section-intro h2 { font-size: clamp(1.45rem, 1.8vw, 1.85rem); }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-form { height: calc(100% - 3.65rem); gap: .7rem 1.1rem; grid-template-rows: minmax(0, 1fr) 2.75rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-console { padding: .8rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .console-panel-heading { margin-bottom: .45rem; padding-bottom: .4rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-grid { gap: .4rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-option .host-avatar { max-height: 5.25rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-card-copy { min-height: 3rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-card-copy p { min-height: 1.6rem; font-size: .6rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .form-submit-row { min-height: 2.75rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-host-console .host-option.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .segmented-control button.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .scene-option.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .genre-option.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .density-select button.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .familiarity-select button.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .recommendation-mode-select button.selected { color: #eee9ff; border-color: var(--settings-accent); background: linear-gradient(135deg, rgb(167 139 250 / .16), rgb(93 73 156 / .08)); box-shadow: inset 0 0 18px rgb(167 139 250 / .08); }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-selected-mark,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .field-help,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .optional { color: var(--settings-accent); }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .summary-dot { background: var(--settings-accent); }
+}
+
+/* Final settings tuning: warm selected states and a complete bottom action row. */
+@media (min-width: 64rem) {
+  .app-shell:has(.setup-settings-screen) { --settings-accent: #f2b84b; --settings-accent-soft: rgb(242 184 75 / .13); }
+  .app-shell:has(.setup-settings-screen) .topbar { border-bottom-color: rgb(242 184 75 / .32); }
+  .app-shell:has(.setup-settings-screen) .top-stage-active { color: #fff4d7; background: var(--settings-accent-soft); box-shadow: inset 0 -2px var(--settings-accent); }
+  .app-shell:has(.setup-settings-screen) .top-stage-done .top-stage-index { color: var(--settings-accent); border-color: rgb(242 184 75 / .54); }
+  .app-shell:has(.setup-settings-screen) .main-content { padding-top: 1.15rem; padding-bottom: .5rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .section-intro { margin-bottom: .7rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .section-intro h2 { font-size: clamp(1.45rem, 1.8vw, 1.85rem); }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-form { height: calc(100% - 3.65rem); gap: .7rem 1.1rem; grid-template-rows: minmax(0, 1fr) 2.75rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-console { padding: .8rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .console-panel-heading { margin-bottom: .45rem; padding-bottom: .4rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-grid { gap: .4rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-option .host-avatar { max-height: 5.25rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-card-copy { min-height: 3rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-card-copy p { min-height: 1.6rem; font-size: .6rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .form-submit-row { min-height: 2.75rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-host-console .host-option.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .segmented-control button.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .scene-option.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .genre-option.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .density-select button.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .familiarity-select button.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .recommendation-mode-select button.selected { color: #fff4d7; border-color: var(--settings-accent); background: linear-gradient(135deg, rgb(242 184 75 / .17), rgb(183 106 34 / .08)); box-shadow: inset 0 0 18px rgb(242 184 75 / .08); }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-selected-mark,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .field-help,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .optional { color: var(--settings-accent); }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .summary-dot { background: var(--settings-accent); }
+}
+
+/* Settings page finish: warm selection state and a complete desktop frame. */
+@media (min-width: 64rem) {
+  .app-shell:has(.setup-settings-screen) {
+    --settings-accent: #f2b84b;
+    --settings-accent-soft: rgb(242 184 75 / .13);
+    --settings-accent-ink: #20170a;
+  }
+
+  .app-shell:has(.setup-settings-screen) .topbar {
+    border-bottom-color: rgb(242 184 75 / .32);
+  }
+
+  .app-shell:has(.setup-settings-screen) .top-stage-active {
+    color: #fff4d7;
+    background: var(--settings-accent-soft);
+    box-shadow: inset 0 -2px var(--settings-accent);
+  }
+
+  .app-shell:has(.setup-settings-screen) .top-stage-done .top-stage-index {
+    color: var(--settings-accent);
+    border-color: rgb(242 184 75 / .54);
+  }
+
+  .app-shell:has(.setup-settings-screen) .main-content {
+    padding-top: 1.15rem;
+    padding-bottom: .5rem;
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .section-intro {
+    margin-bottom: .7rem;
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .section-intro h2 {
+    font-size: clamp(1.45rem, 1.8vw, 1.85rem);
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-form {
+    height: calc(100% - 3.65rem);
+    gap: .7rem 1.1rem;
+    grid-template-rows: minmax(0, 1fr) 2.75rem;
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-console {
+    padding: .8rem;
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .console-panel-heading {
+    margin-bottom: .45rem;
+    padding-bottom: .4rem;
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-grid {
+    gap: .4rem;
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-option .host-avatar {
+    max-height: 5.25rem;
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-card-copy {
+    min-height: 3rem;
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-card-copy p {
+    min-height: 1.6rem;
+    font-size: .6rem;
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .form-submit-row {
+    min-height: 2.75rem;
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-host-console .host-option.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .segmented-control button.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .scene-option.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .genre-option.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .density-select button.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .familiarity-select button.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .recommendation-mode-select button.selected {
+    color: #fff4d7;
+    border-color: var(--settings-accent);
+    background: linear-gradient(135deg, rgb(242 184 75 / .17), rgb(183 106 34 / .08));
+    box-shadow: inset 0 0 18px rgb(242 184 75 / .08);
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-selected-mark,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .field-help,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .optional {
+    color: var(--settings-accent);
+  }
+
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .summary-dot {
+    background: var(--settings-accent);
+  }
 }
 
 /* v12: first-run local onboarding */
@@ -2347,6 +2606,837 @@ button:disabled,
   }
 }
 
+/* 2026-09 workbench correction: one consistent masthead and a contained
+   program setup surface. The previous settings-specific rail made the header
+   change shape between steps and pushed the form into page scrolling. */
+@media (min-width: 64rem) {
+  .app-shell .topbar,
+  .app-shell:has(.setup-settings-screen) .topbar {
+    position: relative;
+    z-index: 5;
+    display: grid;
+    grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr) auto;
+    grid-template-areas: "brand stages actions";
+    gap: 1.5rem;
+    width: 100%;
+    height: 4.75rem;
+    min-height: 4.75rem;
+    padding: 0 var(--shell-gutter);
+    border: 0;
+    border-bottom: 1px solid color-mix(in oklch, var(--product-cyan) 20%, var(--color-rule));
+    border-radius: 0;
+    background: color-mix(in oklch, var(--color-paper-2) 94%, var(--product-cyan));
+    box-shadow: 0 8px 24px rgb(0 0 0 / .16);
+    backdrop-filter: none;
+  }
+
+  .app-shell .brand-block { grid-area: brand; min-width: 0; gap: .75rem; }
+  .app-shell .brand-mark { width: 2.15rem; height: 2.15rem; border-radius: 3px; background: var(--color-accent); }
+  .app-shell .brand-mark img { width: 100%; height: 100%; object-fit: contain; }
+  .app-shell .brand-name { font-size: .72rem; letter-spacing: .09em; }
+  .app-shell .brand-subtitle { margin-top: .18rem; font-size: .56rem; letter-spacing: .08em; }
+  .app-shell .top-stage-nav {
+    grid-area: stages;
+    justify-self: center;
+    display: flex;
+    width: min(100%, 42rem);
+    height: 2.55rem;
+    margin: 0;
+    padding: 0;
+    border: 1px solid color-mix(in oklch, var(--product-cyan) 18%, var(--color-rule));
+    border-radius: 4px;
+    background: color-mix(in oklch, var(--color-paper) 84%, var(--product-cyan));
+  }
+  .app-shell .top-stage { flex: 1 1 0; min-width: 0; height: 100%; padding: 0 .55rem; border-radius: 0; }
+  .app-shell .top-stage + .top-stage { border-left: 1px solid color-mix(in oklch, var(--product-cyan) 13%, transparent); }
+  .app-shell .top-stage-index { width: 1.25rem; height: 1.25rem; border-radius: 2px; }
+  .app-shell .top-stage-copy strong { font-size: .62rem; letter-spacing: .05em; }
+  .app-shell .top-stage-active { color: var(--color-ink); border-radius: 0; background: var(--product-cyan-soft); box-shadow: inset 0 -2px var(--product-cyan); }
+  .app-shell .top-stage-active::after { display: none; }
+  .app-shell .topbar-actions { grid-area: actions; padding: 0; border: 0; }
+  .app-shell .topbar-actions .icon-button.topbar-tool { width: 2.55rem; height: 2.55rem; border-radius: 3px; }
+
+  .app-shell:has(.setup-settings-screen) .top-stage-nav { position: static; transform: none; opacity: 1; min-height: 0; flex-direction: row; gap: 0; padding: 0; }
+  .app-shell:has(.setup-settings-screen) .top-stage { width: auto; min-width: 0; height: 100%; justify-content: center; padding-inline: .55rem; }
+  .app-shell:has(.setup-settings-screen) .top-stage-index { width: 1.25rem; height: 1.25rem; }
+  .app-shell:has(.setup-settings-screen) .top-stage-index small,
+  .app-shell:has(.setup-settings-screen) .top-stage-copy,
+  .app-shell:has(.setup-settings-screen) .top-stage-check { display: inline-flex; }
+
+  .app-shell:has(.setup-settings-screen) { height: 100dvh; min-height: 0; overflow: hidden; }
+  .app-shell:has(.setup-settings-screen) .page-frame { height: calc(100dvh - 4.75rem); min-height: 0; overflow: hidden; }
+  .app-shell:has(.setup-settings-screen) .main-content { height: 100%; min-height: 0; padding: 1.6rem var(--shell-gutter) 1.25rem; overflow: hidden; }
+  .app-shell:has(.setup-settings-screen) .setup-layout,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen { height: 100%; min-height: 0; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .section-intro { margin-bottom: 1rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .section-intro h2 { font-size: clamp(1.55rem, 2vw, 2.05rem); }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-form { height: calc(100% - 4.5rem); min-height: 0; grid-template-rows: minmax(0, 1fr) 3rem; gap: 1rem 1.25rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-console { min-height: 0; overflow: hidden; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-host-console { padding: 1rem; border: 1px solid rgb(218 245 255 / .13); border-radius: 4px; background: rgb(5 10 20 / .56); }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-control-console { padding: 1rem; border: 1px solid rgb(218 245 255 / .13); border-radius: 4px; background: rgb(5 10 20 / .56); }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .console-panel-heading { margin-bottom: .7rem; padding-bottom: .55rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-grid { gap: .5rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-option { padding: .45rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-option .host-avatar { max-height: 6.3rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-card-copy { min-height: 3.55rem; }
+}
+
+/* Product navigation refresh: quiet chrome, compact journey controls, neutral actions. */
+:root {
+  --ui-ink: #f4f8f9;
+  --ui-muted: #91a0aa;
+  --ui-surface: rgb(10 15 22 / .68);
+  --ui-surface-soft: rgb(255 255 255 / .045);
+  --ui-line: rgb(226 242 246 / .15);
+  --ui-accent: #b9f5f4;
+  --ui-accent-line: rgb(185 245 244 / .62);
+}
+
+.app-shell .topbar {
+  min-height: 4.5rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 1rem;
+  padding: .65rem .8rem;
+  border: 0;
+  border-bottom: 1px solid var(--ui-line);
+  border-radius: 0;
+  background: linear-gradient(180deg, rgb(5 8 13 / .8), rgb(5 8 13 / .38));
+  box-shadow: 0 12px 32px rgb(0 0 0 / .16);
+  backdrop-filter: blur(18px) saturate(105%);
+}
+
+.app-shell .brand-block {
+  border: 0;
+  border-radius: 0;
+  padding: .25rem .2rem;
+  background: transparent;
+  box-shadow: none;
+}
+.app-shell .brand-mark { border-radius: 8px; box-shadow: 0 0 0 1px rgb(255 255 255 / .24); }
+.app-shell .brand-name { color: var(--ui-ink); text-shadow: none; }
+.app-shell .brand-subtitle { color: var(--ui-muted); }
+.app-shell .topbar-actions { padding-left: .25rem; border: 0; }
+.app-shell .topbar-actions .icon-button.topbar-tool {
+  width: 2.35rem;
+  height: 2.35rem;
+  min-height: 2.35rem;
+  border: 1px solid var(--ui-line);
+  border-radius: 999px;
+  background: rgb(255 255 255 / .035);
+  color: var(--ui-ink);
+  box-shadow: none;
+}
+.app-shell .topbar-actions .icon-button.topbar-tool:hover {
+  border-color: var(--ui-accent-line);
+  background: rgb(185 245 244 / .1);
+  color: var(--ui-accent);
+}
+
+/* Header journey: small quiet controls when the page is not using the floating rail. */
+.app-shell .top-stage-nav {
+  justify-self: center;
+  width: fit-content;
+  min-width: 0;
+  gap: .35rem;
+  padding: .2rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+}
+.app-shell .top-stage {
+  min-width: 2.05rem;
+  width: 2.05rem;
+  height: 2.05rem;
+  padding: 0;
+  justify-content: center;
+  border: 1px solid rgb(226 242 246 / .18);
+  border-radius: 999px;
+  background: rgb(255 255 255 / .025);
+  color: var(--ui-muted);
+  transition: width .2s ease, border-color .2s ease, color .2s ease, background .2s ease;
+}
+.app-shell .top-stage-index { width: 1.15rem; height: 1.15rem; border: 0; font-size: .55rem; color: currentColor; }
+.app-shell .top-stage-index small, .app-shell .top-stage-copy, .app-shell .top-stage-check { display: none; }
+.app-shell .top-stage:hover, .app-shell .top-stage:focus-visible { border-color: var(--ui-accent-line); color: var(--ui-ink); background: rgb(185 245 244 / .08); }
+.app-shell .top-stage-active {
+  border-color: var(--ui-accent-line);
+  color: #091316;
+  background: var(--ui-accent);
+  box-shadow: 0 0 18px rgb(185 245 244 / .14);
+}
+.app-shell .top-stage-done { color: var(--ui-accent); border-color: rgb(185 245 244 / .35); }
+
+/* Settings keeps the journey as a discreet left-side stepper. */
+@media (min-width: 60rem) {
+  .app-shell:has(.setup-settings-screen) .topbar { grid-template-columns: auto auto; grid-template-areas: "brand actions"; }
+  .app-shell:has(.setup-settings-screen) .top-stage-nav {
+    width: 2.7rem;
+    gap: .55rem;
+    padding: .55rem .35rem;
+    border: 1px solid rgb(226 242 246 / .1);
+    border-radius: 999px;
+    background: rgb(7 11 16 / .28);
+    opacity: .55;
+  }
+  .app-shell:has(.setup-settings-screen) .top-stage-nav:hover,
+  .app-shell:has(.setup-settings-screen) .top-stage-nav:focus-within { width: 7.4rem; opacity: 1; background: rgb(7 11 16 / .78); }
+  .app-shell:has(.setup-settings-screen) .top-stage { width: 1.7rem; min-width: 1.7rem; height: 1.7rem; min-height: 1.7rem; }
+  .app-shell:has(.setup-settings-screen) .top-stage:hover,
+  .app-shell:has(.setup-settings-screen) .top-stage:focus-within,
+  .app-shell:has(.setup-settings-screen) .top-stage-active { width: 100%; justify-content: flex-start; }
+  .app-shell:has(.setup-settings-screen) .top-stage-active { color: #091316; }
+}
+
+/* Button system: off-white primary actions, quiet secondary controls, cyan only for state. */
+.app-shell .primary-button,
+.app-shell .connection-footer .primary-button,
+.app-shell .onboarding-ai-actions .primary-button {
+  border: 1px solid rgb(255 255 255 / .82);
+  border-radius: 999px;
+  background: #f4f8f8;
+  color: #10181b;
+  box-shadow: 0 8px 22px rgb(0 0 0 / .18);
+}
+.app-shell .primary-button:hover,
+.app-shell .connection-footer .primary-button:hover,
+.app-shell .onboarding-ai-actions .primary-button:hover { background: #fff; box-shadow: 0 10px 26px rgb(255 255 255 / .1); }
+.app-shell .secondary-button {
+  border: 1px solid var(--ui-line);
+  border-radius: 999px;
+  background: rgb(255 255 255 / .035);
+  color: var(--ui-ink);
+  box-shadow: none;
+}
+.app-shell .secondary-button:hover { border-color: var(--ui-accent-line); background: rgb(185 245 244 / .08); color: var(--ui-accent); }
+.app-shell .source-row, .app-shell .host-option, .app-shell .scene-option, .app-shell .genre-option,
+.app-shell .density-select button, .app-shell .familiarity-select button, .app-shell .segmented-control button {
+  background: var(--ui-surface-soft);
+  border-color: var(--ui-line);
+  box-shadow: none;
+}
+.app-shell .source-row.selected, .app-shell .program-host-console .host-option.selected,
+.app-shell .segmented-control button.selected, .app-shell .scene-option.selected,
+.app-shell .genre-option.selected, .app-shell .density-select button.selected,
+.app-shell .familiarity-select button.selected {
+  border-color: var(--ui-accent-line);
+  background: rgb(185 245 244 / .09);
+  box-shadow: inset 0 0 0 1px rgb(185 245 244 / .12), 0 0 20px rgb(185 245 244 / .06);
+}
+.app-shell button:focus-visible, .app-shell [role="button"]:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 3px; }
+
+/* Final masthead correction: the journey is a compact control cluster, never a full-width rail. */
+.app-shell .topbar {
+  min-height: 4rem;
+  height: 4rem;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas: "brand stages actions";
+  align-items: center;
+  padding: 0 1.1rem;
+  border: 0;
+  border-bottom: 1px solid rgb(226 242 246 / .1);
+  border-radius: 0;
+  background: #050505;
+  box-shadow: none;
+}
+.app-shell .brand-block { align-self: center; padding: 0; }
+.app-shell .brand-mark { width: 2rem; height: 2rem; border-radius: 7px; }
+.app-shell .brand-name { font-size: .76rem; letter-spacing: .08em; }
+.app-shell .brand-subtitle { font-size: .52rem; }
+.app-shell .top-stage-nav {
+  position: absolute;
+  top: 50%;
+  right: 4.75rem;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  margin: 0;
+  padding: 0;
+  width: auto;
+  height: auto;
+  background: transparent;
+}
+.app-shell .top-stage {
+  width: 1.85rem;
+  min-width: 1.85rem;
+  height: 1.85rem;
+  min-height: 1.85rem;
+  padding: 0;
+  border: 1px solid rgb(226 242 246 / .2);
+  border-radius: 999px;
+  background: rgb(255 255 255 / .025);
+}
+.app-shell .top-stage-copy,
+.app-shell .top-stage-index small,
+.app-shell .top-stage-check { display: none !important; }
+.app-shell .top-stage::after { display: none; }
+.app-shell .top-stage-index { width: 1.1rem; height: 1.1rem; font-size: .53rem; border: 0; box-shadow: none; }
+.app-shell .top-stage-active { color: #091316; background: var(--ui-accent); border-color: var(--ui-accent); box-shadow: 0 0 16px rgb(185 245 244 / .18); }
+.app-shell .top-stage-done { color: var(--ui-accent); border-color: rgb(185 245 244 / .4); }
+.app-shell .topbar-actions { align-self: center; padding: 0; }
+.app-shell .topbar-actions .icon-button.topbar-tool { width: 2.2rem; height: 2.2rem; min-height: 2.2rem; }
+.app-shell .topbar-context {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  color: var(--ui-muted);
+  font-size: .66rem;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.app-shell .topbar-context svg { color: var(--ui-accent); }
+.app-shell .topbar-context strong { color: var(--ui-ink); font-weight: 500; }
+.app-shell .topbar-context small { display: none; }
+
+@media (max-width: 59.99rem) {
+  .app-shell .topbar { min-height: 3.7rem; height: 3.7rem; padding-inline: .75rem; }
+  .app-shell .top-stage-nav { right: 3.8rem; gap: .25rem; }
+  .app-shell .top-stage { width: 1.65rem; min-width: 1.65rem; height: 1.65rem; min-height: 1.65rem; }
+  .app-shell .top-stage-index { width: 1rem; height: 1rem; }
+  .app-shell .brand-subtitle { display: none; }
+}
+
+@media (min-width: 60rem) {
+  .app-shell:has(.setup-settings-screen) .topbar { grid-template-columns: auto auto; grid-template-areas: "brand actions"; }
+  .app-shell:has(.setup-settings-screen) .top-stage-nav {
+    position: fixed;
+    top: 50%;
+    right: auto;
+    left: .85rem;
+    transform: translateY(-50%);
+    width: 2.45rem;
+    height: auto;
+    min-height: 0;
+    padding: .45rem .28rem;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+    border: 1px solid rgb(226 242 246 / .1);
+    border-radius: 999px;
+    background: rgb(7 11 16 / .3);
+  }
+  .app-shell:has(.setup-settings-screen) .top-stage { width: 1.65rem; min-width: 1.65rem; height: 1.65rem; min-height: 1.65rem; }
+  .app-shell:has(.setup-settings-screen) .top-stage:hover,
+  .app-shell:has(.setup-settings-screen) .top-stage:focus-within,
+  .app-shell:has(.setup-settings-screen) .top-stage-active { width: 100%; }
+}
+
+/* Future interface pass: cinematic sci-fi surfaces instead of retro terminal chrome. */
+.app-shell {
+  font-family: "Barlow", "Avenir Next", "PingFang SC", sans-serif;
+  color: #f1fbff;
+}
+
+.app-shell .topbar {
+  border: 1px solid rgb(218 245 255 / .14);
+  border-radius: 18px;
+  clip-path: none;
+  background: rgb(6 12 22 / .48);
+  box-shadow: inset 0 1px rgb(255 255 255 / .08), 0 18px 48px rgb(0 0 0 / .22);
+  backdrop-filter: blur(24px) saturate(125%);
+}
+
+.app-shell .top-stage-nav {
+  border: 0;
+  border-radius: 12px;
+  background: rgb(255 255 255 / .035);
+}
+
+.app-shell .top-stage,
+.app-shell .top-stage:last-child {
+  border-color: rgb(218 245 255 / .08);
+}
+
+.app-shell .top-stage-active {
+  border-radius: 10px;
+  color: #d9fbff;
+  background: linear-gradient(180deg, rgb(5 217 232 / .18), rgb(255 42 109 / .08));
+  box-shadow: inset 0 -2px #05d9e8, inset 0 0 24px rgb(5 217 232 / .08);
+}
+
+.app-shell .top-stage-active::after { display: none; }
+
+.app-shell .top-stage-index,
+.app-shell .brand-mark,
+.app-shell .topbar-actions .icon-button.topbar-tool {
+  border-radius: 10px;
+}
+
+.app-shell .main-content { padding-top: clamp(2.5rem, 5vw, 5rem); }
+
+.app-shell .section-intro h2,
+.app-shell .confirm-view h2,
+.app-shell .on-air-topline h2,
+.app-shell .process-view h2 {
+  font-family: "Barlow", sans-serif;
+  font-weight: 500;
+  letter-spacing: -.045em;
+  text-shadow: none;
+  animation: none;
+}
+
+.app-shell .section-intro .eyebrow,
+.app-shell .settings-page-heading .eyebrow,
+.app-shell .confirm-topbar .eyebrow,
+.app-shell .on-air-topline .eyebrow {
+  color: rgb(185 251 255 / .78);
+  text-shadow: none;
+  font-family: "JetBrains Mono", monospace;
+  letter-spacing: .16em;
+}
+
+.app-shell .connection-section-heading,
+.app-shell .source-list,
+.app-shell .netease-api-panel,
+.app-shell .diagnostic-detail,
+.app-shell .setup-analysis,
+.app-shell .ai-service-panel,
+.app-shell .program-console,
+.app-shell .program-outline,
+.app-shell .ai-adjust-panel,
+.app-shell .air-main-grid,
+.app-shell .process-view,
+.app-shell .playlist-dialog,
+.app-shell .playlist-save-dialog,
+.app-shell .onboarding-service-card {
+  clip-path: none;
+  border: 1px solid rgb(218 245 255 / .13);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgb(255 255 255 / .075), rgb(255 255 255 / .025) 48%, rgb(5 217 232 / .035)), rgb(5 10 20 / .56);
+  box-shadow: inset 0 1px rgb(255 255 255 / .08), 0 20px 50px rgb(0 0 0 / .18);
+  backdrop-filter: blur(18px) saturate(120%);
+}
+
+.app-shell .program-console,
+.app-shell .onboarding-service-card { transform: none; }
+
+.app-shell .console-panel-heading,
+.app-shell .onboarding-card-heading,
+.app-shell .music-login-status {
+  border-color: rgb(218 245 255 / .1);
+  background: rgb(255 255 255 / .035);
+}
+
+.app-shell .source-row,
+.app-shell .host-option,
+.app-shell .scene-option,
+.app-shell .genre-option,
+.app-shell .density-select button,
+.app-shell .familiarity-select button,
+.app-shell .segmented-control button {
+  border-radius: 12px;
+  border-color: rgb(218 245 255 / .11);
+  background: rgb(255 255 255 / .035);
+  transition: border-color .22s ease, background .22s ease, transform .22s ease;
+}
+
+.app-shell .source-row:hover,
+.app-shell .host-option:hover,
+.app-shell .scene-option:hover,
+.app-shell .genre-option:hover { transform: translateY(-2px); border-color: rgb(5 217 232 / .52); }
+
+.app-shell .source-row.selected,
+.app-shell .program-host-console .host-option.selected,
+.app-shell .segmented-control button.selected,
+.app-shell .scene-option.selected,
+.app-shell .genre-option.selected,
+.app-shell .density-select button.selected,
+.app-shell .familiarity-select button.selected {
+  border-color: rgb(5 217 232 / .72);
+  background: linear-gradient(135deg, rgb(5 217 232 / .16), rgb(255 42 109 / .08));
+  box-shadow: inset 0 0 22px rgb(5 217 232 / .08);
+}
+
+.app-shell .primary-button,
+.app-shell .secondary-button,
+.app-shell .connection-footer .primary-button,
+.app-shell .onboarding-ai-actions .primary-button {
+  border-radius: 10px;
+  font-family: "Barlow", sans-serif;
+  letter-spacing: .02em;
+}
+
+.app-shell .primary-button {
+  background: linear-gradient(135deg, #e7fcff, #8cecf4);
+  color: #071319;
+  box-shadow: 0 8px 28px rgb(5 217 232 / .16);
+}
+
+.app-shell .secondary-button { background: rgb(255 255 255 / .06); }
+
+/* Final layout corrections: keep the form inside a predictable vertical rhythm. */
+.app-shell .setup-settings-screen .program-form {
+  grid-template-columns: minmax(0, 1.16fr) minmax(20rem, .84fr);
+  grid-template-rows: auto auto;
+  gap: 2rem 3.2rem;
+  align-items: start;
+}
+
+.app-shell .setup-settings-screen .program-console {
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.app-shell .setup-settings-screen .console-panel-heading {
+  min-height: 0;
+  margin-bottom: 1.15rem;
+  padding-bottom: .7rem;
+}
+
+.app-shell .setup-settings-screen .host-grid {
+  height: auto;
+  min-height: 0;
+  grid-template-rows: none;
+  gap: .7rem;
+}
+
+.app-shell .setup-settings-screen .program-host-console .host-option {
+  min-height: 19rem;
+  height: auto;
+  padding: .72rem;
+}
+
+.app-shell .setup-settings-screen .host-preview-panel {
+  min-height: 2rem;
+  margin-top: .25rem;
+}
+
+.app-shell .setup-settings-screen .program-control-grid {
+  height: auto;
+  min-height: 0;
+  gap: 1.3rem;
+  align-content: start;
+}
+
+.app-shell .setup-settings-screen .program-control-grid .form-block + .form-block {
+  padding-top: 1.15rem;
+}
+
+.app-shell .setup-settings-screen .form-submit-row {
+  position: static;
+  grid-column: 1 / -1;
+  min-height: 3.25rem;
+  margin-top: 0;
+  padding-top: 1.2rem;
+  border-top: 1px solid rgb(218 245 255 / .13);
+}
+
+.app-shell .view-generating .process-view,
+.app-shell .view-preparing .process-view {
+  overflow: visible;
+}
+
+@media (max-width: 900px) {
+  .app-shell .setup-settings-screen .program-form { grid-template-columns: 1fr; gap: 2.5rem; }
+  .app-shell .setup-settings-screen .form-submit-row { grid-column: auto; }
+  .app-shell .setup-settings-screen .program-host-console .host-option { min-height: 17rem; }
+}
+
+/* Flat future console: one surface per task, with dividers carrying hierarchy. */
+.app-shell .setup-settings-screen .program-form {
+  grid-template-columns: minmax(0, 1.18fr) minmax(21rem, .82fr);
+  grid-template-rows: auto;
+  gap: clamp(1.8rem, 3vw, 3.4rem);
+  align-items: start;
+}
+
+.app-shell .setup-settings-screen .program-console {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.app-shell .setup-settings-screen .console-panel-heading {
+  min-height: 2.4rem;
+  margin: 0 0 1.15rem;
+  padding: 0 0 .72rem;
+  border: 0;
+  border-bottom: 1px solid rgb(218 245 255 / .16);
+  background: transparent;
+}
+
+.app-shell .setup-settings-screen .console-panel-heading strong {
+  color: #e8fbff;
+  font-family: "Barlow", sans-serif;
+  font-size: .92rem;
+  letter-spacing: .01em;
+}
+
+.app-shell .setup-settings-screen .host-form-block,
+.app-shell .setup-settings-screen .program-control-grid .form-block {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell .setup-settings-screen .host-grid {
+  height: auto;
+  min-height: 0;
+  grid-template-rows: none;
+  gap: .7rem;
+}
+
+.app-shell .setup-settings-screen .program-host-console .host-option {
+  min-height: 20rem;
+  padding: .8rem;
+  gap: .35rem;
+  border: 1px solid rgb(218 245 255 / .13);
+  border-radius: 14px;
+  background: linear-gradient(160deg, rgb(255 255 255 / .065), rgb(255 255 255 / .018));
+  box-shadow: inset 0 1px rgb(255 255 255 / .07);
+}
+
+.app-shell .setup-settings-screen .program-host-console .host-option.selected {
+  border-color: rgb(5 217 232 / .78);
+  background: linear-gradient(160deg, rgb(5 217 232 / .15), rgb(255 42 109 / .06));
+  box-shadow: inset 0 1px rgb(255 255 255 / .12), 0 0 28px rgb(5 217 232 / .08);
+}
+
+.app-shell .setup-settings-screen .program-host-console .host-option > button[role="radio"] {
+  gap: .25rem;
+}
+
+.app-shell .setup-settings-screen .host-card-copy {
+  min-height: 4.1rem;
+  padding: 0;
+}
+
+.app-shell .setup-settings-screen .host-card-copy p {
+  color: rgb(225 243 247 / .62);
+}
+
+.app-shell .setup-settings-screen .host-preview-panel {
+  min-height: 2.15rem;
+  margin-top: .35rem;
+  padding-top: .55rem;
+  border-top: 1px solid rgb(218 245 255 / .12);
+  background: transparent;
+}
+
+.app-shell .setup-settings-screen .host-option .host-preview-button {
+  width: auto;
+  height: 1.9rem;
+  padding: 0 .8rem;
+  border: 1px solid rgb(218 245 255 / .18);
+  border-radius: 999px;
+  background: rgb(255 255 255 / .055);
+  color: rgb(232 251 255 / .8);
+}
+
+.app-shell .setup-settings-screen .program-control-grid {
+  display: grid;
+  gap: 1.35rem;
+  align-content: start;
+}
+
+.app-shell .setup-settings-screen .program-control-grid .form-block + .form-block {
+  padding-top: 1.15rem;
+  border-top: 1px solid rgb(218 245 255 / .11);
+}
+
+.app-shell .setup-settings-screen .program-control-grid .field-label-row {
+  margin-bottom: .55rem;
+}
+
+.app-shell .setup-settings-screen .segmented-control,
+.app-shell .setup-settings-screen .density-select,
+.app-shell .setup-settings-screen .scene-grid,
+.app-shell .setup-settings-screen .genre-grid,
+.app-shell .setup-settings-screen .familiarity-select {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell .setup-settings-screen .segmented-control,
+.app-shell .setup-settings-screen .density-select {
+  gap: .4rem;
+}
+
+.app-shell .setup-settings-screen .segmented-control button,
+.app-shell .setup-settings-screen .density-select button,
+.app-shell .setup-settings-screen .scene-option,
+.app-shell .setup-settings-screen .genre-option,
+.app-shell .setup-settings-screen .familiarity-select button,
+.app-shell .setup-settings-screen .recommendation-mode-select button {
+  border: 1px solid rgb(218 245 255 / .13);
+  border-radius: 9px;
+  background: rgb(255 255 255 / .035);
+  box-shadow: none;
+}
+
+.app-shell .setup-settings-screen .segmented-control button,
+.app-shell .setup-settings-screen .density-select button {
+  min-height: 2.55rem;
+  height: 2.55rem;
+}
+
+.app-shell .setup-settings-screen .scene-option,
+.app-shell .setup-settings-screen .recommendation-mode-select button,
+.app-shell .setup-settings-screen .familiarity-select button {
+  min-height: 3.1rem;
+  height: auto;
+}
+
+.app-shell .setup-settings-screen .genre-option {
+  min-height: 2.2rem;
+  height: 2.2rem;
+  border-radius: 999px;
+}
+
+.app-shell .setup-settings-screen .segmented-control button.selected,
+.app-shell .setup-settings-screen .density-select button.selected,
+.app-shell .setup-settings-screen .scene-option.selected,
+.app-shell .setup-settings-screen .genre-option.selected,
+.app-shell .setup-settings-screen .familiarity-select button.selected,
+.app-shell .setup-settings-screen .recommendation-mode-select button.selected {
+  border-color: rgb(5 217 232 / .78);
+  background: linear-gradient(135deg, rgb(5 217 232 / .16), rgb(255 42 109 / .08));
+  box-shadow: inset 0 0 20px rgb(5 217 232 / .07);
+}
+
+.app-shell .setup-settings-screen .form-submit-row {
+  grid-column: 1 / -1;
+  min-height: 3rem;
+  margin-top: .2rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid rgb(218 245 255 / .13);
+}
+
+@media (max-width: 900px) {
+  .app-shell .setup-settings-screen .program-form {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+
+  .app-shell .setup-settings-screen .form-submit-row {
+    grid-column: auto;
+  }
+
+  .app-shell .setup-settings-screen .program-host-console .host-option {
+    min-height: 17rem;
+  }
+}
+
+/* Journey model: each stage gets its own workspace rhythm while sharing one rail. */
+.app-shell .topbar {
+  border-radius: 0 0 20px 20px;
+  border-top: 0;
+  border-inline-color: rgb(218 245 255 / .09);
+  background: linear-gradient(180deg, rgb(5 11 20 / .78), rgb(5 11 20 / .36));
+}
+
+.app-shell .top-stage-nav {
+  position: relative;
+  gap: .15rem;
+  padding: .35rem .5rem;
+  border: 1px solid rgb(218 245 255 / .08);
+  border-radius: 999px;
+  background: rgb(255 255 255 / .025);
+}
+
+.app-shell .top-stage-nav::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  left: 7%;
+  right: 7%;
+  top: 50%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(5 217 232 / .55), rgb(255 42 109 / .35), transparent);
+}
+
+.app-shell .top-stage {
+  position: relative;
+  z-index: 1;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.app-shell .top-stage-copy strong { font-size: .68rem; letter-spacing: .06em; }
+.app-shell .top-stage-upcoming { opacity: .46; }
+.app-shell .top-stage-done { opacity: .78; }
+.app-shell .top-stage-active { background: rgb(5 217 232 / .11); box-shadow: inset 0 0 0 1px rgb(5 217 232 / .42), 0 0 22px rgb(5 217 232 / .1); }
+.app-shell .top-stage-active .top-stage-index { color: #071319; background: #b9fbff; border-color: #b9fbff; }
+
+.app-shell .view-setup .main-content {
+  max-width: 1180px;
+  padding-top: clamp(3.3rem, 7vw, 6.5rem);
+}
+
+.app-shell .view-setup.setup-phase-connect .main-content { max-width: 1040px; }
+.app-shell .view-setup.setup-phase-connect .section-intro { max-width: 780px; margin-inline: auto; }
+
+.app-shell .view-generating .main-content,
+.app-shell .view-preparing .main-content {
+  max-width: 1120px;
+  padding-top: clamp(4rem, 10vw, 8rem);
+}
+
+.app-shell .view-generating .process-view,
+.app-shell .view-preparing .process-view {
+  display: grid;
+  grid-template-columns: minmax(17rem, .72fr) minmax(0, 1.28fr);
+  gap: clamp(2rem, 6vw, 6rem);
+  align-items: center;
+  min-height: min(62vh, 38rem);
+  padding: clamp(2rem, 5vw, 4rem);
+  border: 0;
+  border-radius: 28px;
+  background: linear-gradient(135deg, rgb(255 255 255 / .06), rgb(255 255 255 / .018));
+  box-shadow: inset 0 1px rgb(255 255 255 / .08), 0 30px 80px rgb(0 0 0 / .18);
+}
+
+.app-shell .view-generating .process-signal,
+.app-shell .view-preparing .process-signal { align-self: center; }
+.app-shell .view-generating .process-copy,
+.app-shell .view-preparing .process-copy { max-width: 42rem; }
+
+.app-shell .view-confirm .main-content {
+  max-width: 1220px;
+  padding-top: clamp(2.8rem, 5vw, 5rem);
+}
+
+.app-shell .view-confirm .confirm-view { display: grid; gap: 1.5rem; }
+.app-shell .view-confirm .program-spec-summary { border: 0; border-bottom: 1px solid rgb(218 245 255 / .13); border-radius: 0; background: transparent; box-shadow: none; padding-inline: 0; }
+.app-shell .view-confirm .program-outline { border-radius: 20px; background: linear-gradient(135deg, rgb(255 255 255 / .065), rgb(255 255 255 / .018)); }
+.app-shell .view-confirm .outline-item { border-color: rgb(218 245 255 / .10); background: rgb(255 255 255 / .025); }
+
+.app-shell .view-on_air .main-content,
+.app-shell .view-ended .main-content {
+  max-width: 1280px;
+  padding-top: clamp(2.4rem, 5vw, 5rem);
+}
+
+@media (max-width: 900px) {
+  .app-shell .top-stage-nav { border-radius: 16px; overflow-x: auto; }
+  .app-shell .view-generating .process-view,
+  .app-shell .view-preparing .process-view { grid-template-columns: 1fr; min-height: auto; }
+}
+
+.app-shell .connection-footer,
+.app-shell .confirm-actions { border-color: rgb(218 245 255 / .12); background: rgb(5 10 20 / .48); }
+
 @media (min-width: 80rem) {
   .host-grid {
     grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -2500,6 +3590,55 @@ button:disabled,
   .process-orbit-core strong {
     animation: none !important;
   }
+}
+
+/* Signal rail: keep the workflow visible without making the masthead feel like a form wizard. */
+@media (min-width: 60rem) {
+  .topbar {
+    min-height: 4.5rem;
+    height: 4.5rem;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "brand stages actions";
+    align-items: center;
+    margin: .75rem var(--space-sm) 0;
+    padding: 0 .9rem;
+    border: 1px solid color-mix(in oklch, var(--product-cyan) 28%, var(--color-rule-2));
+    border-radius: 6px;
+    background:
+      linear-gradient(90deg, color-mix(in oklch, var(--product-cyan) 10%, transparent), transparent 30%, color-mix(in oklch, var(--product-magenta) 7%, transparent)), var(--color-paper-2);
+    box-shadow: 0 0 0 1px rgb(32 239 255 / .04), 0 14px 34px rgb(0 0 0 / .28);
+  }
+
+  .brand-block { align-self: center; }
+  .brand-mark { width: 2.25rem; height: 2.25rem; border-radius: 2px; background: var(--color-accent); }
+  .brand-name { font-size: .78rem; letter-spacing: .11em; }
+  .brand-subtitle { font-size: .58rem; letter-spacing: .08em; }
+
+  .top-stage-nav {
+    align-self: center;
+    justify-self: center;
+    width: min(100%, 48rem);
+    height: 2.75rem;
+    border: 0;
+    background: transparent;
+  }
+
+  .top-stage {
+    min-width: 6.5rem;
+    height: 2.75rem;
+    padding: 0 .7rem;
+    border-left-color: color-mix(in oklch, var(--product-cyan) 14%, transparent);
+    background: transparent;
+  }
+
+  .top-stage:last-child { border-right-color: color-mix(in oklch, var(--product-cyan) 14%, transparent); }
+  .top-stage-index { width: 1.25rem; height: 1.25rem; border-radius: 2px; }
+  .top-stage-copy strong { font-size: .63rem; letter-spacing: .08em; }
+  .top-stage-active { background: linear-gradient(180deg, rgb(32 239 255 / .12), transparent); }
+  .top-stage-active::after { background: var(--product-cyan); box-shadow: 0 0 .65rem rgb(32 239 255 / .65); }
+  .top-stage-done .top-stage-index { color: var(--product-cyan); border-color: color-mix(in oklch, var(--product-cyan) 54%, var(--color-rule)); }
+
+  .topbar-actions { align-self: center; border-left: 0; padding-left: var(--space-sm); }
 }
 
 /* v19: confirmation page prioritizes the rundown. */
@@ -11020,7 +12159,601 @@ button:disabled,
     justify-content: space-between;
   }
 
-  .plan-editor-grid .outline-item {
+.plan-editor-grid .outline-item {
     padding-inline: .55rem .7rem;
+  }
+}
+
+/* Final signal-rail masthead overrides. */
+:root {
+  --color-paper: #05070f;
+  --color-paper-2: #0a0e17;
+  --color-paper-3: #111a2b;
+  --color-ink: #e9fdff;
+  --color-ink-2: #b8d1df;
+  --color-rule: #1b2c43;
+  --color-rule-2: #31506d;
+  --color-muted: #8da7ba;
+  --color-neutral: #627b92;
+  --color-accent: #05d9e8;
+  --color-accent-soft: #082934;
+  --color-accent-ink: #031116;
+  --color-focus: #8df7ff;
+  --color-warning: #f9f002;
+  --color-danger: #ff2a6d;
+  --color-signal-cyan: #05d9e8;
+  --color-signal-magenta: #ff2a6d;
+  --product-cyan: #05d9e8;
+  --product-cyan-bright: #b9fbff;
+  --product-cyan-soft: rgb(5 217 232 / .12);
+  --product-magenta: #ff2a6d;
+}
+
+body {
+  background:
+    radial-gradient(circle at 84% 18%, rgb(255 42 109 / .12), transparent 26rem),
+    radial-gradient(circle at 12% 82%, rgb(5 217 232 / .10), transparent 28rem),
+    #05070f;
+}
+
+.app-shell {
+  background: #05070f;
+}
+
+.app-background-video {
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  opacity: .38;
+}
+
+@media (min-width: 60rem) {
+  .topbar {
+    min-height: 5.25rem;
+    height: 5.25rem;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "brand stages actions";
+    align-items: center;
+    padding: 0 var(--space-md);
+    border-bottom-color: color-mix(in oklch, var(--product-cyan) 24%, var(--color-rule-2));
+    background:
+      linear-gradient(90deg, color-mix(in oklch, var(--product-cyan) 5%, transparent), transparent 28%, color-mix(in oklch, var(--product-magenta) 4%, transparent)),
+      var(--color-paper-2);
+  }
+
+  .brand-block { align-self: center; }
+  .brand-mark { width: 2.25rem; height: 2.25rem; border-radius: 2px; background: var(--color-accent); }
+  .brand-name { font-size: .78rem; letter-spacing: .11em; }
+  .brand-subtitle { font-size: .58rem; letter-spacing: .08em; }
+  .top-stage-nav { align-self: center; justify-self: stretch; width: auto; height: 2.8rem; margin: 0 1.5rem; border: 1px solid color-mix(in oklch, var(--product-cyan) 18%, var(--color-rule)); border-radius: 3px; background: rgb(4 12 18 / .5); }
+  .top-stage { min-width: 7.4rem; height: 2.8rem; padding: 0 .7rem; border-left-color: color-mix(in oklch, var(--product-cyan) 18%, transparent); background: transparent; }
+  .top-stage:last-child { border-right-color: color-mix(in oklch, var(--product-cyan) 14%, transparent); }
+  .top-stage-index { width: 1.25rem; height: 1.25rem; border-radius: 2px; }
+  .top-stage-copy strong { font-size: .63rem; letter-spacing: .08em; }
+  .top-stage-active { background: linear-gradient(180deg, rgb(32 239 255 / .2), rgb(32 239 255 / .035)); box-shadow: inset 0 -2px 0 var(--product-cyan), inset 0 0 1.3rem rgb(32 239 255 / .08); }
+  .top-stage-active::after { background: var(--product-cyan); box-shadow: 0 0 .8rem rgb(32 239 255 / .8); }
+  .top-stage-done .top-stage-index { color: var(--product-cyan); border-color: color-mix(in oklch, var(--product-cyan) 54%, var(--color-rule)); }
+  .topbar-actions { align-self: center; border-left: 0; padding-left: .75rem; }
+  .topbar-actions .icon-button.topbar-tool { width: 2.65rem; height: 2.65rem; min-height: 2.65rem; }
+}
+
+/* Final cascade for the modern sci-fi surface language. */
+.app-shell .topbar { border: 1px solid rgb(218 245 255 / .14); border-radius: 18px; clip-path: none; background: rgb(6 12 22 / .48); box-shadow: inset 0 1px rgb(255 255 255 / .08), 0 18px 48px rgb(0 0 0 / .22); backdrop-filter: blur(24px) saturate(125%); }
+.app-shell .top-stage-nav { border: 0; border-radius: 12px; background: rgb(255 255 255 / .035); }
+.app-shell .top-stage-active { border-radius: 10px; color: #d9fbff; background: linear-gradient(180deg, rgb(5 217 232 / .18), rgb(255 42 109 / .08)); box-shadow: inset 0 -2px #05d9e8, inset 0 0 24px rgb(5 217 232 / .08); }
+.app-shell .top-stage-active::after { display: none; }
+.app-shell .main-content { padding-top: clamp(2.5rem, 5vw, 5rem); }
+.app-shell .section-intro h2, .app-shell .confirm-view h2, .app-shell .on-air-topline h2, .app-shell .process-view h2 { font-family: "Barlow", sans-serif; font-weight: 500; letter-spacing: -.045em; text-shadow: none; animation: none; }
+.app-shell .section-intro .eyebrow, .app-shell .settings-page-heading .eyebrow, .app-shell .confirm-topbar .eyebrow, .app-shell .on-air-topline .eyebrow { color: rgb(185 251 255 / .78); text-shadow: none; }
+.app-shell .connection-section-heading, .app-shell .source-list, .app-shell .netease-api-panel, .app-shell .diagnostic-detail, .app-shell .setup-analysis, .app-shell .ai-service-panel, .app-shell .program-console, .app-shell .program-outline, .app-shell .ai-adjust-panel, .app-shell .air-main-grid, .app-shell .process-view, .app-shell .onboarding-service-card { clip-path: none; border: 1px solid rgb(218 245 255 / .13); border-radius: 18px; background: linear-gradient(135deg, rgb(255 255 255 / .075), rgb(255 255 255 / .025) 48%, rgb(5 217 232 / .035)), rgb(5 10 20 / .56); box-shadow: inset 0 1px rgb(255 255 255 / .08), 0 20px 50px rgb(0 0 0 / .18); backdrop-filter: blur(18px) saturate(120%); }
+.app-shell .program-console, .app-shell .onboarding-service-card { transform: none; }
+.app-shell .source-row, .app-shell .host-option, .app-shell .scene-option, .app-shell .genre-option, .app-shell .density-select button, .app-shell .familiarity-select button, .app-shell .segmented-control button { border-radius: 12px; border-color: rgb(218 245 255 / .11); background: rgb(255 255 255 / .035); }
+.app-shell .source-row.selected, .app-shell .program-host-console .host-option.selected, .app-shell .segmented-control button.selected, .app-shell .scene-option.selected, .app-shell .genre-option.selected, .app-shell .density-select button.selected, .app-shell .familiarity-select button.selected { border-color: rgb(5 217 232 / .72); background: linear-gradient(135deg, rgb(5 217 232 / .16), rgb(255 42 109 / .08)); box-shadow: inset 0 0 22px rgb(5 217 232 / .08); }
+.app-shell .primary-button, .app-shell .secondary-button, .app-shell .connection-footer .primary-button, .app-shell .onboarding-ai-actions .primary-button { border-radius: 10px; font-family: "Barlow", sans-serif; letter-spacing: .02em; }
+.app-shell .primary-button { background: linear-gradient(135deg, #e7fcff, #8cecf4); color: #071319; box-shadow: 0 8px 28px rgb(5 217 232 / .16); }
+.app-shell .secondary-button { background: rgb(255 255 255 / .06); }
+
+/* Final layout corrections: keep the form inside a predictable vertical rhythm. */
+.app-shell .setup-settings-screen .program-form { grid-template-columns: minmax(0, 1.16fr) minmax(20rem, .84fr); grid-template-rows: auto auto; gap: 2rem 3.2rem; align-items: start; }
+.app-shell .main-content:has(.setup-settings-screen) { height: auto; min-height: 0; overflow: visible; }
+.app-shell .setup-settings-screen { flex: none; min-height: 0; height: auto; }
+.app-shell .setup-settings-screen .program-form { flex: none; min-height: 0; height: auto; overflow: visible; }
+.app-shell .setup-settings-screen .program-console { height: auto; min-height: 0; padding: 0; overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; backdrop-filter: none; }
+.app-shell .setup-settings-screen .program-host-console { display: block; min-height: 0; overflow: visible; }
+.app-shell .setup-settings-screen .host-form-block { display: block; min-height: 0; flex: none; }
+.app-shell .setup-settings-screen .console-panel-heading { min-height: 0; margin-bottom: 1.15rem; padding-bottom: .7rem; }
+.app-shell .setup-settings-screen .host-grid { height: auto; min-height: 0; grid-template-rows: none; gap: .7rem; }
+.app-shell .setup-settings-screen .program-host-console .host-option { min-height: 19rem; height: auto; padding: .72rem; }
+.app-shell .setup-settings-screen .host-preview-panel { min-height: 2rem; margin-top: .25rem; }
+.app-shell .setup-settings-screen .program-control-grid { height: auto; min-height: 0; gap: 1.3rem; align-content: start; }
+.app-shell .setup-settings-screen .program-control-grid .form-block + .form-block { padding-top: 1.15rem; }
+.app-shell .setup-settings-screen .form-submit-row { position: static; grid-column: 1 / -1; min-height: 3.25rem; margin-top: 0; padding-top: 1.2rem; border-top: 1px solid rgb(218 245 255 / .13); }
+.app-shell .view-generating .process-view, .app-shell .view-preparing .process-view { overflow: visible; }
+@media (max-width: 900px) { .app-shell .setup-settings-screen .program-form { grid-template-columns: 1fr; gap: 2.5rem; } .app-shell .setup-settings-screen .form-submit-row { grid-column: auto; } .app-shell .setup-settings-screen .program-host-console .host-option { min-height: 17rem; } }
+
+/* Settings is a long-form studio: let the canvas scroll and move the journey into a quiet rail. */
+@media (min-width: 60rem) {
+  .app-shell:has(.setup-settings-screen) .topbar {
+    grid-template-columns: auto auto;
+    grid-template-areas: "brand actions";
+    justify-content: space-between;
+  }
+
+  .app-shell:has(.setup-settings-screen) .top-stage-nav {
+    position: fixed;
+    z-index: 20;
+    left: .9rem;
+    top: 50%;
+    width: 2.2rem;
+    height: auto;
+    min-height: 13rem;
+    display: flex;
+    flex-direction: column;
+    gap: .7rem;
+    padding: .65rem .35rem;
+    transform: translateY(-50%);
+    border: 1px solid rgb(218 245 255 / .08);
+    border-radius: 999px;
+    background: rgb(5 11 20 / .22);
+    opacity: .62;
+    transition: width .24s ease, opacity .24s ease, background .24s ease;
+  }
+
+  .app-shell:has(.setup-settings-screen) .top-stage-nav:hover,
+  .app-shell:has(.setup-settings-screen) .top-stage-nav:focus-within {
+    width: 8.2rem;
+    opacity: 1;
+    background: rgb(5 11 20 / .76);
+    backdrop-filter: blur(16px);
+  }
+
+  .app-shell:has(.setup-settings-screen) .top-stage-nav::before {
+    top: 1rem;
+    bottom: 1rem;
+    left: 50%;
+    right: auto;
+    width: 1px;
+    height: auto;
+    background: linear-gradient(180deg, transparent, rgb(5 217 232 / .5), rgb(255 42 109 / .35), transparent);
+  }
+
+  .app-shell:has(.setup-settings-screen) .top-stage {
+    width: 1.5rem;
+    min-width: 1.5rem;
+    height: 1.6rem;
+    min-height: 1.6rem;
+    padding: 0;
+    justify-content: center;
+    border-radius: 999px;
+    transition: width .24s ease, background .24s ease;
+  }
+
+  .app-shell:has(.setup-settings-screen) .top-stage-index {
+    width: 1.05rem;
+    height: 1.05rem;
+    font-size: .52rem;
+  }
+
+  .app-shell:has(.setup-settings-screen) .top-stage-index small,
+  .app-shell:has(.setup-settings-screen) .top-stage-copy,
+  .app-shell:has(.setup-settings-screen) .top-stage-check { display: none; }
+
+  .app-shell:has(.setup-settings-screen) .top-stage:hover,
+  .app-shell:has(.setup-settings-screen) .top-stage:focus-within,
+  .app-shell:has(.setup-settings-screen) .top-stage-active { width: 100%; justify-content: flex-start; padding-inline: .25rem; }
+
+  .app-shell:has(.setup-settings-screen) .top-stage:hover .top-stage-copy,
+  .app-shell:has(.setup-settings-screen) .top-stage:focus-within .top-stage-copy,
+  .app-shell:has(.setup-settings-screen) .top-stage-active .top-stage-copy { display: inline-flex; margin-left: .35rem; white-space: nowrap; }
+
+  .app-shell:has(.setup-settings-screen) .top-stage-active { box-shadow: inset 0 0 0 1px rgb(5 217 232 / .45), 0 0 16px rgb(5 217 232 / .1); }
+  .app-shell:has(.setup-settings-screen) .page-frame { min-height: auto; }
+  .app-shell:has(.setup-settings-screen) .main-content { min-height: calc(100dvh - 5.5rem); padding-top: clamp(2.8rem, 6vw, 5.5rem); padding-bottom: 6rem; }
+}
+
+/* Final cool-state palette for Program Settings 02. */
+@media (min-width: 64rem) {
+  .app-shell:has(.setup-settings-screen) { --settings-accent: #a78bfa; --settings-accent-soft: rgb(167 139 250 / .13); }
+  .app-shell:has(.setup-settings-screen) .topbar { border-bottom-color: rgb(167 139 250 / .28); }
+  .app-shell:has(.setup-settings-screen) .top-stage-active { color: #eee9ff; background: var(--settings-accent-soft); box-shadow: inset 0 -2px var(--settings-accent); }
+  .app-shell:has(.setup-settings-screen) .top-stage-done .top-stage-index { color: var(--settings-accent); border-color: rgb(167 139 250 / .5); }
+  .app-shell:has(.setup-settings-screen) .main-content { padding-top: 1.15rem; padding-bottom: .5rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .section-intro { margin-bottom: .7rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-form { height: calc(100% - 3.65rem); gap: .7rem 1.1rem; grid-template-rows: minmax(0, 1fr) 2.75rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-console { padding: .8rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .console-panel-heading { margin-bottom: .45rem; padding-bottom: .4rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-grid { gap: .4rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-option .host-avatar { max-height: 5.25rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-card-copy { min-height: 3rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-card-copy p { min-height: 1.6rem; font-size: .6rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .form-submit-row { min-height: 2.75rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-host-console .host-option.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .segmented-control button.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .scene-option.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .genre-option.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .density-select button.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .familiarity-select button.selected,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .recommendation-mode-select button.selected { color: #eee9ff; border-color: var(--settings-accent); background: linear-gradient(135deg, rgb(167 139 250 / .16), rgb(93 73 156 / .08)); box-shadow: inset 0 0 18px rgb(167 139 250 / .08); }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-selected-mark,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .field-help,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .optional { color: var(--settings-accent); }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .summary-dot { background: var(--settings-accent); }
+}
+
+/* Final cascade for the settings workbench. */
+@media (min-width: 64rem) {
+  .app-shell .topbar,
+  .app-shell:has(.setup-settings-screen) .topbar { grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr) auto; grid-template-areas: "brand stages actions"; gap: 1.5rem; height: 4.75rem; min-height: 4.75rem; padding: 0 var(--shell-gutter); border: 0; border-bottom: 1px solid color-mix(in oklch, var(--product-cyan) 20%, var(--color-rule)); border-radius: 0; background: color-mix(in oklch, var(--color-paper-2) 94%, var(--product-cyan)); box-shadow: 0 8px 24px rgb(0 0 0 / .16); backdrop-filter: none; }
+  .app-shell .top-stage-nav,
+  .app-shell:has(.setup-settings-screen) .top-stage-nav { position: static; grid-area: stages; justify-self: center; display: flex; flex-direction: row; width: min(100%, 42rem); height: 2.55rem; min-height: 0; margin: 0; padding: 0; transform: none; opacity: 1; border: 1px solid color-mix(in oklch, var(--product-cyan) 18%, var(--color-rule)); border-radius: 4px; background: color-mix(in oklch, var(--color-paper) 84%, var(--product-cyan)); }
+  .app-shell .top-stage,
+  .app-shell:has(.setup-settings-screen) .top-stage { flex: 1 1 0; width: auto; min-width: 0; height: 100%; min-height: 0; justify-content: center; padding: 0 .55rem; border-radius: 0; }
+  .app-shell:has(.setup-settings-screen) .top-stage-index small,
+  .app-shell:has(.setup-settings-screen) .top-stage-copy,
+  .app-shell:has(.setup-settings-screen) .top-stage-check { display: inline-flex; }
+  .app-shell .top-stage + .top-stage { border-left: 1px solid color-mix(in oklch, var(--product-cyan) 13%, transparent); }
+  .app-shell .top-stage-active,
+  .app-shell:has(.setup-settings-screen) .top-stage-active { border-radius: 0; background: var(--product-cyan-soft); box-shadow: inset 0 -2px var(--product-cyan); }
+  .app-shell:has(.setup-settings-screen) { height: 100dvh; min-height: 0; overflow: hidden; }
+  .app-shell:has(.setup-settings-screen) .page-frame { height: calc(100dvh - 4.75rem); min-height: 0; overflow: hidden; }
+  .app-shell:has(.setup-settings-screen) .main-content { height: 100%; min-height: 0; padding: 1.6rem var(--shell-gutter) 1.25rem; overflow: hidden; }
+  .app-shell:has(.setup-settings-screen) .setup-layout,
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen { height: 100%; min-height: 0; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .section-intro { margin-bottom: 1rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-form { height: calc(100% - 4.5rem); min-height: 0; grid-template-rows: minmax(0, 1fr) 3rem; gap: 1rem 1.25rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .program-console { min-height: 0; overflow: hidden; padding: 1rem; border: 1px solid rgb(218 245 255 / .13); border-radius: 4px; background: rgb(5 10 20 / .56); box-shadow: none; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .console-panel-heading { margin-bottom: .7rem; padding-bottom: .55rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-grid { gap: .5rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-option { padding: .45rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-option .host-avatar { max-height: 6.3rem; }
+  .app-shell:has(.setup-settings-screen) .setup-settings-screen .host-card-copy { min-height: 3.55rem; }
+}
+
+/* Final topbar redesign: a quiet rail with independent workflow nodes. */
+@media (min-width: 64rem) {
+  .app-shell .topbar,
+  .app-shell:has(.setup-settings-screen) .topbar {
+    grid-template-columns: 15rem minmax(0, 1fr) 3rem;
+    grid-template-areas: "brand stages actions";
+    gap: 2rem;
+    height: 4.25rem;
+    min-height: 4.25rem;
+    padding-inline: clamp(1.25rem, 3vw, 3.5rem);
+    border: 0;
+    border-bottom: 1px solid rgb(218 245 255 / .1);
+    background: rgb(5 8 15 / .86);
+    box-shadow: inset 0 -1px rgb(255 255 255 / .025);
+  }
+  .app-shell .brand-block { gap: .65rem; }
+  .app-shell .brand-mark { width: 2rem; height: 2rem; background: transparent; border-color: rgb(218 245 255 / .35); }
+  .app-shell .brand-name { font-size: .7rem; letter-spacing: .08em; }
+  .app-shell .brand-subtitle { color: rgb(184 193 211 / .62); font-size: .52rem; }
+  .app-shell .top-stage-nav,
+  .app-shell:has(.setup-settings-screen) .top-stage-nav { position: relative; justify-self: center; width: min(100%, 48rem); height: 2.4rem; border: 0; border-radius: 0; background: transparent; isolation: isolate; }
+  .app-shell .top-stage-nav::before { content: ""; position: absolute; z-index: -1; left: 2rem; right: 2rem; top: 50%; height: 1px; background: rgb(137 151 177 / .28); }
+  .app-shell .top-stage,
+  .app-shell:has(.setup-settings-screen) .top-stage { position: relative; display: inline-flex; flex: 1 1 0; height: 2.4rem; gap: .45rem; padding: 0 .5rem; border: 0; background: transparent; color: rgb(145 157 181 / .72); }
+  .app-shell .top-stage-index { width: 1.45rem; height: 1.45rem; border-radius: 50%; border-color: rgb(137 151 177 / .4); background: rgb(12 16 26 / .96); font-size: .56rem; }
+  .app-shell .top-stage-copy strong { color: inherit; font-size: .62rem; font-weight: 560; letter-spacing: .03em; }
+  .app-shell .top-stage + .top-stage { border-left: 0; }
+  .app-shell .top-stage-active,
+  .app-shell:has(.setup-settings-screen) .top-stage-active { color: #e8e4ff; background: transparent; box-shadow: none; }
+  .app-shell .top-stage-active .top-stage-index { color: #f0ebff; border-color: #9c85f7; background: #5e4bb5; box-shadow: 0 0 0 4px rgb(156 133 247 / .12), 0 0 18px rgb(156 133 247 / .28); }
+  .app-shell .top-stage-active::after { display: none; }
+  .app-shell .top-stage-done .top-stage-index { color: #c5b9ff; border-color: rgb(156 133 247 / .55); background: rgb(55 45 99 / .72); }
+  .app-shell .top-stage-check { color: #b8a6ff; }
+  .app-shell .topbar-actions .icon-button.topbar-tool { width: 2.35rem; height: 2.35rem; border: 1px solid rgb(137 151 177 / .35); border-radius: 50%; color: rgb(214 222 240 / .9); background: rgb(11 15 24 / .92); }
+  .app-shell .topbar-actions .icon-button.topbar-tool:hover { border-color: #9c85f7; color: #eee9ff; background: rgb(58 45 108 / .4); }
+}
+
+/* Minimal chrome: keep only the two corner tools, remove the workflow masthead. */
+@media (min-width: 64rem) {
+  .app-shell .topbar,
+  .app-shell:has(.setup-settings-screen) .topbar {
+    position: relative;
+    display: block;
+    height: 0;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    pointer-events: none;
+  }
+
+  .app-shell .brand-block {
+    position: absolute;
+    z-index: 20;
+    top: 1rem;
+    left: var(--shell-gutter);
+    display: block;
+    pointer-events: auto;
+  }
+
+  .app-shell .brand-mark {
+    width: 2.15rem;
+    height: 2.15rem;
+    border-radius: 50%;
+    border-color: rgb(218 245 255 / .32);
+    background: rgb(8 13 23 / .78);
+    box-shadow: 0 8px 24px rgb(0 0 0 / .24);
+  }
+
+  .app-shell .brand-lockup,
+  .app-shell .top-stage-nav { display: none; }
+
+  .app-shell .topbar-actions {
+    position: absolute;
+    z-index: 20;
+    top: 1rem;
+    right: var(--shell-gutter);
+    display: flex;
+    pointer-events: auto;
+  }
+
+  .app-shell .topbar-actions .icon-button.topbar-tool {
+    width: 2.35rem;
+    height: 2.35rem;
+    border-radius: 50%;
+    border: 1px solid rgb(137 151 177 / .35);
+    background: rgb(8 13 23 / .78);
+    box-shadow: 0 8px 24px rgb(0 0 0 / .24);
+  }
+
+  .app-shell .main-content,
+  .app-shell:has(.setup-settings-screen) .main-content {
+    padding-top: 3.75rem;
+  }
+}
+
+@media (max-width: 63.999rem) {
+  .app-shell .top-stage-nav { display: none; }
+  .app-shell .brand-lockup { display: none; }
+}
+
+@media (max-width: 63.999rem) {
+  .app-shell .topbar {
+    position: relative;
+    display: block;
+    height: 0;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    pointer-events: none;
+  }
+  .app-shell .brand-block {
+    position: absolute;
+    z-index: 20;
+    top: .75rem;
+    left: var(--shell-gutter);
+    display: block;
+    pointer-events: auto;
+  }
+  .app-shell .brand-mark { width: 2rem; height: 2rem; border-radius: 50%; }
+  .app-shell .topbar-actions {
+    position: absolute;
+    z-index: 20;
+    top: .75rem;
+    right: var(--shell-gutter);
+    display: flex;
+    pointer-events: auto;
+  }
+  .app-shell .main-content { padding-top: 3.25rem; }
+}
+
+/* Inner console refinement inspired by the supplied SoundCloud reference.
+   LandingPage is outside .app-shell, so the opening page and its video remain
+   untouched. */
+.app-shell {
+  --console-bg: #121212;
+  --console-surface: #1b1b1c;
+  --console-surface-raised: #262627;
+  --console-line: rgb(255 255 255 / .14);
+  --console-line-soft: rgb(255 255 255 / .08);
+  --console-ink: #f2f2f4;
+  --console-muted: #a3a3a8;
+  --console-subtle: #77777d;
+  --console-signal: #9b8cff;
+  --console-signal-soft: rgb(155 140 255 / .13);
+}
+
+.app-shell .main-content {
+  color: var(--console-ink);
+}
+
+.app-shell .section-intro h2,
+.app-shell .confirm-view h2,
+.app-shell .on-air-topline h2,
+.app-shell .process-view h2 {
+  font-family: "Avenir Next", Inter, ui-sans-serif, sans-serif;
+  font-weight: 500;
+  letter-spacing: -.035em;
+}
+
+.app-shell .section-intro .eyebrow,
+.app-shell .console-code,
+.app-shell .field-label,
+.app-shell .panel-kicker,
+.app-shell .track-overline {
+  color: var(--console-muted);
+  letter-spacing: .04em;
+}
+
+.app-shell .section-intro p:not(.eyebrow),
+.app-shell .field-help,
+.app-shell .host-card-copy p,
+.app-shell .host-card-meta,
+.app-shell .host-setting-title {
+  color: var(--console-muted);
+}
+
+.app-shell .program-console,
+.app-shell .onboarding-service-card,
+.app-shell .connection-section-heading,
+.app-shell .program-outline,
+.app-shell .ai-adjust-panel,
+.app-shell .air-main-grid,
+.app-shell .process-view {
+  border: 1px solid var(--console-line-soft);
+  border-radius: 4px;
+  background: rgb(18 18 18 / .76);
+  box-shadow: inset 0 1px rgb(255 255 255 / .025);
+  backdrop-filter: blur(4px);
+}
+
+.app-shell .program-console,
+.app-shell .onboarding-service-card {
+  padding: 16px;
+}
+
+.app-shell .console-panel-heading {
+  min-height: auto;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  border-bottom-color: var(--console-line-soft);
+}
+
+.app-shell .host-option,
+.app-shell .source-row,
+.app-shell .scene-option,
+.app-shell .genre-option,
+.app-shell .density-select button,
+.app-shell .familiarity-select button,
+.app-shell .segmented-control button,
+.app-shell .recommendation-mode-select button {
+  border: 1px solid var(--console-line);
+  border-radius: 4px;
+  background: rgb(27 27 28 / .86);
+  box-shadow: none;
+}
+
+.app-shell .host-option:hover,
+.app-shell .source-row:hover,
+.app-shell .scene-option:hover,
+.app-shell .genre-option:hover,
+.app-shell .density-select button:hover,
+.app-shell .familiarity-select button:hover,
+.app-shell .segmented-control button:hover,
+.app-shell .recommendation-mode-select button:hover {
+  border-color: rgb(255 255 255 / .32);
+  background: var(--console-surface-raised);
+}
+
+.app-shell .program-host-console .host-option.selected,
+.app-shell .source-row.selected,
+.app-shell .scene-option.selected,
+.app-shell .genre-option.selected,
+.app-shell .density-select button.selected,
+.app-shell .familiarity-select button.selected,
+.app-shell .segmented-control button.selected,
+.app-shell .recommendation-mode-select button.selected {
+  color: var(--console-ink);
+  border-color: var(--console-signal);
+  background: var(--console-signal-soft);
+  box-shadow: inset 0 0 0 1px rgb(155 140 255 / .08);
+}
+
+.app-shell .host-selected-mark,
+.app-shell .source-check,
+.app-shell .field-help,
+.app-shell .optional,
+.app-shell .summary-dot {
+  color: var(--console-signal);
+}
+
+.app-shell .summary-dot {
+  background: var(--console-signal);
+}
+
+.app-shell .primary-button,
+.app-shell .secondary-button,
+.app-shell .host-preview-button,
+.app-shell .text-button,
+.app-shell .icon-button {
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.app-shell .primary-button {
+  min-height: 40px;
+  padding-inline: 16px;
+  border: 1px solid var(--console-ink);
+  background: var(--console-ink);
+  color: #121212;
+  font-family: "Avenir Next", Inter, ui-sans-serif, sans-serif;
+  font-weight: 700;
+  letter-spacing: .01em;
+}
+
+.app-shell .primary-button:hover:not(:disabled) {
+  background: #fff;
+  border-color: #fff;
+  box-shadow: none;
+}
+
+.app-shell .secondary-button {
+  min-height: 40px;
+  padding-inline: 16px;
+  border: 1px solid var(--console-line);
+  background: transparent;
+  color: var(--console-ink);
+}
+
+.app-shell .secondary-button:hover:not(:disabled),
+.app-shell .text-button:hover:not(:disabled) {
+  border-color: rgb(255 255 255 / .38);
+  color: #fff;
+  background: rgb(255 255 255 / .06);
+}
+
+.app-shell .host-preview-button {
+  border: 1px solid var(--console-line);
+  background: transparent;
+  color: var(--console-muted);
+}
+
+.app-shell .host-preview-button:hover:not(:disabled) {
+  border-color: var(--console-signal);
+  color: var(--console-ink);
+  background: var(--console-signal-soft);
+}
+
+.app-shell input,
+.app-shell textarea,
+.app-shell select {
+  border-radius: 4px;
+  border-color: var(--console-line);
+  background: var(--console-surface-raised);
+  color: var(--console-ink);
+  box-shadow: inset 0 0 0 1px rgb(18 18 18 / .1);
+}
+
+.app-shell button:focus-visible,
+.app-shell input:focus-visible,
+.app-shell textarea:focus-visible,
+.app-shell select:focus-visible {
+  outline: 2px solid var(--console-signal);
+  outline-offset: 2px;
+}
+
+@media (min-width: 64rem) {
+  .app-shell .main-content {
+    padding-inline: clamp(24px, 4vw, 64px);
+  }
+  .app-shell .setup-settings-screen .program-form {
+    gap: 16px;
+  }
+  .app-shell .setup-settings-screen .program-console {
+    padding: 16px;
+  }
+  .app-shell .setup-settings-screen .host-grid,
+  .app-shell .setup-settings-screen .program-control-grid {
+    gap: 8px;
   }
 }

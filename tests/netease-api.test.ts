@@ -149,6 +149,40 @@ test("playlist detail, song detail, and song URL have validated typed results", 
   assert.match(paths[2] ?? "", /^\/song\/url\/v1\?id=42&level=standard$/);
 });
 
+test("song URL falls back when v1 is unsupported and preserves trial limits", async () => {
+  const paths: string[] = [];
+  const provider = new NeteaseApiProvider({
+    env: { NETEASE_API_BASE_URL: "http://127.0.0.1:3000" },
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      paths.push(url.pathname);
+      if (url.pathname.endsWith("/v1")) return jsonResponse({ code: 404 }, 404);
+      assert.equal(url.searchParams.get("br"), "128000");
+      return jsonResponse({ code: 200, data: [{ id: 42, url: "https://music.example/42.mp3", time: 30000, freeTrialInfo: { start: 0, end: 30 } }] });
+    },
+  });
+  const playback = await provider.songUrl(42);
+  assert.deepEqual(paths, ["/song/url/v1", "/song/url"]);
+  assert.equal(playback.isTrial, true);
+  assert.equal(playback.durationMs, 30000);
+});
+
+test("song URL does not fall back on account failures or empty playback", async () => {
+  for (const status of [401, 429, 500, 200]) {
+    let calls = 0;
+    const provider = new NeteaseApiProvider({
+      env: { NETEASE_API_BASE_URL: "http://127.0.0.1:3000" },
+      fetchImpl: async () => {
+        calls += 1;
+        return jsonResponse({ code: status, data: [{ id: 42, url: null }] }, status);
+      },
+    });
+    if (status === 200) assert.equal((await provider.songUrl(42)).url, null);
+    else await assert.rejects(provider.songUrl(42), ProviderError);
+    assert.equal(calls, 1);
+  }
+});
+
 test("song URL preserves the Netease trial marker", async () => {
   const provider = new NeteaseApiProvider({
     env: { NETEASE_API_BASE_URL: "http://127.0.0.1:3000" },

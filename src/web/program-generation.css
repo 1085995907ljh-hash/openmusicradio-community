@@ -1,0 +1,56 @@
+#radio-console .view-generating .main-content, #radio-console .view-preparing .main-content { grid-template-columns: minmax(0, 1fr); }
+#radio-console .generation-room { width: min(100%, 960px); min-width: 0; margin: auto; padding: 36px 32px 28px; color: #edf2f7; text-align: center; }
+#radio-console .generation-heading { margin: 0 auto; }
+#radio-console .generation-eyebrow { color: #91a7b6; font: 10px/1.5 monospace; letter-spacing: .2em; }
+#radio-console .generation-heading h2 { margin: 22px 0 14px; font-size: clamp(26px, 3vw, 40px); font-weight: 500; letter-spacing: -.04em; line-height: 1.35; }
+#radio-console .generation-heading p { margin: 0; font-size: 13px; line-height: 1.8; color: #9da8b9; }
+#radio-console .generation-art { width: 100vw; height: clamp(220px, 30vh, 340px); position: relative; left: 50%; transform: translateX(-50%); display: grid; place-items: center; margin: 18px 0 26px; overflow: hidden; pointer-events: none; }
+#radio-console .generation-halo { position: absolute; width: 64%; height: 60%; background: radial-gradient(ellipse, #76cdd513, #aca0d909 40%, transparent 70%); filter: blur(22px); }
+#radio-console .generation-sculpture { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+#radio-console .generation-threads { transform-origin: 400px 180px; animation: generation-breathe 9s ease-in-out infinite; }
+#radio-console .generation-thread { animation: generation-shimmer 6s ease-in-out infinite; animation-delay: var(--thread-delay); }
+#radio-console .generation-trace { stroke-dasharray: 0 100; stroke-linecap: round; animation: generation-flow 5s linear infinite; }
+#radio-console .generation-trace-glow { opacity: .7; filter: blur(2px); }
+#radio-console .generation-note-sprites { position: absolute; inset: 0; }
+#radio-console .generation-note-sprite { position: absolute; width: 36px; height: 36px; object-fit: contain; transform: translate(-50%, -50%); opacity: .55; filter: drop-shadow(0 0 3px #8bdde34d); animation: generation-note-twinkle 4.8s ease-in-out infinite; animation-delay: var(--note-delay); }
+#radio-console .generation-art-caption { position: absolute; bottom: 0; color: #637787; font: 8px/1.5 monospace; letter-spacing: .3em; }
+#radio-console .generation-status { display: flex; align-items: center; justify-content: center; gap: 10px; }
+#radio-console .generation-status strong { font-size: 16px; font-weight: 500; }
+#radio-console .generation-status-dot { width: 5px; height: 5px; background: #8bdde3; border-radius: 50%; box-shadow: 0 0 12px #8bdde350; }
+#radio-console .generation-count { margin-left: 12px; font: 12px/1 monospace; color: #a0e2e5; }
+#radio-console .generation-count i { color: #647386; font-style: normal; }
+#radio-console .generation-percent { margin-left: 12px; color: #8bdde3; font: 500 28px/1 monospace; font-variant-numeric: tabular-nums; }
+#radio-console .generation-percent small { margin-left: 3px; font-size: 14px; }
+#radio-console .generation-cancel { display: inline-flex; align-items: center; justify-content: center; gap: 7px; margin-top: 16px; padding: 9px 16px; border: 1px solid rgba(255, 108, 174, .24); border-radius: 8px; color: #ff8bb7; background: transparent; font-size: 12px; }
+#radio-console .generation-cancel:hover:not(:disabled) { background: rgba(255, 108, 174, .08); border-color: #ff8bb7; }
+#radio-console .generation-cancel:disabled { opacity: .6; cursor: wait; }
+#radio-console .generation-description { color: #9da8b9; font-size: 12px; line-height: 1.8; margin: 12px 0 34px; }
+#radio-console .generation-progress { max-width: 740px; margin: auto; }
+#radio-console .generation-progress ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 0; padding: 0; list-style: none; }
+#radio-console .generation-progress li { min-width: 0; text-align: left; }
+#radio-console .generation-step-track { display: block; position: relative; height: 2px; background: #26303e; overflow: hidden; }
+#radio-console .done .generation-step-track { background: #8bdde3; }
+#radio-console .active .generation-step-track::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, #8bdde3, transparent); animation: generation-stage 2.4s ease-in-out infinite; }
+#radio-console .generation-step-label { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 11px; color: #8b97aa; white-space: nowrap; }
+#radio-console .generation-step-label > span { font: 9px/1 monospace; display: inline-flex; color: #66798d; }
+#radio-console .generation-room[data-mode="preparing"] .generation-step-label { white-space: normal; align-items: baseline; line-height: 1.6; }
+#radio-console .active .generation-step-label, #radio-console .done .generation-step-label > span { color: #a5e6e8; }
+#radio-console .generation-footnote { margin: 34px 0 0; font-size: 11px; color: #758398; line-height: 1.8; }
+#radio-console .generation-room[data-complete=true] * { animation: none; }
+@keyframes generation-breathe { 0%, 100% { transform: scaleY(.88); } 50% { transform: scaleY(1.08); } }
+@keyframes generation-shimmer { 0%, 100% { stroke-opacity: .45; fill-opacity: .3; } 50% { stroke-opacity: 1; fill-opacity: 1; } }
+@keyframes generation-flow { to { stroke-dashoffset: -100; } }
+@keyframes generation-note-twinkle { 0%, 100% { opacity: .2; } 50% { opacity: .8; } }
+@keyframes generation-stage { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@media (max-width: 600px) {
+  #radio-console:has(.generation-room) .top-stage-nav { width: 100%; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  #radio-console:has(.generation-room) .top-stage { min-width: 0; padding-inline: 2px; }
+  #radio-console:has(.generation-room) .top-stage:not(.top-stage-active) .top-stage-copy { display: none !important; }
+  #radio-console .generation-room { padding: 24px 4px; }
+  #radio-console .generation-eyebrow { font-size: 8px; letter-spacing: .12em; }
+  #radio-console .generation-heading h2 { font-size: 25px; }
+  #radio-console .generation-art { height: 220px; margin-block: 8px 20px; }
+  #radio-console .generation-progress ol { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 18px; }
+  #radio-console .generation-description { max-width: 280px; margin: 12px auto 28px; }
+}
+@media (prefers-reduced-motion: reduce) { #radio-console .generation-room *, #radio-console .generation-room *::after { animation: none !important; } #radio-console .active .generation-step-track::after { background: #8bdde3; opacity: .5; } }

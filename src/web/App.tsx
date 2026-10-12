@@ -1,3 +1,4 @@
+import ProgramGeneration from "./ProgramGeneration";
 import {
   Activity,
   AlertTriangle,
@@ -6,12 +7,15 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Disc3,
   Download,
   ExternalLink,
   HardDrive,
   Heart,
+  Home,
   Info,
   ListMusic,
   BookOpen,
@@ -23,6 +27,7 @@ import {
   RefreshCw,
   RotateCcw,
   Settings2,
+  ShieldCheck,
   SkipForward,
   SlidersHorizontal,
   Sparkles,
@@ -159,7 +164,7 @@ interface MusicApiStatusResponse {
 }
 
 interface AiConfigStatus {
-  llm: { provider: "openai" | "deepseek" | "qwen" | "anthropic" | "gemini" | "custom"; model: string; reviewModel?: string; reasoningEffort?: "low" | "medium" | "high"; baseUrl?: string; hasKey: boolean };
+  llm: { provider: "openai" | "deepseek" | "anthropic" | "gemini" | "custom"; model: string; reviewModel?: string; reasoningEffort?: "low" | "medium" | "high"; baseUrl?: string; hasKey: boolean };
   tts: { provider: "qwen" | "openai" | "azure"; model: string; voice: string; baseUrl?: string; region?: string; workspaceId?: string; hasKey: boolean };
 }
 
@@ -238,6 +243,7 @@ interface LocalProgramDefaults {
   hostProfile?: HostProfileId;
   musicGenres?: MusicGenreId[];
   desktopPetEnabled?: boolean;
+  desktopPetProfile?: HostProfileId;
   familiarityRatio?: number;
 }
 
@@ -254,8 +260,9 @@ function normalizeLocalProgramDefaults(input: unknown): LocalProgramDefaults {
       ? value.recommendationMode as RecommendationMode
       : (musicGenres?.length ?? 0) > 0 ? "genre" : undefined;
     const desktopPetEnabled = typeof value.desktopPetEnabled === "boolean" ? value.desktopPetEnabled : undefined;
+    const desktopPetProfile = HOST_PROFILE_IDS.includes(value.desktopPetProfile as HostProfileId) ? value.desktopPetProfile as HostProfileId : undefined;
     const familiarityRatio = typeof value.familiarityRatio === "number" && Number.isFinite(value.familiarityRatio) ? Math.max(0, Math.min(100, value.familiarityRatio)) : undefined;
-    return { sourceId, durationMinutes, recommendationMode, scenePreset, hostDensity, hostProfile, musicGenres, desktopPetEnabled, familiarityRatio };
+    return { sourceId, durationMinutes, recommendationMode, scenePreset, hostDensity, hostProfile, musicGenres, desktopPetEnabled, desktopPetProfile, familiarityRatio };
   } catch {
     return {};
   }
@@ -589,6 +596,7 @@ function mergePolledProgram(current: LocalProgram, remote: ProgramState): LocalP
 function canMergeRemoteProgram(current: LocalProgram, remote: ProgramState): boolean {
   if (current.id !== remote.id || remote.generation < current.generation) return false;
   if (remote.generation > current.generation) return true;
+  if ((remote.planRevision ?? 0) < (current.planRevision ?? 0)) return false;
   const statusRank = (status: ProgramState["status"]) => {
     if (status === "draft" || status === "awaiting_confirmation") return 0;
     if (status === "preparing") return 1;
@@ -682,6 +690,8 @@ function App() {
   const landingFocusPendingRef = useRef(false);
   const [view, setView] = useState<View>("setup");
   const [setupPhase, setSetupPhase] = useState<"connect" | "settings">("connect");
+  const [setupInitialProgramStep, setSetupInitialProgramStep] = useState<"host" | "parameters">("host");
+  const [setupSession, setSetupSession] = useState(0);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("accounts");
   const [sources, setSources] = useState<SourceDiagnostic[]>(FALLBACK_SOURCES.filter((source) => USER_SOURCE_IDS.includes(source.sourceId as (typeof USER_SOURCE_IDS)[number])));
   const [sourceTransport, setSourceTransport] = useState<TransportState>("loading");
@@ -690,10 +700,11 @@ function App() {
   const [durationMinutes, setDurationMinutes] = useState<number>(initialProgramDefaults.durationMinutes ?? 30);
   const [recommendationMode, setRecommendationMode] = useState<RecommendationMode>(initialProgramDefaults.recommendationMode ?? ((initialProgramDefaults.musicGenres?.length ?? 0) > 0 ? "genre" : "atmosphere"));
   const [scenePreset, setScenePreset] = useState<ScenePreset>(initialProgramDefaults.scenePreset ?? "late_night");
-  const [hostDensity, setHostDensity] = useState<ProgramSpec["hostDensity"]>(initialProgramDefaults.hostDensity ?? "low");
+  const [hostDensity, setHostDensity] = useState<ProgramSpec["hostDensity"]>(initialProgramDefaults.hostDensity ?? "high");
   const [hostProfile, setHostProfile] = useState<HostProfileId>(initialProgramDefaults.hostProfile ?? DEFAULT_HOST_PROFILE);
   const [musicGenres, setMusicGenres] = useState<MusicGenreId[]>(initialProgramDefaults.musicGenres ?? []);
-  const [desktopPetEnabled, setDesktopPetEnabled] = useState(initialProgramDefaults.desktopPetEnabled ?? false);
+  const [desktopPetEnabled, setDesktopPetEnabled] = useState(initialProgramDefaults.desktopPetEnabled ?? true);
+  const desktopPetProfile = hostProfile;
   const [familiarityRatio, setFamiliarityRatio] = useState(initialProgramDefaults.familiarityRatio ?? 40);
   const [audioOutputId, setAudioOutputId] = useState(() => window.localStorage.getItem(LOCAL_AUDIO_OUTPUT_KEY) || "default");
   const [program, setProgram] = useState<LocalProgram | null>(null);
@@ -724,6 +735,9 @@ function App() {
   const [musicApiStatus, setMusicApiStatus] = useState<Partial<Record<ApiMusicSource, MusicApiStatusResponse["status"]>>>({});
   const [musicQrLogin, setMusicQrLogin] = useState<({ sourceId: ApiMusicSource } & MusicQrLogin) | null>(null);
   const [musicLoginPending, setMusicLoginPending] = useState(false);
+  const musicLoginBusyRef = useRef(false);
+  const musicLoginVersionRef = useRef(0);
+  const stopBusyRef = useRef(false);
   const [musicPreferencesState, setMusicPreferencesState] = useState<TransportState>("idle");
   const [aiConfig, setAiConfig] = useState<AiConfigStatus | null>(null);
   const [aiConfigPending, setAiConfigPending] = useState(true);
@@ -733,6 +747,9 @@ function App() {
   const [localOnboardingComplete, setLocalOnboardingComplete] = useState(() => window.localStorage.getItem(LOCAL_ONBOARDING_COMPLETE_KEY) === "true");
   const [connectionReviewOpen, setConnectionReviewOpen] = useState(false);
   const [voicePreviewProfile, setVoicePreviewProfile] = useState<HostProfileId | null>(null);
+  const [voicePreviewLoading, setVoicePreviewLoading] = useState(false);
+  const [audioActionPending, setAudioActionPending] = useState(false);
+  const audioActionBusyRef = useRef(false);
   const [processComplete, setProcessComplete] = useState(false);
   const [processCompletedSteps, setProcessCompletedSteps] = useState(0);
   const setNotice = useCallback((message: string | null) => {
@@ -766,6 +783,7 @@ function App() {
     }
     voicePreviewBusyRef.current = false;
     setVoicePreviewProfile(null);
+    setVoicePreviewLoading(false);
   }, []);
   const audioTokenRef = useRef(0);
   const musicAudioTokenRef = useRef(0);
@@ -795,6 +813,8 @@ function App() {
   const sourceRefreshTokenRef = useRef(0);
   const sourceAutoSelectDoneRef = useRef(false);
   const createOperationRef = useRef<{ id: string; spec: string } | null>(null);
+  const generationRunRef = useRef<{ id: string; cancelled: boolean } | null>(null);
+  const [generationCancelling, setGenerationCancelling] = useState(false);
   const currentAudioModeRef = useRef<{ mode: "fixture" | "host"; key: string; sourceId?: DesktopPlayerSource } | null>(null);
   const programRef = useRef<LocalProgram | null>(null);
   const desktopPetRevisionRef = useRef(0);
@@ -837,12 +857,13 @@ function App() {
         hostProfile,
         musicGenres: recommendationMode === "genre" ? musicGenres.slice(0, MAX_MUSIC_GENRES) : [],
         desktopPetEnabled,
+        desktopPetProfile,
         familiarityRatio,
       } satisfies LocalProgramDefaults));
     } catch {
       // The current session remains usable when browser storage is unavailable.
     }
-  }, [desktopPetEnabled, durationMinutes, familiarityRatio, hostDensity, hostProfile, localOnboardingComplete, musicGenres, recommendationMode, scenePreset, selectedSource]);
+  }, [desktopPetEnabled, desktopPetProfile, durationMinutes, familiarityRatio, hostDensity, hostProfile, localOnboardingComplete, musicGenres, recommendationMode, scenePreset, selectedSource]);
 
   const selectedDiagnostic = sources.find((source) => source.sourceId === selectedSource)
     ?? FALLBACK_SOURCES.find((source) => source.sourceId === selectedSource)
@@ -876,6 +897,10 @@ function App() {
                   : null;
   const canCreate = createBlocker === null && !isCreating;
   const broadcastNavigationLocked = isBroadcastNavigationLocked(program?.status);
+  const recommendationPending = Boolean(program && isApiMusicSource(program.spec.sourceId) && !program.localOnly
+    && ["draft", "awaiting_confirmation"].includes(program.status)
+    && (program.playlistRecommendation?.status !== "ready" || !program.playlistRecommendation.text?.trim()));
+  const displayView = view === "confirm" && recommendationPending ? "generating" : view;
   const programActive = Boolean(program && ["preparing", "on_air", "closing"].includes(program.status));
   const remainingSeconds = useMemo(() => {
     if (!program) return 0;
@@ -1290,7 +1315,7 @@ function App() {
     }
   }, [duckPlayerVolume, duckWebMusic, program?.currentTrack, restorePlayerVolume, restoreWebMusic, setAudioFromSource, startMusicBehindHost]);
 
-  const toggleAudio = useCallback(() => {
+  const toggleAudio = useCallback(async () => {
     const music = musicAudioRef.current;
     if (!music) return;
     if (music.paused) {
@@ -1299,17 +1324,31 @@ function App() {
         return;
       }
       if (pending) {
-        void setMusicFromSource(pending.url, pending.key);
+        await setMusicFromSource(pending.url, pending.key);
       } else if (music.currentSrc) {
-        void playMusic(music).catch(() => setAudioNeedsGesture(true));
+        await playMusic(music).catch(() => setAudioNeedsGesture(true));
       } else if (fixtureAudioRef.current) {
-        void setMusicFromSource(fixtureAudioRef.current.url, fixtureAudioRef.current.key);
+        await setMusicFromSource(fixtureAudioRef.current.url, fixtureAudioRef.current.key);
       }
       return;
     }
     music.pause();
     setAudioPlaying(false);
   }, [audioNeedsGesture, setMusicFromSource]);
+
+  const runAudioAction = async (action: () => Promise<void>) => {
+    if (audioActionBusyRef.current) return;
+    audioActionBusyRef.current = true;
+    setAudioActionPending(true);
+    try {
+      await action();
+    } catch {
+      setAudioError("播放操作未完成，请重试。");
+    } finally {
+      audioActionBusyRef.current = false;
+      setAudioActionPending(false);
+    }
+  };
 
   const refreshSources = useCallback(async () => {
     const refreshToken = ++sourceRefreshTokenRef.current;
@@ -1497,11 +1536,15 @@ function App() {
       voicePreviewAudioRef.current = null;
     }
     setVoicePreviewProfile(profileId);
+    setVoicePreviewLoading(true);
     setLastError(null);
     let preview: HTMLAudioElement | null = null;
     try {
       preview = new Audio(hostPreviewUrl(profileId));
       voicePreviewAudioRef.current = preview;
+      preview.addEventListener("playing", () => {
+        if (voicePreviewAudioRef.current === preview) setVoicePreviewLoading(false);
+      }, { once: true });
       await new Promise<void>((resolve, reject) => {
         const finish = () => resolve();
         preview!.addEventListener("ended", finish, { once: true });
@@ -1509,20 +1552,24 @@ function App() {
         void preview!.play().catch(reject);
       });
     } catch (error) {
-      setLastError(error instanceof Error ? error.message : "声线试听失败。");
+      if (voicePreviewAudioRef.current === preview) setLastError(error instanceof Error ? error.message : "声线试听失败。");
     } finally {
       if (preview && voicePreviewAudioRef.current === preview) {
         preview.pause();
         preview.removeAttribute("src");
         preview.load();
         voicePreviewAudioRef.current = null;
+        voicePreviewBusyRef.current = false;
+        setVoicePreviewProfile(null);
+        setVoicePreviewLoading(false);
       }
-      voicePreviewBusyRef.current = false;
-      setVoicePreviewProfile(null);
     }
   }, [cancelVoicePreview, voicePreviewProfile]);
 
   const startMusicLogin = useCallback(async (sourceId: ApiMusicSource) => {
+    if (musicLoginBusyRef.current) return;
+    musicLoginBusyRef.current = true;
+    const version = ++musicLoginVersionRef.current;
     setMusicLoginPending(true);
     setLastError(null);
     try {
@@ -1530,17 +1577,28 @@ function App() {
         method: "POST",
         body: sourceId === "qq_music" ? JSON.stringify({ loginType: "mobile" satisfies QqLoginType }) : undefined,
       });
+      if (version !== musicLoginVersionRef.current) return;
       if (!payload.login?.key || !payload.login.qrImageDataUrl) throw new Error(`未生成${SOURCE_LABELS[sourceId]}登录二维码。`);
       setMusicQrLogin({ ...payload.login, sourceId, ...(sourceId === "qq_music" ? { loginType: "mobile" as const } : {}), state: "waiting_scan" });
     } catch (error) {
-      setLastError(error instanceof Error ? error.message : `${SOURCE_LABELS[sourceId]}登录启动失败。`);
+      if (version === musicLoginVersionRef.current) setLastError(error instanceof Error ? error.message : `${SOURCE_LABELS[sourceId]}登录启动失败。`);
     } finally {
-      setMusicLoginPending(false);
+      if (version === musicLoginVersionRef.current) {
+        musicLoginBusyRef.current = false;
+        setMusicLoginPending(false);
+      }
     }
   }, []);
 
+  const cancelMusicLogin = () => {
+    musicLoginVersionRef.current += 1;
+    musicLoginBusyRef.current = false;
+    setMusicLoginPending(false);
+    setMusicQrLogin(null);
+  };
+
   useEffect(() => {
-    if (!musicQrLogin) return;
+    if (!musicQrLogin || musicLoginPending) return;
     let disposed = false;
     let checking = false;
     const check = async () => {
@@ -1572,7 +1630,7 @@ function App() {
     void check();
     const timer = window.setInterval(() => void check(), 2_000);
     return () => { disposed = true; window.clearInterval(timer); };
-  }, [musicQrLogin?.key, musicQrLogin?.sourceId, musicQrLogin?.loginType, refreshMusicStatus, refreshSources]);
+  }, [musicQrLogin?.key, musicQrLogin?.sourceId, musicQrLogin?.loginType, musicLoginPending, refreshMusicStatus, refreshSources]);
 
   useEffect(() => {
     if (musicQrLogin?.sourceId === "qq_music" && musicQrLogin.loginType !== "mobile") {
@@ -1725,7 +1783,7 @@ function App() {
   }, [duckWebMusic, program?.id, program?.localOnly, program?.status, remainingSeconds, restoreWebMusic, setNotice]);
 
   useEffect(() => {
-    if (!programActive || !program?.id) return;
+    if ((!programActive && !recommendationPending) || !program?.id) return;
     let disposed = false;
     const poll = async () => {
       if (program.localOnly) return;
@@ -1766,7 +1824,7 @@ function App() {
       programPollRequestRef.current?.abort();
       programPollRequestRef.current = null;
     };
-  }, [program?.id, program?.localOnly, programActive, stopAudio]);
+  }, [program?.id, program?.localOnly, program?.status, program?.playlistRecommendation?.status, programActive, recommendationPending, stopAudio]);
 
   useEffect(() => {
     if (!programActive || !program?.id || program.localOnly || isNexting || isStopping) return;
@@ -2103,6 +2161,7 @@ function App() {
     const effectiveScenePreset = recommendationMode === "genre" ? GENRE_MODE_DEFAULT_SCENE : scenePreset;
     return {
       ...makeSpec(selectedSource, durationMinutes, recommendationMode, effectiveScenePreset, hostDensity, hostProfile, musicGenres, desktopPetEnabled),
+      desktopPetProfile,
       familiarityRatio,
     };
   };
@@ -2126,6 +2185,8 @@ function App() {
     const serializedSpec = JSON.stringify(spec);
     const operationId = createOperationRef.current?.spec === serializedSpec ? createOperationRef.current.id : makeId("create");
     createOperationRef.current = { id: operationId, spec: serializedSpec };
+    const run = { id: operationId, cancelled: false };
+    generationRunRef.current = run;
     const progressController = new AbortController();
     const monitorProgress = async () => {
       while (!progressController.signal.aborted) {
@@ -2144,6 +2205,7 @@ function App() {
     const progressPromise = monitorProgress();
     try {
       const payload = await fetchJson<unknown>("/programs", { method: "POST", body: JSON.stringify({ spec, operationId }) });
+      if (run.cancelled) return;
       const remote = readProgramPayload(payload);
       if (!remote) throw new Error("服务返回了无效节目");
       const nextProgram: LocalProgram = { ...remote, report: [{ id: makeId("event"), at: nowIso(), label: "计划已创建", detail: "确认前不会生成口播或发送播放指令。", tone: "success" }] };
@@ -2154,10 +2216,13 @@ function App() {
       setProcessCompletedSteps(4);
       setProcessComplete(true);
       await new Promise((resolve) => window.setTimeout(resolve, 520));
+      if (run.cancelled) return;
       setView(viewForProgramStatus(remote.status));
     } catch (error) {
+      if (run.cancelled) return;
       try {
         const current = readProgramPayload(await fetchJson<unknown>("/program"));
+        if (run.cancelled) return;
         if (current && JSON.stringify(current.spec) === JSON.stringify(spec)) {
           const nextProgram: LocalProgram = { ...current, report: [{ id: makeId("event"), at: nowIso(), label: "计划已恢复", detail: "创建响应中断后已从本地服务找回计划。", tone: "warning" }] };
           programRef.current = nextProgram;
@@ -2167,6 +2232,7 @@ function App() {
           setProcessCompletedSteps(4);
           setProcessComplete(true);
           await new Promise((resolve) => window.setTimeout(resolve, 520));
+          if (run.cancelled) return;
           setView(viewForProgramStatus(current.status));
           return;
         }
@@ -2214,6 +2280,8 @@ function App() {
     setView("preparing");
     setLastError(null);
     const operationId = makeId("confirm");
+    const run = { id: operationId, cancelled: false };
+    generationRunRef.current = run;
     const confirmController = new AbortController();
     const observationController = new AbortController();
     const progressController = new AbortController();
@@ -2248,6 +2316,7 @@ function App() {
       ]);
       if (!remote) throw new Error("服务返回了无效确认结果");
       if (remote.status === "preparing") remote = await waitForConfirmedProgram(program.id, observationController.signal);
+      if (run.cancelled) return;
       confirmController.abort();
       observationController.abort();
       setProgram((current) => {
@@ -2258,12 +2327,14 @@ function App() {
       setProcessCompletedSteps(4);
       setProcessComplete(true);
       await new Promise((resolve) => window.setTimeout(resolve, 320));
+      if (run.cancelled) return;
       setView(viewForProgramStatus(remote.status));
       if (!["preparing", "on_air", "closing"].includes(remote.status)) setLastError(remote.error ?? "节目已结束，不能再次启动。");
       await refreshSources();
     } catch (error) {
       confirmController.abort();
       observationController.abort();
+      if (run.cancelled) return;
       if (["HOST_PROVIDER_ERROR", "TTS_PROVIDER_ERROR"].includes((error as { code?: string } | null)?.code ?? "")) {
         setFailedHostPlan(`${program.id}:${program.generation}:${program.planRevision ?? 0}`);
       }
@@ -2274,6 +2345,7 @@ function App() {
       }
       try {
         const remote = await fetchProgramWithTimeout(program.id, 5_000);
+        if (run.cancelled) return;
         if (!remote) throw new Error("未观察到确认结果");
         setProgram((current) => {
           if (!current) return current;
@@ -2300,9 +2372,48 @@ function App() {
         setView("confirm");
       }
     } finally {
+      confirmController.abort();
+      observationController.abort();
       progressController.abort();
       await progressPromise;
       setIsConfirming(false);
+    }
+  };
+
+  const cancelGeneration = async () => {
+    if (generationCancelling) return;
+    const preparing = view === "preparing";
+    const run = generationRunRef.current ?? { id: makeId("cancel-generation"), cancelled: false };
+    run.cancelled = true;
+    generationRunRef.current = run;
+    setGenerationCancelling(true);
+    setLastError(null);
+    try {
+      const payload = await fetchJson<{ cancelled: boolean; program: ProgramState | null }>("/programs/cancel-generation", {
+        method: "POST", body: JSON.stringify({ operationId: run.id, mode: preparing ? "preparing" : "generating", programId: programRef.current?.id }),
+      });
+      if (!payload.cancelled) throw new Error("未能确认取消，请重试。");
+      if (preparing && payload.program) {
+        const restored = { ...payload.program, report: programRef.current?.report ?? [] };
+        programRef.current = restored;
+        setProgram(restored);
+        setView("confirm");
+      } else {
+        programRef.current = null;
+        resetDraft();
+        createOperationRef.current = null;
+        setSetupPhase("settings");
+        setSetupInitialProgramStep("parameters");
+        setSetupSession((session) => session + 1);
+      }
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : "取消失败，请重试。");
+      const remote = await fetchProgramWithTimeout(programRef.current?.id ?? "", 5_000).catch(() => null);
+      if (remote) { setProgram({ ...remote, report: programRef.current?.report ?? [] }); setView(viewForProgramStatus(remote.status)); }
+    } finally {
+      setIsCreating(false);
+      setIsConfirming(false);
+      setGenerationCancelling(false);
     }
   };
 
@@ -2532,29 +2643,29 @@ function App() {
   };
 
   const handleStop = async () => {
-    if (!program || isStopping || ["stopped", "completed", "failed", "stop_unconfirmed"].includes(program.status)) return;
+    if (!program || stopBusyRef.current || isStopping || ["stopped", "completed", "failed", "stop_unconfirmed"].includes(program.status)) return;
+    stopBusyRef.current = true;
     heartbeatRequestRef.current?.abort();
     setIsStopping(true);
     setLastError(null);
     const operationId = makeId("stop");
     // Finish any active TTS duck lease before asking the service to stop the program.
     // This prevents a late restore response from racing the desktop stop command.
-    await stopAudio({ waitForRestore: true });
-    if (program.localOnly) {
-      setProgram((current) => current ? {
-        ...current,
-        status: "stopped",
-        remainingSeconds,
-        host: current.host ? { ...current.host, status: "skipped" } : null,
-        report: [...current.report, { id: makeId("event"), at: nowIso(), label: "节目已停止", detail: `用户确认停止 · 操作 ${operationId}`, tone: "success" }],
-      } : current);
-      setAudioPlaying(false);
-      setView("ended");
-      setNotice(null);
-      setIsStopping(false);
-      return;
-    }
     try {
+      await stopAudio({ waitForRestore: true });
+      if (program.localOnly) {
+        setProgram((current) => current ? {
+          ...current,
+          status: "stopped",
+          remainingSeconds,
+          host: current.host ? { ...current.host, status: "skipped" } : null,
+          report: [...current.report, { id: makeId("event"), at: nowIso(), label: "节目已停止", detail: `用户确认停止 · 操作 ${operationId}`, tone: "success" }],
+        } : current);
+        setAudioPlaying(false);
+        setView("ended");
+        setNotice(null);
+        return;
+      }
       const payload = await fetchJson<unknown>(`/programs/${program.id}/stop`, {
         method: "POST",
         body: JSON.stringify({ generation: program.generation, operationId }),
@@ -2566,34 +2677,61 @@ function App() {
     } catch (error) {
       setLastError(error instanceof Error ? error.message : "停止未能确认");
     } finally {
+      stopBusyRef.current = false;
       setIsStopping(false);
     }
   };
 
-  const handleExitProgram = async () => {
-    if (!program || isStopping) return;
-    if (["stopped", "completed", "failed", "stop_unconfirmed"].includes(program.status)) {
-      resetDraft();
+  const handleReturnHome = () => {
+    if (isCreating || isStopping || isConfirming || planUpdating || broadcastNavigationLocked) return;
+    if (program) {
+      void handleExitProgram(true);
       return;
     }
+    cancelVoicePreview();
+    resetDraft();
+    setSetupPhase("settings");
+    setSetupInitialProgramStep("host");
+    setSetupSession((session) => session + 1);
+    setShowLanding(false);
+  };
+
+  const handleExitProgram = async (restartFromHost = false) => {
+    if (!program || isStopping || isConfirming || planUpdating) return;
+    cancelVoicePreview();
+    const finishExit = () => {
+      resetDraft();
+      if (view === "confirm") setSetupPhase("settings");
+      if (restartFromHost) {
+        setSetupPhase("settings");
+        setSetupInitialProgramStep("host");
+        setSetupSession((session) => session + 1);
+        setShowLanding(false);
+      }
+    };
     setIsStopping(true);
     setLastError(null);
     try {
+      if (["stopped", "completed", "failed", "control_lost", "stop_unconfirmed"].includes(program.status)) {
+        await stopAudio({ waitForRestore: true });
+        finishExit();
+        return;
+      }
       const operationId = makeId("exit-program");
       const payload = await fetchJson<unknown>(`/programs/${program.id}/stop`, {
         method: "POST",
         body: JSON.stringify({ generation: program.generation, operationId }),
       });
       const remote = readProgramPayload(payload);
-      if (!remote || !["stopped", "completed", "failed", "stop_unconfirmed"].includes(remote.status)) throw new Error("退出节目未能确认");
+      if (!remote || !["stopped", "completed", "failed", "control_lost", "stop_unconfirmed"].includes(remote.status)) throw new Error("退出节目未能确认");
       await stopAudio({ waitForRestore: true });
-      resetDraft();
+      finishExit();
     } catch (error) {
       try {
         const remote = readProgramPayload(await fetchJson<unknown>(`/programs/${program.id}`));
-        if (remote && ["stopped", "completed", "failed", "stop_unconfirmed"].includes(remote.status)) {
+        if (remote && ["stopped", "completed", "failed", "control_lost", "stop_unconfirmed"].includes(remote.status)) {
           await stopAudio({ waitForRestore: true });
-          resetDraft();
+          finishExit();
           setNotice("退出响应中断，但服务状态已完成对账。你可以重新创建节目。");
           return;
         }
@@ -2601,7 +2739,7 @@ function App() {
       } catch (reconcileError) {
         if (reconcileError instanceof Error && (reconcileError as Error & { code?: string }).code === "PROGRAM_NOT_FOUND") {
           await stopAudio({ waitForRestore: true });
-          resetDraft();
+          finishExit();
           setNotice("节目已不在本地服务中，你可以重新创建节目。");
           return;
         }
@@ -2639,7 +2777,6 @@ function App() {
     if (view === "settings") return <LocalSettingsView
       section={settingsSection}
       onSectionChange={setSettingsSection}
-      onClose={() => setView(program ? viewForProgramStatus(program.status) : settingsReturnViewRef.current === "settings" ? "setup" : settingsReturnViewRef.current)}
       sources={sources}
       sourceTransport={sourceTransport}
       health={health}
@@ -2648,10 +2785,9 @@ function App() {
       musicLoginPending={musicLoginPending}
       onStartMusicLogin={(sourceId) => void startMusicLogin(sourceId)}
       onRefreshMusicLogin={(sourceId) => {
-        setMusicQrLogin(null);
         void startMusicLogin(sourceId);
       }}
-      onCancelMusicLogin={() => setMusicQrLogin(null)}
+      onCancelMusicLogin={cancelMusicLogin}
       aiConfig={aiConfig}
       aiConfigPending={aiConfigPending}
       onRefreshAiConfig={() => void refreshAiConfig()}
@@ -2661,7 +2797,7 @@ function App() {
       invitationAccess={invitationAccess}
       invitationPending={invitationPending}
       onClaimInvitation={claimInvitation}
-      onRefreshAll={() => { void refreshSources(); void refreshHealth(); void refreshMusicStatus(); void refreshAiConfig(); void refreshInvitationAccess(true); }}
+      onRefreshAll={async () => { await Promise.all([refreshSources(), refreshHealth(), refreshMusicStatus(), refreshAiConfig(), refreshInvitationAccess(true)]); }}
       desktopPetEnabled={desktopPetEnabled}
       onDesktopPetEnabledChange={setDesktopPetEnabled}
       audioOutputId={audioOutputId}
@@ -2669,8 +2805,8 @@ function App() {
       onNotice={setNotice}
       onError={setLastError}
     />;
-    if (view === "generating") return <ProcessView mode="generating" complete={processComplete} completedSteps={processCompletedSteps} />;
-    if (view === "preparing") return <ProcessView mode="preparing" complete={processComplete} completedSteps={processCompletedSteps} />;
+    if (displayView === "generating") return <ProgramGeneration complete={!recommendationPending && processComplete} completedSteps={recommendationPending ? 3 : Math.min(3, processCompletedSteps)} onCancel={() => void cancelGeneration()} cancelling={generationCancelling} />;
+    if (view === "preparing") return <ProgramGeneration mode="preparing" complete={processComplete} completedSteps={Math.min(3, processCompletedSteps)} onCancel={() => void cancelGeneration()} cancelling={generationCancelling} />;
     if (view === "confirm" && program) {
       const canRetryHost = failedHostPlan === `${program.id}:${program.generation}:${program.planRevision ?? 0}`;
       const diagnostic = sources.find((source) => source.sourceId === program.spec.sourceId);
@@ -2690,7 +2826,7 @@ function App() {
       return <ConfirmView
         program={program}
         checks={checks}
-        onExit={() => void handleExitProgram()}
+        onExit={() => { setSetupInitialProgramStep("parameters"); void handleExitProgram(); }}
         onConfirm={canRetryHost ? () => void handleConfirm(keepPlaylist) : requestProgramConfirmation}
         canRetryHost={canRetryHost}
         confirming={isConfirming}
@@ -2716,10 +2852,11 @@ function App() {
           audioPlaying={audioPlaying}
           trackElapsedSeconds={trackElapsedSeconds}
           trackDurationSeconds={trackDurationSeconds}
-          onToggleAudio={toggleAudio}
+          onToggleAudio={() => void runAudioAction(toggleAudio)}
+          audioActionPending={audioActionPending}
           audioNeedsGesture={audioNeedsGesture}
           audioError={audioError}
-          onEnableAudio={() => void enableAudio()}
+          onEnableAudio={() => void runAudioAction(enableAudio)}
           hostPreviewPending={hostPreviewPending}
           likePending={likePendingTrackId === program.currentTrack?.id}
           onToggleCurrentLike={requestCurrentTrackLikeToggle}
@@ -2729,6 +2866,8 @@ function App() {
     }
     return (
       <SetupView
+        key={setupSession}
+        initialProgramStep={setupInitialProgramStep}
         phase={setupPhase}
         onPhaseChange={(phase) => {
           if (phase !== "settings") cancelVoicePreview();
@@ -2752,7 +2891,7 @@ function App() {
         recommendationMode={recommendationMode}
         onRecommendationModeChange={(mode) => setRecommendationMode(mode)}
         scenePreset={scenePreset}
-        onSceneChange={(scene) => { setScenePreset(scene); setHostDensity(SCENE_META[scene].density); }}
+        onSceneChange={setScenePreset}
         hostDensity={hostDensity}
         onDensityChange={setHostDensity}
         hostProfile={hostProfile}
@@ -2762,6 +2901,7 @@ function App() {
         }}
         musicGenres={musicGenres.slice(0, MAX_MUSIC_GENRES)}
         onMusicGenresChange={setMusicGenres}
+        desktopPetProfile={desktopPetProfile}
         desktopPetEnabled={desktopPetEnabled}
         onDesktopPetEnabledChange={setDesktopPetEnabled}
         familiarityRatio={familiarityRatio}
@@ -2782,10 +2922,9 @@ function App() {
         musicLoginPending={musicLoginPending}
         onStartMusicLogin={(sourceId) => void startMusicLogin(sourceId)}
         onRefreshMusicLogin={(sourceId) => {
-          setMusicQrLogin(null);
           void startMusicLogin(sourceId);
         }}
-        onCancelMusicLogin={() => setMusicQrLogin(null)}
+        onCancelMusicLogin={cancelMusicLogin}
         aiConfig={aiConfig}
         aiConfigPending={aiConfigPending}
         onRefreshAiConfig={() => void refreshAiConfig()}
@@ -2799,6 +2938,7 @@ function App() {
         onDismissError={() => setLastError(null)}
         onPreviewHost={(profileId) => void previewHostVoice(profileId)}
         voicePreviewProfile={voicePreviewProfile}
+        voicePreviewLoading={voicePreviewLoading}
       />
     );
   };
@@ -2814,27 +2954,25 @@ function App() {
     setShowLanding(false);
   }} />;
   return (
-    <div className={`app-shell${standalonePreparing ? " app-shell-preparing" : ""}`}>
+    <div id="radio-console" className={`app-shell${standalonePreparing ? " app-shell-preparing" : ""}`}>
+      <video className="app-background-video" src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260306_074215_04640ca7-042c-45d6-bb56-58b1e8a42489.mp4" autoPlay loop muted playsInline preload="metadata" aria-hidden="true" />
       <header className="topbar">
         <div className="brand-block">
-          <div className="brand-mark" aria-hidden="true"><img src="/brand/openmusicradio-icon-note-headphones.png" alt="" /></div>
-          <div className="brand-lockup">
-            <div className="brand-name brand-neon-wordmark" aria-label="OPEN MUSIC RADIO">
-              <span>OPEN MUSIC</span>
-              <strong>RADIO</strong>
-            </div>
-            <div className="brand-subtitle">LOCAL BROADCAST / OMR-01</div>
+          <div className="console-brand" role="img" aria-label="Open Music Radio">
+            <img className="console-brand-symbol" src="/brand/openmusicradio-logo-full.png" alt="" />
+            <span className="console-brand-type" aria-hidden="true"><strong>Open Music</strong><span>RADIO</span></span>
           </div>
         </div>
-        {view === "settings" ? <div className="topbar-context" aria-label="当前页面"><Settings2 size={15} /><span><strong>本机设置</strong><small>LOCAL CONFIG</small></span></div> : <nav className="top-stage-nav" aria-label="节目流程">
+        {view !== "settings" && <nav className="top-stage-nav" aria-label="节目流程">
           <TopStage index="01" label="连接平台" state={view === "setup" ? setupPhase === "connect" ? "active" : "done" : "done"} />
           <TopStage index="02" label="设置节目" state={view === "setup" ? setupPhase === "settings" ? "active" : "upcoming" : "done"} />
-          <TopStage index="03" label="生成节目" state={view === "generating" ? "active" : view === "setup" ? "upcoming" : "done"} />
-          <TopStage index="04" label="确认计划" state={view === "confirm" ? "active" : ["preparing", "on_air", "ended"].includes(view) ? "done" : "upcoming"} />
-          <TopStage index="05" label="播出中" state={["preparing", "on_air"].includes(view) ? "active" : view === "ended" ? "done" : "upcoming"} />
+          <TopStage index="03" label="生成节目" state={displayView === "generating" ? "active" : view === "setup" ? "upcoming" : "done"} />
+          <TopStage index="04" label="确认计划" state={["confirm", "preparing"].includes(displayView) ? "active" : ["on_air", "ended"].includes(view) ? "done" : "upcoming"} />
+          <TopStage index="05" label="播出中" state={view === "on_air" ? "active" : view === "ended" ? "done" : "upcoming"} />
         </nav>}
         <div className="topbar-actions">
-          <IconButton label={view === "settings" ? "返回节目" : broadcastNavigationLocked ? "节目切换中，暂不可打开设置" : "本机设置"} disabled={broadcastNavigationLocked} className={`topbar-tool topbar-tool-settings${view === "settings" ? " is-active" : ""}`} onClick={() => {
+          {(["confirm", "on_air", "ended"].includes(view) || (view === "setup" && setupPhase === "settings")) && <IconButton label="回首页" disabled={broadcastNavigationLocked || isCreating || isStopping || isConfirming || planUpdating} className="topbar-tool" onClick={handleReturnHome}><Home size={20} strokeWidth={1.8} /></IconButton>}
+          <IconButton label={view === "settings" ? "关闭设置" : broadcastNavigationLocked ? "节目切换中，暂不可打开设置" : "本机设置"} disabled={broadcastNavigationLocked} className={`topbar-tool topbar-tool-settings${view === "settings" ? " is-active" : ""}`} onClick={() => {
             if (broadcastNavigationLocked) return;
             if (view === "settings") {
               setView(program ? viewForProgramStatus(program.status) : settingsReturnViewRef.current === "settings" ? "setup" : settingsReturnViewRef.current);
@@ -2847,7 +2985,7 @@ function App() {
         </div>
       </header>
 
-      <div className={`page-frame view-${view}${view === "setup" ? ` setup-phase-${setupPhase}` : ""}${standalonePreparing ? " preparing-frame" : ""}`}>
+      <div className={`page-frame view-${displayView}${view === "setup" ? ` setup-phase-${setupPhase}` : ""}${standalonePreparing ? " preparing-frame" : ""}`}>
         <main className="main-content" tabIndex={-1}>
           {view !== "setup" && lastError && <div className="feedback-region"><ErrorBanner message={lastError} onDismiss={() => setLastError(null)} /></div>}
           {visibleNotice?.tone === "warning" && <div className="feedback-region"><NoticeBanner notice={visibleNotice} onDismiss={() => setNotice(null)} /></div>}
@@ -2861,7 +2999,7 @@ function App() {
       {playlistSavePromptOpen && program && isApiMusicSource(program.spec.sourceId) && (
         <PlaylistSaveDialog
           sourceId={program.spec.sourceId}
-          trackCount={program.rundown?.length ?? 0}
+          playlistName={program.playlist?.name ?? program.plannedPlaylistName}
           confirming={isConfirming}
           onKeep={() => confirmPlaylistSaveChoice(true)}
           onTemporary={() => confirmPlaylistSaveChoice(false)}
@@ -2945,80 +3083,69 @@ function App() {
 }
 
 function LandingPage({ onEnter }: { onEnter: () => void }) {
+  const landingRef = useRef<HTMLElement | null>(null);
+  const heroVideoRef = useRef<HTMLVideoElement | null>(null);
+  const scrubRef = useRef({ target: 0, frame: 0 });
+  useEffect(() => {
+    const video = heroVideoRef.current;
+    if (!video) return;
+    video.pause();
+    const onPointerMove = (event: PointerEvent) => {
+      const root = landingRef.current;
+      if (!root || event.pointerType === "touch") return;
+      const ratio = Math.max(0, Math.min(1, event.clientX / window.innerWidth));
+      if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+      video.pause();
+      scrubRef.current.target = ratio * Math.max(0, video.duration - 0.04);
+      if (!scrubRef.current.frame) {
+        const seek = () => {
+          scrubRef.current.frame = 0;
+          if (video.readyState >= 1) video.currentTime = scrubRef.current.target;
+        };
+        scrubRef.current.frame = window.requestAnimationFrame(seek);
+      }
+    };
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      if (scrubRef.current.frame) window.cancelAnimationFrame(scrubRef.current.frame);
+    };
+  }, []);
   return (
-    <main className="radio-landing">
-      <div className="landing-cyber-grid" aria-hidden="true" />
-      <div className="landing-particles" aria-hidden="true">
-        {Array.from({ length: 18 }, (_, index) => <i key={index} style={{
-          "--particle-x": `${(index * 37 + 7) % 100}%`,
-          "--particle-y": `${(index * 53 + 11) % 94}%`,
-          "--particle-delay": `${-(index % 13) * 0.41}s`,
-          "--particle-drift": `${18 + (index % 7) * 9}px`,
-          "--particle-duration": `${4.8 + (index % 6) * 0.55}s`,
-        } as CSSProperties} />)}
+    <main ref={landingRef} className="aurai-landing">
+      <video ref={heroVideoRef} className="aurai-video" src="/media/future-radio-host-2k.mp4" muted playsInline preload="auto" />
+      <div className="aurai-content">
+        <nav className="aurai-nav"><div className="aurai-brand"><div className="console-brand" role="img" aria-label="Open Music Radio"><img className="console-brand-symbol" src="/brand/openmusicradio-logo-full.png" alt="" /><span className="console-brand-type" aria-hidden="true"><strong>Open Music</strong><span>RADIO</span></span></div></div></nav>
+        <div className="aurai-spacer" /><section className="aurai-hero-copy"><div><h1>Your Personal<br />AI Radio</h1><p className="aurai-hero-subtitle">A private AI music radio for every listening moment.</p><p className="aurai-hero-note">Connect your music, choose a mood, and let your host shape the sound around you.</p><button className="aurai-journey-button" type="button" onClick={onEnter}>ENTER THE JOURNEY <ArrowRight size={16} /></button></div></section>
       </div>
-      <header className="landing-header">
-        <div className="landing-system"><StatusDot tone="ready" />LOCAL AI BROADCAST SYSTEM</div>
-        <div className="landing-channel">SIGNAL /// 001</div>
-      </header>
-      <section className="landing-stage" aria-labelledby="landing-title">
-        <div className="landing-title-block">
-          <div className="landing-kicker-row"><span className="landing-kicker">PRIVATE SIGNAL</span><span className="landing-frequency">FM 001.0</span></div>
-          <h1 id="landing-title" className="landing-wordmark" aria-label="OPEN MUSIC RADIO">
-            <span className="landing-wordmark-open" data-text="OPEN MUSIC">OPEN MUSIC</span>
-            <strong data-text="RADIO">RADIO</strong>
-          </h1>
-          <p>把今晚调到你的频率。</p>
-          <div className="landing-capabilities" aria-label="本机电台能力">
-            <span><b>01</b><strong>LOCAL MUSIC</strong><small>授权音乐源</small></span>
-            <span><b>02</b><strong>AI HOST</strong><small>个性化主持</small></span>
-            <span><b>03</b><strong>PRIVATE MODE</strong><small>本机运行</small></span>
-          </div>
-          <button className="landing-play" type="button" onClick={onEnter} aria-label="进入 OPEN MUSIC RADIO 连接平台">
-            <span className="landing-play-icon"><Play size={17} fill="currentColor" /></span>
-            <span><strong>ENTER BROADCAST</strong><small>进入控制台</small></span>
-          </button>
-        </div>
-        <div className="landing-entry-console">
-          <div className="landing-crt" aria-hidden="true">
-            <div className="landing-crt-bezel">
-              <div className="landing-crt-screen">
-                <div className="landing-crt-readout"><span>OMR://PRIVATE-BAND</span><strong>001.0</strong></div>
-                <div className="landing-hacker-terminal">
-                  <div className="landing-terminal-lines">
-                    <span><b>OMR@LOCAL</b>:~$ init broadcast</span>
-                    <span><em>[NODE]</em> LOCAL AUDIO BUS / STANDBY</span>
-                    <span><em>[ROUTER]</em> PRIVATE SIGNAL / IDLE</span>
-                    <span><em>[HOST]</em> VOICE CHANNEL / UNLINKED</span>
-                    <span className="landing-terminal-prompt">&gt; AWAITING OPERATOR_<i /></span>
-                  </div>
-                  <div className="landing-terminal-spectrum">{Array.from({ length: 29 }, (_, index) => <i key={index} style={{ "--bar": index } as CSSProperties} />)}</div>
-                </div>
-                <div className="landing-crt-lock"><span>LOCAL SIGNAL</span><b>STANDBY</b></div>
-              </div>
-              <div className="landing-crt-deck">
-                <span className="landing-crt-led" />
-                <span className="landing-crt-knob" />
-                <span className="landing-crt-segments"><i /><i /><i /><i /></span>
-                <span className="landing-crt-level"><i /></span>
-              </div>
-            </div>
-          </div>
-          <div className="landing-console-status" aria-hidden="true">
-            <span><b>BUS</b> LOCAL</span><span><b>HOST</b> STANDBY</span><span><b>OUT</b> PRIVATE</span>
-          </div>
-        </div>
-      </section>
-      <div className="landing-route" aria-hidden="true">
-        <span><b>01</b> CONNECT SOURCE</span><i /><span><b>02</b> BUILD PROGRAM</span><i /><span><b>03</b> OPEN BROADCAST</span>
-      </div>
-      <footer className="landing-footer"><span>NEXT / CONNECT</span><span>OPEN MUSIC RADIO / LOCAL MODE</span><span>{new Date().getFullYear()}</span></footer>
     </main>
   );
 }
 
+function WorkflowHeading({ step, title, description, headingRef }: { step?: string; title: string; description?: string; headingRef?: React.Ref<HTMLHeadingElement> }) {
+  return <div className="workflow-heading">
+    {step && <p className="workflow-heading-step">{step}</p>}
+    <h2 ref={headingRef} tabIndex={headingRef ? -1 : undefined}>{title}</h2>
+    {description && <p className="workflow-heading-description">{description}</p>}
+  </div>;
+}
+
 function TopStage({ index, label, state }: { index: string; label: string; state: "active" | "done" | "upcoming" }) {
-  return <span className={`top-stage top-stage-${state}`} aria-current={state === "active" ? "step" : undefined}><span className="top-stage-index"><small>CH</small><strong>{index}</strong></span><span className="top-stage-copy"><strong>{label}</strong></span>{state === "done" && <Check size={11} className="top-stage-check" aria-hidden="true" />}</span>;
+  const icon = label === "连接平台"
+    ? <Wifi size={14} strokeWidth={1.8} />
+    : label === "设置节目"
+      ? <SlidersHorizontal size={14} strokeWidth={1.8} />
+      : label === "生成节目"
+        ? <Sparkles size={14} strokeWidth={1.8} />
+        : label === "确认计划"
+          ? <ListMusic size={14} strokeWidth={1.8} />
+          : <Activity size={14} strokeWidth={1.8} />;
+  return <span className={`top-stage top-stage-${state}`} aria-current={state === "active" ? "step" : undefined}>
+    <span className="top-stage-index"><small>CH</small><strong>{index}</strong></span>
+    <span className="top-stage-icon" aria-hidden="true">{icon}</span>
+    <span className="top-stage-copy"><strong>{label}</strong></span>
+    {state === "done" && <Check size={12} className="top-stage-check" aria-hidden="true" />}
+  </span>;
 }
 
 function StepItem({ index, label, state }: { index: string; label: string; state: "active" | "done" | "upcoming" }) {
@@ -3046,7 +3173,6 @@ function NoticeToast({ notice, onDismiss }: { notice: AppNotice; onDismiss: () =
 const LLM_OPTIONS: Array<{ id: AiConfigStatus["llm"]["provider"]; label: string; model: string }> = [
   { id: "openai", label: "OpenAI", model: "gpt-5.4-mini" },
   { id: "deepseek", label: "DeepSeek", model: "deepseek-flash" },
-  { id: "qwen", label: "通义千问", model: "qwen-plus" },
   { id: "anthropic", label: "Anthropic", model: "claude-sonnet-4-6" },
   { id: "gemini", label: "Google Gemini", model: "gemini-3.5-flash" },
   { id: "custom", label: "OpenAI 兼容", model: "model-name" },
@@ -3060,14 +3186,13 @@ const TTS_OPTIONS: Array<{ id: AiConfigStatus["tts"]["provider"]; label: string;
 const AI_PROVIDER_GUIDES: Record<AiConfigStatus["llm"]["provider"], { label: string; href: string; detail: string }> = {
   openai: { label: "OpenAI", href: "https://platform.openai.com/api-keys", detail: "在 API Keys 中创建项目密钥。" },
   deepseek: { label: "DeepSeek", href: "https://platform.deepseek.com/api_keys", detail: "登录开放平台后创建 API Key。" },
-  qwen: { label: "通义千问", href: "https://bailian.console.aliyun.com/?apiKey=1#/api-key", detail: "在阿里云百炼控制台创建 DashScope API Key。" },
   anthropic: { label: "Anthropic", href: "https://console.anthropic.com/settings/keys", detail: "在 Console 的 API Keys 中创建密钥。" },
   gemini: { label: "Google Gemini", href: "https://aistudio.google.com/apikey", detail: "在 Google AI Studio 创建 Gemini API Key。" },
   custom: { label: "OpenAI 兼容服务", href: "https://platform.openai.com/docs/api-reference/authentication", detail: "填写服务商提供的 HTTPS API 地址、模型名和密钥。" },
 };
 
 const TTS_PROVIDER_GUIDES: Record<AiConfigStatus["tts"]["provider"], { label: string; href: string; detail: string }> = {
-  qwen: { label: "通义 CosyVoice", href: "https://help.aliyun.com/en/model-studio/get-api-key", detail: "CosyVoice 与通义千问可共用 DashScope API Key。" },
+  qwen: { label: "通义 CosyVoice", href: "https://help.aliyun.com/en/model-studio/get-api-key", detail: "在阿里云百炼控制台创建语音服务使用的 DashScope API Key。" },
   openai: { label: "OpenAI TTS", href: "https://platform.openai.com/api-keys", detail: "使用具有音频模型权限的 OpenAI 项目密钥。" },
   azure: { label: "Azure Speech", href: "https://learn.microsoft.com/en-us/azure/ai-services/speech-service/get-started-speech-to-text", detail: "创建 Speech 资源，并填写资源 Key 与对应区域。" },
 };
@@ -3137,7 +3262,7 @@ function AiServicePanel({ config, pending, testTarget, onReload, onSave, onTest 
         </fieldset>
       </div>
       <div className="ai-service-actions onboarding-ai-actions">
-        <button className="primary-button" type="button" disabled={pending || verifying || Boolean(testTarget) || (!llmApiKey && !value.llm.hasKey) || (!ttsApiKey && !value.tts.hasKey)} onClick={() => void saveAndTest()}>{pending || verifying || testTarget ? <LoaderCircle size={14} className="spin" /> : <Zap size={14} />}{testTarget === "llm" ? "正在测试大模型" : testTarget === "tts" ? "正在测试语音" : verifying || pending ? "正在保存" : connected ? "保存并重新测试" : "保存并测试连接"}</button>
+        <button className="primary-button" type="button" aria-busy={pending || verifying || Boolean(testTarget)} disabled={pending || verifying || Boolean(testTarget) || (!llmApiKey && !value.llm.hasKey) || (!ttsApiKey && !value.tts.hasKey)} onClick={() => void saveAndTest()}>{pending || verifying || testTarget ? <LoaderCircle size={14} className="spin" /> : <Zap size={14} />}{testTarget === "llm" ? "正在测试大模型" : testTarget === "tts" ? "正在测试语音" : verifying || pending ? "正在保存" : connected ? "保存并重新测试" : "保存并测试连接"}</button>
       </div>
     {showGuide && <ApiGuideDialog llm={llmGuide} tts={ttsGuide} onClose={() => setShowGuide(false)} />}
   </section>;
@@ -3182,7 +3307,7 @@ function InvitationAccessPanel({ access, pending, onClaim, onContinue }: {
   const connected = access?.connected === true;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!displayName.trim() || !inviteCode.trim()) return;
+    if (pending || !displayName.trim() || !inviteCode.trim()) return;
     await onClaim(inviteCode, displayName);
   };
   return <section className={`onboarding-service-card invitation-access-card ${connected ? "is-connected" : ""}`}>
@@ -3198,7 +3323,7 @@ function InvitationAccessPanel({ access, pending, onClaim, onContinue }: {
       <div className="invitation-copy"><h3>输入你的邀请码</h3><p>验证通过后，这台 Mac 会自动接通节目文案和六位主持人的声线。</p></div>
       <label>你的名字<input autoComplete="name" maxLength={40} placeholder="例如：小林" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
       <label>团队邀请码<input autoComplete="off" maxLength={40} spellCheck={false} placeholder="OMR-XXXXXX" value={inviteCode} onChange={(event) => setInviteCode(event.target.value.toUpperCase())} /></label>
-      <button className="primary-button" type="submit" disabled={pending || !displayName.trim() || !inviteCode.trim()}>{pending ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />}{pending ? "正在验证" : "验证邀请码"}</button>
+      <button className="primary-button" type="submit" aria-busy={pending} disabled={pending || !displayName.trim() || !inviteCode.trim()}>{pending ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />}{pending ? "正在验证" : "验证邀请码"}</button>
     </form>}
     <div className="managed-service-strip"><Check size={13} /><span>无需填写模型或语音 API Key</span><span>设备凭证仅保存在本机钥匙串</span></div>
   </section>;
@@ -3207,7 +3332,6 @@ function InvitationAccessPanel({ access, pending, onClaim, onContinue }: {
 function LocalSettingsView({
   section,
   onSectionChange,
-  onClose,
   sources,
   sourceTransport,
   health,
@@ -3236,7 +3360,6 @@ function LocalSettingsView({
 }: {
   section: SettingsSection;
   onSectionChange: (section: SettingsSection) => void;
-  onClose: () => void;
   sources: SourceDiagnostic[];
   sourceTransport: TransportState;
   health: HealthState;
@@ -3255,7 +3378,7 @@ function LocalSettingsView({
   invitationAccess: InvitationAccessStatus | null;
   invitationPending: boolean;
   onClaimInvitation: (inviteCode: string, displayName: string) => Promise<boolean>;
-  onRefreshAll: () => void;
+  onRefreshAll: () => Promise<void>;
   desktopPetEnabled: boolean;
   onDesktopPetEnabledChange: (enabled: boolean) => void;
   audioOutputId: string;
@@ -3265,6 +3388,12 @@ function LocalSettingsView({
 }) {
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
   const [devicePending, setDevicePending] = useState(false);
+  const [refreshPending, setRefreshPending] = useState(false);
+  const [outputsPending, setOutputsPending] = useState(false);
+  const [loginSource, setLoginSource] = useState<ApiMusicSource | null>(null);
+  const refreshBusyRef = useRef(false);
+  const outputsBusyRef = useRef(false);
+  const maintenanceBusyRef = useRef(false);
   const [maintenancePending, setMaintenancePending] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<string | null>(null);
   const [audioOutputs, setAudioOutputs] = useState<AudioOutputOption[]>([{ id: "default", label: "系统默认输出" }]);
@@ -3288,7 +3417,13 @@ function LocalSettingsView({
     }
   }, [onError]);
   const refreshAudioOutputs = useCallback(async () => {
-    if (!navigator.mediaDevices?.enumerateDevices) return;
+    if (outputsBusyRef.current) return;
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      onError("当前浏览器不支持读取音频设备，将使用系统默认输出。");
+      return;
+    }
+    outputsBusyRef.current = true;
+    setOutputsPending(true);
     try {
       const devices = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === "audiooutput");
       const options = devices.map((device, index) => ({ id: device.deviceId, label: device.label || `音频输出 ${index + 1}` }));
@@ -3297,12 +3432,30 @@ function LocalSettingsView({
       if (!options.some((item) => item.id === audioOutputId)) onAudioOutputChange("default");
     } catch {
       setAudioOutputs([{ id: "default", label: "系统默认输出" }]);
+      onError("音频设备读取失败，请重试。");
+    } finally {
+      outputsBusyRef.current = false;
+      setOutputsPending(false);
     }
-  }, [audioOutputId, onAudioOutputChange]);
+  }, [audioOutputId, onAudioOutputChange, onError]);
+  const refreshAll = async () => {
+    if (refreshBusyRef.current) return;
+    refreshBusyRef.current = true;
+    setRefreshPending(true);
+    try {
+      await Promise.all([onRefreshAll(), refreshDeviceStatus()]);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "状态刷新失败，请重试。");
+    } finally {
+      refreshBusyRef.current = false;
+      setRefreshPending(false);
+    }
+  };
   useEffect(() => { void refreshDeviceStatus(); }, [refreshDeviceStatus]);
   useEffect(() => { if (section === "playback") void refreshAudioOutputs(); }, [refreshAudioOutputs, section]);
   const runMaintenance = async (key: string, action: () => Promise<void | string>, success: string) => {
-    if (maintenancePending) return;
+    if (maintenanceBusyRef.current) return;
+    maintenanceBusyRef.current = true;
     setMaintenancePending(key);
     onError(null);
     try {
@@ -3312,6 +3465,7 @@ function LocalSettingsView({
     } catch (error) {
       onError(error instanceof Error ? error.message : "本机设置操作失败。");
     } finally {
+      maintenanceBusyRef.current = false;
       setMaintenancePending(null);
     }
   };
@@ -3353,20 +3507,19 @@ function LocalSettingsView({
     window.location.replace(`${window.location.origin}/?skipIntro=1`);
   };
   const confirmButtons = (key: string, label: string, onConfirm: () => void) => confirmAction === key
-    ? <span className="inline-confirm-actions"><button className="text-button" type="button" onClick={() => setConfirmAction(null)}>取消</button><button className="danger-button" type="button" disabled={maintenancePending !== null} onClick={onConfirm}>{maintenancePending === key ? <LoaderCircle size={13} className="spin" /> : <Trash2 size={13} />}{label}</button></span>
-    : <button className="text-button danger-text-button" type="button" onClick={() => setConfirmAction(key)}><Trash2 size={13} />{label}</button>;
+    ? <span className="inline-confirm-actions"><button className="text-button" type="button" disabled={maintenancePending !== null} onClick={() => setConfirmAction(null)}>取消</button><button className="danger-button" type="button" disabled={maintenancePending !== null} aria-busy={maintenancePending === key} onClick={onConfirm}>{maintenancePending === key ? <LoaderCircle size={13} className="spin" /> : <Trash2 size={13} />}{maintenancePending === key ? "处理中" : label}</button></span>
+    : <button className="text-button danger-text-button" type="button" disabled={maintenancePending !== null} onClick={() => setConfirmAction(key)}><Trash2 size={13} />{label}</button>;
   return <section className="local-settings-view" aria-labelledby="local-settings-title">
     <div className="settings-page-heading">
-      <div><p className="eyebrow">SYSTEM / LOCAL CONFIG</p><h2 id="local-settings-title">管理这台设备上的服务。</h2><p>账号授权、API 密钥和运行状态都只属于这台 Mac，不需要登录 OpenMusicRadio 账户。</p></div>
-      <button className="secondary-button" type="button" onClick={onClose}><X size={15} />关闭设置</button>
+      <div><p className="eyebrow">SYSTEM / LOCAL CONFIG</p><h2 id="local-settings-title">管理这台设备上的服务。</h2></div>
     </div>
     <div className="settings-workbench">
       <nav className="settings-nav" aria-label="设置分类" role="tablist">
-        {sections.map((item) => <button key={item.id} type="button" role="tab" aria-selected={section === item.id} className={section === item.id ? "selected" : ""} onClick={() => onSectionChange(item.id)}><strong>{item.label}</strong><small>{item.detail}</small></button>)}
+        {sections.map((item) => <button key={item.id} type="button" role="tab" id={`settings-tab-${item.id}`} aria-controls="settings-panel" aria-selected={section === item.id} className={section === item.id ? "selected" : ""} onClick={() => onSectionChange(item.id)}><strong>{item.label}</strong><small>{item.detail}</small></button>)}
       </nav>
-      <div className="settings-pane">
+      <div className="settings-pane" id="settings-panel">
         {section === "accounts" && <section role="tabpanel" aria-labelledby="settings-accounts-title">
-          <div className="settings-section-heading"><div><span>ACCOUNT ROUTING</span><h3 id="settings-accounts-title">音乐账号</h3><p>查看本机连接状态，或重新扫码更新授权。节目使用哪个音源，仍在创建节目时选择。</p></div><button className="text-button" type="button" onClick={onRefreshAll}><RefreshCw size={13} />刷新状态</button></div>
+          <div className="settings-section-heading"><div><span>ACCOUNT ROUTING</span><h3 id="settings-accounts-title">音乐账号</h3><p>查看本机连接状态，或重新扫码更新授权。节目使用哪个音源，仍在创建节目时选择。</p></div><button className="text-button" type="button" onClick={() => void refreshAll()} disabled={refreshPending} aria-busy={refreshPending}><RefreshCw size={13} className={refreshPending ? "spin" : ""} />{refreshPending ? "刷新中" : "刷新状态"}</button></div>
           <div className="settings-account-list">
             {USER_SOURCE_IDS.map((sourceId) => {
               const status = musicApiStatus[sourceId];
@@ -3378,8 +3531,8 @@ function LocalSettingsView({
               return <div className="settings-account-row" key={sourceId}>
                 <div className={`source-icon source-icon-${sourceId}`} aria-hidden="true"><SourceGlyph sourceId={sourceId} /></div>
                 <div className="settings-account-copy"><strong>{SOURCE_LABELS[sourceId]}</strong><span><StatusDot tone={authenticated ? "ready" : configured ? "muted" : "error"} />{checking ? "正在检查" : authenticated ? "账号已授权" : configured ? "等待扫码授权" : "本地连接器不可用"}</span><small>{authenticated ? (status?.persistentLogin ? "授权已保存在本机" : "授权仅当前会话有效") : source?.detail ?? "尚未读取连接状态"}</small></div>
-                <div className="settings-account-actions"><button className="secondary-button settings-account-action" type="button" disabled={musicLoginPending || !configured} onClick={() => onStartMusicLogin(sourceId)}>{musicLoginPending && login ? <LoaderCircle size={14} className="spin" /> : <ExternalLink size={14} />}{authenticated ? "重新授权" : "扫码连接"}</button>{authenticated && confirmButtons(`logout-${sourceId}`, "撤销授权", () => void runMaintenance(`logout-${sourceId}`, async () => { await fetchJson(`/${sourceId === "qq_music" ? "qq" : "netease"}/logout`, { method: "POST", body: "{}" }); onRefreshAll(); }, `${SOURCE_LABELS[sourceId]}本机授权已撤销。`))}</div>
-                {login && <div className="settings-account-qr" role="region" aria-label={`${SOURCE_LABELS[sourceId]}扫码登录`}><div><strong>{login.state === "waiting_confirm" ? "请在手机上确认登录" : `使用${SOURCE_LABELS[sourceId]} App 扫码`}</strong><IconButton label="取消扫码" onClick={onCancelMusicLogin}><X size={14} /></IconButton></div><img src={login.qrImageDataUrl} alt={`${SOURCE_LABELS[sourceId]}登录二维码`} /><button className="text-button" type="button" disabled={musicLoginPending} onClick={() => onRefreshMusicLogin(sourceId)}><RefreshCw size={13} />刷新二维码</button></div>}
+                <div className="settings-account-actions"><button className="secondary-button settings-account-action" type="button" disabled={musicLoginPending || !configured || maintenancePending !== null} aria-busy={musicLoginPending && loginSource === sourceId} onClick={() => { setLoginSource(sourceId); onStartMusicLogin(sourceId); }}>{musicLoginPending && loginSource === sourceId ? <LoaderCircle size={14} className="spin" /> : <ExternalLink size={14} />}{musicLoginPending && loginSource === sourceId ? "正在生成二维码" : authenticated ? "重新授权" : "扫码连接"}</button>{authenticated && confirmButtons(`logout-${sourceId}`, "撤销授权", () => void runMaintenance(`logout-${sourceId}`, async () => { await fetchJson(`/${sourceId === "qq_music" ? "qq" : "netease"}/logout`, { method: "POST", body: "{}" }); onRefreshAll(); }, `${SOURCE_LABELS[sourceId]}本机授权已撤销。`))}</div>
+                {login && <div className="settings-account-qr" role="region" aria-label={`${SOURCE_LABELS[sourceId]}扫码登录`}><div><strong>{login.state === "waiting_confirm" ? "请在手机上确认登录" : `使用${SOURCE_LABELS[sourceId]} App 扫码`}</strong><IconButton label="取消扫码" onClick={onCancelMusicLogin}><X size={14} /></IconButton></div><img src={login.qrImageDataUrl} alt={`${SOURCE_LABELS[sourceId]}登录二维码`} /><button className="text-button" type="button" aria-busy={musicLoginPending} disabled={musicLoginPending} onClick={() => onRefreshMusicLogin(sourceId)}><RefreshCw size={13} className={musicLoginPending ? "spin" : ""} />{musicLoginPending ? "刷新中" : "刷新二维码"}</button></div>}
               </div>;
             })}
           </div>
@@ -3389,26 +3542,26 @@ function LocalSettingsView({
           <InvitationAccessPanel access={invitationAccess} pending={invitationPending} onClaim={onClaimInvitation} />
         </section>}
         {section === "playback" && <section role="tabpanel" aria-labelledby="settings-playback-title">
-          <div className="settings-section-heading"><div><span>PLAYBACK DEVICE</span><h3 id="settings-playback-title">播放与桌面人物</h3><p>选择网页音频输出，并设置以后创建节目时桌面人物的默认行为。</p></div><button className="text-button" type="button" onClick={() => void refreshAudioOutputs()}><RefreshCw size={13} />刷新设备</button></div>
+          <div className="settings-section-heading"><div><span>PLAYBACK DEVICE</span><h3 id="settings-playback-title">播放与桌面人物</h3><p>选择网页音频输出，并设置以后创建节目时桌面人物的默认行为。</p></div><button className="text-button" type="button" onClick={() => void refreshAudioOutputs()} disabled={outputsPending} aria-busy={outputsPending}><RefreshCw size={13} className={outputsPending ? "spin" : ""} />{outputsPending ? "读取中" : "刷新设备"}</button></div>
           <div className="settings-control-list">
-            <div className="settings-control-row"><div className="settings-control-copy"><Volume2 size={17} /><span><strong>音频输出</strong><small>同时用于音乐和主持人口播</small></span></div><select value={audioOutputId} disabled={!("setSinkId" in HTMLMediaElement.prototype)} onChange={(event) => onAudioOutputChange(event.target.value)}>{audioOutputs.map((output) => <option key={output.id} value={output.id}>{output.label}</option>)}</select></div>
+            <div className="settings-control-row"><div className="settings-control-copy"><Volume2 size={17} /><span><strong>音频输出</strong><small>同时用于音乐和主持人口播</small></span></div><select aria-label="音频输出" value={audioOutputId} disabled={!("setSinkId" in HTMLMediaElement.prototype)} onChange={(event) => onAudioOutputChange(event.target.value)}>{audioOutputs.map((output) => <option key={output.id} value={output.id}>{output.label}</option>)}</select></div>
             <div className="settings-control-row"><div className="settings-control-copy"><RadioHostAvatar profileId="longhao" /><span><strong>默认显示桌面人物</strong><small>仍可在每次创建节目时单独关闭</small></span></div><button type="button" className={`settings-toggle ${desktopPetEnabled ? "selected" : ""}`} aria-pressed={desktopPetEnabled} onClick={() => onDesktopPetEnabledChange(!desktopPetEnabled)}><span />{desktopPetEnabled ? "开启" : "关闭"}</button></div>
-            <div className="settings-control-row"><div className="settings-control-copy"><SlidersHorizontal size={17} /><span><strong>桌面人物尺寸</strong><small>下次出现时应用；人物右键菜单也可以调整</small></span></div><div className="compact-segmented" role="radiogroup" aria-label="桌面人物尺寸">{(["small", "medium", "large"] as const).map((scale) => <button key={scale} type="button" role="radio" aria-checked={deviceStatus?.desktopPet.scale === scale} className={deviceStatus?.desktopPet.scale === scale ? "selected" : ""} disabled={devicePending || maintenancePending !== null || deviceStatus?.desktopPet.available === false} onClick={() => void runMaintenance(`pet-${scale}`, async () => { const result = await fetchJson<{ desktopPet: DeviceStatus["desktopPet"] }>("/device/pet", { method: "POST", body: JSON.stringify({ scale }) }); setDeviceStatus((current) => current ? { ...current, desktopPet: result.desktopPet } : current); }, "桌面人物尺寸已保存，下次出现时生效。")}>{scale === "small" ? "小" : scale === "medium" ? "中" : "大"}</button>)}</div></div>
+            <div className="settings-control-row"><div className="settings-control-copy"><SlidersHorizontal size={17} /><span><strong>桌面人物尺寸</strong><small>下次出现时应用；人物右键菜单也可以调整</small></span></div><div className="compact-segmented" role="radiogroup" aria-label="桌面人物尺寸">{(["small", "medium", "large"] as const).map((scale) => <button key={scale} type="button" aria-busy={maintenancePending === `pet-${scale}`} role="radio" aria-checked={deviceStatus?.desktopPet.scale === scale} className={deviceStatus?.desktopPet.scale === scale ? "selected" : ""} disabled={devicePending || maintenancePending !== null || deviceStatus?.desktopPet.available === false} onClick={() => void runMaintenance(`pet-${scale}`, async () => { const result = await fetchJson<{ desktopPet: DeviceStatus["desktopPet"] }>("/device/pet", { method: "POST", body: JSON.stringify({ scale }) }); setDeviceStatus((current) => current ? { ...current, desktopPet: result.desktopPet } : current); }, "桌面人物尺寸已保存，下次出现时生效。")}>{maintenancePending === `pet-${scale}` ? <LoaderCircle size={13} className="spin" /> : scale === "small" ? "小" : scale === "medium" ? "中" : "大"}</button>)}</div></div>
             <div className="settings-control-row"><div className="settings-control-copy"><RotateCcw size={17} /><span><strong>桌面位置</strong><small>{deviceStatus?.desktopPet.positionSaved ? "正在使用上次拖动后的位置" : "使用屏幕右下角默认位置"}</small></span></div>{confirmButtons("pet-position", "恢复默认位置", () => void runMaintenance("pet-position", async () => { const result = await fetchJson<{ desktopPet: DeviceStatus["desktopPet"] }>("/device/pet", { method: "POST", body: JSON.stringify({ resetPosition: true }) }); setDeviceStatus((current) => current ? { ...current, desktopPet: result.desktopPet } : current); }, "桌面人物位置已恢复为默认值。"))}</div>
           </div>
         </section>}
         {section === "data" && <section role="tabpanel" aria-labelledby="settings-data-title">
-          <div className="settings-section-heading"><div><span>LOCAL STORAGE</span><h3 id="settings-data-title">本机数据</h3><p>管理临时音频、推荐画像和配置备份。节目进行中会拒绝删除运行依赖。</p></div><button className="text-button" type="button" disabled={devicePending} onClick={() => void refreshDeviceStatus()}><RefreshCw size={13} />刷新容量</button></div>
+          <div className="settings-section-heading"><div><span>LOCAL STORAGE</span><h3 id="settings-data-title">本机数据</h3><p>查看本机存储与配置备份。节目进行时，部分清理操作暂不可用。</p></div><button className="text-button" type="button" disabled={devicePending} aria-busy={devicePending} onClick={() => void refreshDeviceStatus()}><RefreshCw size={13} className={devicePending ? "spin" : ""} />{devicePending ? "读取中" : "刷新容量"}</button></div>
           <div className="settings-data-list">
             <div><span className="settings-data-icon"><HardDrive size={17} /></span><span><strong>临时音频缓存</strong><small>{deviceStatus ? `${deviceStatus.storage.audio.entries} 项 · ${formatBytes(deviceStatus.storage.audio.bytes)}` : "正在读取"}</small></span>{confirmButtons("clear-cache", "清理缓存", () => void runMaintenance("clear-cache", async () => { await fetchJson("/device/cache/clear", { method: "POST", body: "{}" }); await refreshDeviceStatus(); }, "临时音频缓存已清理。"))}</div>
             <div><span className="settings-data-icon"><Activity size={17} /></span><span><strong>听歌画像</strong><small>{deviceStatus ? `${deviceStatus.storage.profiles.files} 个账号画像 · ${formatBytes(deviceStatus.storage.profiles.bytes)}` : "正在读取"}</small></span>{confirmButtons("reset-profile", "重置画像", () => void runMaintenance("reset-profile", async () => { await fetchJson("/device/profile/reset", { method: "POST", body: "{}" }); await refreshDeviceStatus(); }, "听歌画像与节目历史已重置。"))}</div>
-            <div><span className="settings-data-icon"><Download size={17} /></span><span><strong>配置备份</strong><small>只包含节目默认值和非敏感模型参数</small></span><span className="settings-row-actions"><button className="secondary-button" type="button" onClick={exportSettings}><Download size={14} />导出</button><button className="secondary-button" type="button" onClick={() => importInputRef.current?.click()}><Upload size={14} />导入</button><input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void runMaintenance("import", () => importSettings(file), "配置已导入。"); }} /></span></div>
+            <div><span className="settings-data-icon"><Download size={17} /></span><span><strong>配置备份</strong><small>只包含节目默认值和非敏感模型参数</small></span><span className="settings-row-actions"><button className="secondary-button" type="button" onClick={exportSettings}><Download size={14} />导出</button><button className="secondary-button" type="button" onClick={() => importInputRef.current?.click()} disabled={maintenancePending !== null} aria-busy={maintenancePending === "import"}>{maintenancePending === "import" ? <LoaderCircle size={14} className="spin" /> : <Upload size={14} />}{maintenancePending === "import" ? "导入中" : "导入"}</button><input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void runMaintenance("import", () => importSettings(file), "配置已导入。"); }} /></span></div>
             <div><span className="settings-data-icon"><Sparkles size={17} /></span><span><strong>团队服务凭证</strong><small>{invitationAccess?.connected ? `已绑定 ${invitationAccess.user?.displayName ?? "当前成员"}` : "尚未输入邀请码"}</small></span></div>
             <div className="settings-account-reset"><span className="settings-data-icon"><Trash2 size={17} /></span><span><strong>清除全部账号与本机数据</strong><small>删除音乐授权、邀请码设备凭证、听歌画像、节目历史、缓存和本机设置。邀请码是否可继续使用由托管服务配置决定。</small></span>{confirmButtons("reset-all", "确认清除全部", () => void runMaintenance("reset-all", resetAllLocalData, "全部本机数据已清除。"))}</div>
           </div>
         </section>}
         {section === "local" && <section role="tabpanel" aria-labelledby="settings-local-title">
-          <div className="settings-section-heading"><div><span>DEVICE HEALTH</span><h3 id="settings-local-title">本机状态</h3><p>集中检查开播依赖。这里显示真实服务状态，不会用本地假数据替代失败结果。</p></div><span className="settings-row-actions"><button className="secondary-button" type="button" onClick={() => { onRefreshAll(); void refreshDeviceStatus(); }}><RefreshCw size={14} />重新检查</button><button className="secondary-button" type="button" onClick={() => void runMaintenance("diagnostics", async () => { const report = await fetchJson<Record<string, unknown>>("/device/diagnostics"); downloadJson(`openmusicradio-diagnostics-${new Date().toISOString().slice(0, 10)}.json`, report); }, "诊断报告已导出。")}>{maintenancePending === "diagnostics" ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}导出诊断</button></span></div>
+          <div className="settings-section-heading"><div><span>DEVICE HEALTH</span><h3 id="settings-local-title">本机状态</h3><p>查看播放、音乐连接和节目生成服务的连接状态。</p></div><span className="settings-row-actions"><button className="secondary-button" type="button" onClick={() => void refreshAll()} disabled={refreshPending || devicePending} aria-busy={refreshPending}><RefreshCw size={14} className={refreshPending ? "spin" : ""} />{refreshPending ? "检查中" : "重新检查"}</button><button className="secondary-button" type="button" disabled={maintenancePending !== null} aria-busy={maintenancePending === "diagnostics"} onClick={() => void runMaintenance("diagnostics", async () => { const report = await fetchJson<Record<string, unknown>>("/device/diagnostics"); downloadJson(`openmusicradio-diagnostics-${new Date().toISOString().slice(0, 10)}.json`, report); }, "诊断报告已导出。")}>{maintenancePending === "diagnostics" ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}{maintenancePending === "diagnostics" ? "导出中" : "导出诊断"}</button></span></div>
           <div className="local-status-list">
             <div><span><StatusDot tone={health.ok ? "ready" : "error"} />本机控制服务</span><strong>{health.ok ? "运行中" : "连接失败"}</strong><small>{health.version ? `版本 ${health.version}` : "负责节目状态、账号授权和音频控制"}</small></div>
             <div><span><StatusDot tone={musicApiStatus.qq_music?.configured ? "ready" : "error"} />QQ 音乐连接器</span><strong>{musicApiStatus.qq_music?.configured ? "可用" : "不可用"}</strong><small>歌曲检索、账号画像与播放控制</small></div>
@@ -3422,49 +3575,9 @@ function LocalSettingsView({
   </section>;
 }
 
-function ProcessView({
-  mode,
-  complete = false,
-  completedSteps = 0,
-}: {
-  mode: "generating" | "preparing";
-  complete?: boolean;
-  completedSteps?: number;
-}) {
-  const steps = mode === "generating"
-    ? ["读取账号听歌画像", "筛选可播放候选", "排定熟悉与探索比例", "锁定节目单"]
-    : ["核对最终节目单", "准备主持内容", "合成语音并准备播放队列", "校验首曲并开始播放"];
-  const taskLabel = mode === "generating" ? "PLAN ENGINE" : "ON AIR PREP";
-  const confirmedSteps = complete ? steps.length : Math.max(0, Math.min(steps.length, completedSteps));
-  const progress = Math.round(confirmedSteps / steps.length * 100);
-  const activeStep = confirmedSteps < steps.length ? steps[confirmedSteps] : null;
-  const currentStatus = complete ? "完整结果已返回" : activeStep ? `正在${activeStep}` : "正在启动任务";
-  return <section className="process-view" role="status" aria-live="polite">
-    <div className="process-signal">
-      <div className={`process-orbit${complete ? " is-complete" : ""}`} style={{ "--process-progress": `${progress}%` } as CSSProperties} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} aria-label={`处理进度 ${progress}%`}>
-        <span className="process-cassette-reel" aria-hidden="true"><i /><i /><i /></span>
-        <span className="process-tape-head" aria-hidden="true" />
-        <span className="process-orbit-core"><strong>{progress}%</strong><small>{complete ? "COMPLETE" : `${confirmedSteps} / ${steps.length}`}</small></span>
-      </div>
-      <span className="process-signal-caption">OPEN MUSIC RADIO / LOCAL TASK</span>
-    </div>
-    <div className="process-copy">
-      <div className="process-terminal"><span>OPEN MUSIC RADIO / {taskLabel}</span><strong>{progress}%</strong></div>
-      <h2>{mode === "generating" ? "正在生成节目计划" : "正在完成开播准备"}</h2>
-      <p>{mode === "generating" ? "这里只生成可调整的节目单，不会改动你的音乐平台。" : "节目内容和播放队列就绪后，会自动开始播放。"}</p>
-      <div className="process-current"><Activity size={16} aria-hidden="true" /><span><strong>{currentStatus}</strong><small>{complete ? "本次任务已校验。" : "每个阶段完成后会立即更新。"}</small></span></div>
-      <div className="process-meter process-meter-live" aria-hidden="true"><span style={{ width: `${progress}%` }} /></div>
-      <div className="process-queue-heading"><span>PROCESS QUEUE</span><small>{steps.length} ITEMS</small></div>
-      <ol>{steps.map((step, index) => {
-        const done = index < confirmedSteps;
-        const active = !complete && index === confirmedSteps;
-        return <li key={step} className={done ? "done" : active ? "active" : "pending"}><span className="process-step-index">{done ? <Check size={13} /> : String(index + 1).padStart(2, "0")}</span><span>{step}</span><small>{done ? "已完成" : active ? "处理中" : "等待"}</small></li>;
-      })}</ol>
-    </div>
-  </section>;
-}
 
 function SetupView({
+  initialProgramStep = "host",
   phase,
   onPhaseChange,
   sources,
@@ -3484,6 +3597,7 @@ function SetupView({
   onHostProfileChange,
   musicGenres,
   onMusicGenresChange,
+  desktopPetProfile,
   desktopPetEnabled,
   onDesktopPetEnabledChange,
   familiarityRatio,
@@ -3518,8 +3632,10 @@ function SetupView({
   onDismissError,
   onPreviewHost,
   voicePreviewProfile,
+  voicePreviewLoading,
 }: {
   phase: "connect" | "settings";
+  initialProgramStep?: "host" | "parameters";
   onPhaseChange: (phase: "connect" | "settings") => void;
   sources: SourceDiagnostic[];
   sourceTransport: TransportState;
@@ -3538,6 +3654,7 @@ function SetupView({
   onHostProfileChange: (profile: HostProfileId) => void;
   musicGenres: MusicGenreId[];
   onMusicGenresChange: (genres: MusicGenreId[]) => void;
+  desktopPetProfile: HostProfileId;
   desktopPetEnabled: boolean;
   onDesktopPetEnabledChange: (enabled: boolean) => void;
   familiarityRatio: number;
@@ -3572,25 +3689,34 @@ function SetupView({
   onDismissError: () => void;
   onPreviewHost: (profileId: HostProfileId) => void;
   voicePreviewProfile: HostProfileId | null;
+  voicePreviewLoading: boolean;
 }) {
   const settingsHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const musicCardRef = useRef<HTMLElement | null>(null);
   const hostChoiceRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [connectStage, setConnectStage] = useState<"invite" | "music">("invite");
-  const autoQrAttemptRef = useRef<string | null>(null);
-  const startMusicLoginRef = useRef(onStartMusicLogin);
-  startMusicLoginRef.current = onStartMusicLogin;
-  const selected = sources.find((source) => source.sourceId === selectedSource)
-    ?? FALLBACK_SOURCES.find((source) => source.sourceId === selectedSource)
-    ?? FALLBACK_SOURCES.find((source) => source.sourceId === "qq_music")!;
   const scene = SCENE_META[scenePreset];
-  const selectedApiSource = isApiMusicSource(selectedSource) ? selectedSource : null;
+  const selectedApiSource: ApiMusicSource = isApiMusicSource(selectedSource) ? selectedSource : "qq_music";
   const selectedApiStatus = selectedApiSource ? musicApiStatus[selectedApiSource] : undefined;
   const loginForSelected = musicQrLogin?.sourceId === selectedApiSource ? musicQrLogin : null;
+  const musicPlatformSources = (["qq_music", "netease_music"] as ApiMusicSource[]).map((sourceId) => sources.find((source) => source.sourceId === sourceId)
+    ?? FALLBACK_SOURCES.find((source) => source.sourceId === sourceId)!);
   const selectedHost = HOST_PROFILES[hostProfile];
   const selectedGenreLabels = musicGenres.map((genreId) => MUSIC_GENRES[genreId].label);
-  const recommendationSummary = recommendationMode === "genre"
-    ? selectedGenreLabels.length > 0 ? `按风格: ${selectedGenreLabels.join(" / ")}` : "按风格: 请选择风格"
-    : `按氛围: ${scene.label}`;
+  const hostCarouselIndex = Math.max(0, HOST_PROFILE_IDS.indexOf(hostProfile));
+  const hostSwipeStart = useRef<{ x: number; y: number; pointerId: number } | null>(null);
+  const suppressHostClick = useRef(false);
+  const [programStep, setProgramStep] = useState<"host" | "parameters">(initialProgramStep);
+  const [builderPage, setBuilderPage] = useState(0);
+  const [genrePage, setGenrePage] = useState(0);
+  const [compactBuilder, setCompactBuilder] = useState(() => window.matchMedia("(max-width: 959px), (max-height: 700px)").matches);
+  const genresPerPage = compactBuilder ? 8 : 12;
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 959px), (max-height: 700px)");
+    const update = () => { setCompactBuilder(media.matches); setGenrePage(0); };
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
   const musicConnectReady = selectedApiStatus?.authenticated === true;
   const accessVerified = invitationAccess?.connected === true;
   useEffect(() => {
@@ -3598,13 +3724,12 @@ function SetupView({
     if (!accessVerified && connectStage !== "invite") setConnectStage("invite");
   }, [accessVerified, connectStage, phase]);
   useEffect(() => {
-    if (phase !== "connect" || connectStage !== "music" || !accessVerified || !selectedApiSource) return;
-    if (!selectedApiStatus?.configured || selectedApiStatus.authenticated || loginForSelected || musicLoginPending) return;
-    const attemptKey = `${selectedApiSource}:${invitationAccess?.device?.id ?? "device"}`;
-    if (autoQrAttemptRef.current === attemptKey) return;
-    autoQrAttemptRef.current = attemptKey;
-    startMusicLoginRef.current(selectedApiSource);
-  }, [accessVerified, connectStage, invitationAccess?.device?.id, loginForSelected, musicLoginPending, phase, selectedApiSource, selectedApiStatus?.authenticated, selectedApiStatus?.configured]);
+    if (phase !== "connect" || connectStage !== "music") return;
+    const frame = requestAnimationFrame(() => {
+      musicCardRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [connectStage, musicQrLogin?.key, musicQrLogin?.sourceId, phase]);
   const toggleGenre = (genre: MusicGenreId) => {
     if (!musicGenres.includes(genre) && musicGenres.length >= MAX_MUSIC_GENRES) return;
     onMusicGenresChange(musicGenres.includes(genre)
@@ -3619,133 +3744,241 @@ function SetupView({
     if (event.key === "End") nextIndex = HOST_PROFILE_IDS.length - 1;
     if (nextIndex === null) return;
     event.preventDefault();
-    onHostProfileChange(HOST_PROFILE_IDS[nextIndex]!);
-    hostChoiceRefs.current[nextIndex]?.focus();
+    selectHostFromCarousel(HOST_PROFILE_IDS[nextIndex]!);
+    requestAnimationFrame(() => hostChoiceRefs.current[nextIndex]?.focus({ preventScroll: true }));
+  };
+  useEffect(() => {
+    if (phase === "settings") setProgramStep(initialProgramStep);
+  }, [phase, initialProgramStep]);
+  const moveHostCarousel = (direction: -1 | 1) => {
+    const nextIndex = (hostCarouselIndex + direction + HOST_PROFILE_IDS.length) % HOST_PROFILE_IDS.length;
+    selectHostFromCarousel(HOST_PROFILE_IDS[nextIndex]!);
+  };
+  const selectHostFromCarousel = (profileId: HostProfileId) => {
+    if (creating) return;
+    if (voicePreviewProfile && voicePreviewProfile !== profileId) onPreviewHost(voicePreviewProfile);
+    onHostProfileChange(profileId);
+  };
+  const handleHostCarouselPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    suppressHostClick.current = false;
+    if (!event.isPrimary || event.button !== 0 || creating) return;
+    hostSwipeStart.current = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+  };
+  const handleHostCarouselPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = hostSwipeStart.current;
+    if (!start || start.pointerId !== event.pointerId) return;
+    const deltaX = Math.abs(event.clientX - start.x);
+    if (deltaX >= 48 && deltaX > Math.abs(event.clientY - start.y)) {
+      suppressHostClick.current = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+  };
+  const handleHostCarouselPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = hostSwipeStart.current;
+    hostSwipeStart.current = null;
+    if (!start || start.pointerId !== event.pointerId) return;
+    const delta = event.clientX - start.x;
+    if (Math.abs(delta) < 48 || Math.abs(delta) <= Math.abs(event.clientY - start.y)) return;
+    suppressHostClick.current = true;
+    moveHostCarousel(delta < 0 ? 1 : -1);
   };
   useEffect(() => {
     if (phase !== "settings") return;
     const frame = requestAnimationFrame(() => {
       window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      settingsHeadingRef.current?.closest(".main-content")?.scrollTo({ top: 0, left: 0, behavior: "auto" });
       settingsHeadingRef.current?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [phase]);
+  }, [phase, programStep]);
   return (
     <div className={`setup-layout setup-layout-${phase}`}>
       {phase === "connect" && <section className={`setup-column connect-platform-column connection-onboarding connection-onboarding-${connectStage}`}>
-        <div className="section-intro section-intro-wide">
-          <div><p className="eyebrow">01 / CONNECT</p><h2>{connectStage === "invite" ? "加入 Open Music Radio" : "连接你的音乐平台"}</h2><p>{connectStage === "invite" ? "使用团队邀请码完成一次验证。" : "选择常用平台，扫码授权后即可开始设置节目。"}</p></div>
-          <div className="connection-mini-progress" aria-label={`连接进度，第 ${connectStage === "invite" ? 1 : 2} 步，共 2 步`}>
-            <button type="button" className={connectStage === "invite" ? "active" : "done"} onClick={() => setConnectStage("invite")}><span>1</span>验证邀请</button>
-            <i aria-hidden="true" />
-            <button type="button" className={connectStage === "music" ? "active" : ""} disabled={!accessVerified} onClick={() => setConnectStage("music")}><span>2</span>音乐授权</button>
+        <div className="connection-heading">
+          <div className="connection-heading-copy">
+            <WorkflowHeading step="01 / 连接平台" title={connectStage === "invite" ? "验证这台设备" : "连接音乐平台"} description={connectStage === "invite" ? "输入邀请码，启用这台设备的电台服务。设备凭证仅保存在本机。" : "选择并授权一个音乐平台，为你的电台连接音乐库。"} />
           </div>
+          <ol className="connection-stepper" aria-label={`连接进度，第 ${connectStage === "invite" ? 1 : 2} 步，共 2 步`}>
+            <li className={connectStage === "invite" ? "is-active" : "is-done"}>
+              <button type="button" onClick={() => setConnectStage("invite")}><span className="connection-step-number">{connectStage === "music" ? <Check size={13} /> : "01"}</span><span><strong>验证设备</strong><small>邀请码</small></span></button>
+            </li>
+            <li className={connectStage === "music" ? "is-active" : "is-upcoming"}>
+              <button type="button" disabled={!accessVerified} onClick={() => setConnectStage("music")}><span className="connection-step-number">02</span><span><strong>连接音乐</strong><small>平台授权</small></span></button>
+            </li>
+          </ol>
         </div>
         {errorMessage && <div className="feedback-region connection-feedback"><ErrorBanner title={connectStage === "invite" ? "邀请码未通过" : "音乐平台连接失败"} message={errorMessage} onDismiss={onDismissError} /></div>}
-        <div className="onboarding-grid onboarding-grid-single">
+        <div className="connection-workspace">
+          <aside className="connection-context-rail" aria-label="当前步骤说明">
+            <div className="connection-context-intro"><span className="connection-context-index">{connectStage === "invite" ? "01" : "02"}</span><div><strong>{connectStage === "invite" ? "设备验证" : "音乐授权"}</strong><p>{connectStage === "invite" ? "把这台 Mac 绑定到你的内测身份。" : "只连接一个平台，节目会从这里取歌。"}</p></div></div>
+            <ul className="connection-benefits">
+              {connectStage === "invite" ? <><li><Check size={14} /><span>主持文案与声音由托管服务准备</span></li><li><Check size={14} /><span>设备凭证只留在本机钥匙串</span></li><li><Check size={14} /><span>验证完成后可随时在设置中更换</span></li></> : <><li><Check size={14} /><span>授权只用于检索、播放和节目控制</span></li><li><Check size={14} /><span>登录状态保存在这台 Mac</span></li><li><Check size={14} /><span>可以随时撤销并重新扫码</span></li></>}
+            </ul>
+            <div className="connection-context-foot"><ShieldCheck size={14} /><span>你可以在下一步前随时返回修改。</span></div>
+          </aside>
+          <div className="connection-stage-panel">
           {connectStage === "invite" && <InvitationAccessPanel access={invitationAccess} pending={invitationPending} onClaim={onClaimInvitation} onContinue={() => setConnectStage("music")} />}
-          {connectStage === "music" && <section className="onboarding-service-card music-onboarding-card">
-            <div className="onboarding-card-heading"><span><Music2 size={15} /><span><strong>选择音乐平台</strong><small>授权保存在当前 Mac</small></span></span><button className="text-button" type="button" onClick={onRefreshSources}><RefreshCw size={13} />刷新</button></div>
-            <div className="source-list compact-source-list">{sources.map((source) => <SourceRow key={source.sourceId} source={source} selected={selectedSource === source.sourceId} diagnosticUnavailable={diagnosticsUnavailable && source.sourceId === "qq_music"} musicApiStatus={musicApiStatus} onSelect={() => onSourceChange(source.sourceId)} />)}</div>
-            {selectedApiSource && <div className="music-login-workbench">
-              <div className="music-login-status"><span><StatusDot tone={selectedApiStatus?.configured ? "ready" : "error"} />本地连接器</span><strong>{selectedApiStatus?.configured ? "可用" : "不可用"}</strong><span><StatusDot tone={selectedApiStatus?.authenticated ? "ready" : "muted"} />账号授权</span><strong>{selectedApiStatus?.authenticated ? "已连通" : "等待扫码"}</strong></div>
-              {loginForSelected
-                ? <div className="netease-qr compact-qr" role="region" aria-label={`${SOURCE_LABELS[selectedApiSource]}扫码登录`}><div className="netease-qr-heading"><span>{loginForSelected.state === "waiting_confirm" ? "请在手机上确认登录" : `使用${SOURCE_LABELS[selectedApiSource]} App 扫码`}</span><IconButton label="取消扫码" onClick={onCancelMusicLogin}><X size={14} /></IconButton></div><img src={loginForSelected.qrImageDataUrl} alt={`${SOURCE_LABELS[selectedApiSource]}登录二维码`} /><button className="text-button" type="button" onClick={() => onRefreshMusicLogin(selectedApiSource)} disabled={musicLoginPending}><RefreshCw size={13} />刷新二维码</button></div>
-                : selectedApiStatus?.authenticated
-                  ? <button className="text-button music-change-account" type="button" onClick={() => onStartMusicLogin(selectedApiSource)} disabled={musicLoginPending}><RefreshCw size={13} />更换音乐账号</button>
-                  : <button className="primary-button" type="button" onClick={() => onStartMusicLogin(selectedApiSource)} disabled={musicLoginPending || !selectedApiStatus?.configured}>{musicLoginPending ? <LoaderCircle size={15} className="spin" /> : <ExternalLink size={15} />}{musicLoginPending ? "正在生成登录二维码" : "显示登录二维码"}</button>}
-            </div>}
-            {musicConnectReady && <div className="connection-card-complete"><span><Check size={14} />{SOURCE_LABELS[selectedApiSource ?? "qq_music"]}已连接</span><button className="primary-button" type="button" onClick={() => onPhaseChange("settings")}>进入节目设置 <ArrowRight size={15} /></button></div>}
+          {connectStage === "music" && <section ref={musicCardRef} className="onboarding-service-card music-onboarding-card">
+            <div className="music-platform-heading"><div><p className="console-code">MUSIC ACCOUNT / 02</p><h3>选择音乐平台</h3><p>先选择，再完成一次授权。</p></div><span className="music-platform-heading-note">支持随时更换</span></div>
+            <div className="music-connect-layout">
+            <div className="music-platform-switch" role="tablist" aria-label="音乐平台">
+              {musicPlatformSources.map((source) => {
+                const sourceId = source.sourceId as ApiMusicSource;
+                const status = musicApiStatus[sourceId];
+                const authenticated = status?.authenticated === true;
+                const active = selectedApiSource === sourceId;
+                return <button key={sourceId} className={`music-platform-panel ${active ? "is-selected" : ""}`} type="button" role="tab" aria-selected={active} disabled={musicLoginPending} onClick={() => onSourceChange(sourceId)}>
+                  <span className={`source-icon source-icon-${sourceId}`}><SourceGlyph sourceId={sourceId} /></span>
+                  <span className="music-platform-copy"><strong>{SOURCE_LABELS[sourceId]}</strong><small>{authenticated ? "账号已连通" : status?.configured ? "等待授权" : "连接器不可用"}</small></span>
+                  <span className={`music-platform-state ${authenticated ? "is-ready" : ""}`}>{authenticated ? <Check size={14} /> : <ArrowRight size={14} />}</span>
+                </button>;
+              })}
+            </div>
+            <div className="music-auth-surface">
+              <div className="music-auth-heading"><div><span className="console-code">AUTHORIZATION</span><h4>{SOURCE_LABELS[selectedApiSource]}</h4></div></div>
+              {!selectedApiStatus?.configured && <div className="music-auth-status" role="status"><span><StatusDot tone="error" />连接器不可用</span><strong>请在设置中检查服务</strong></div>}
+              <div className="music-auth-action">
+                {loginForSelected
+                  ? <div className="platform-qr" role="region" aria-label={`${SOURCE_LABELS[selectedApiSource]}扫码登录`}><IconButton className="platform-qr-close" label="取消扫码" onClick={onCancelMusicLogin}><X size={13} /></IconButton><img src={loginForSelected.qrImageDataUrl} alt={`${SOURCE_LABELS[selectedApiSource]}登录二维码`} /><button className="text-button platform-qr-refresh" type="button" onClick={() => onRefreshMusicLogin(selectedApiSource)} aria-busy={musicLoginPending} disabled={musicLoginPending}><RefreshCw size={13} className={musicLoginPending ? "spin" : ""} />{musicLoginPending ? "刷新中" : "刷新二维码"}</button></div>
+                  : musicConnectReady
+                    ? <div className="music-connected-state"><span className="music-connected-icon"><Check size={18} /></span><div><strong>{SOURCE_LABELS[selectedApiSource]}已连接</strong><p>授权状态会在本机持续保存。</p></div><button className="text-button music-change-account" type="button" onClick={() => onStartMusicLogin(selectedApiSource)} aria-busy={musicLoginPending} disabled={musicLoginPending}><RefreshCw size={13} className={musicLoginPending ? "spin" : ""} />{musicLoginPending ? "正在生成二维码" : "更换账号"}</button></div>
+                    : <div className="music-ready-state"><div><strong>准备好后，用手机扫码</strong><p>授权只请求节目所需的播放和账号信息。</p></div><button className="primary-button" type="button" onClick={() => onStartMusicLogin(selectedApiSource)} aria-busy={musicLoginPending} disabled={musicLoginPending || !selectedApiStatus?.configured}>{musicLoginPending ? <LoaderCircle size={15} className="spin" /> : <ExternalLink size={15} />}{musicLoginPending ? "正在生成二维码" : "开始扫码授权"}</button></div>}
+              </div>
+              <div className={`connection-card-complete ${musicConnectReady ? "is-ready" : "is-pending"}`}>
+                {!musicConnectReady && <span>扫码完成后继续</span>}
+                <button className="primary-button" type="button" disabled={!musicConnectReady || musicLoginPending} onClick={() => onPhaseChange("settings")}>进入节目设置 <ArrowRight size={15} /></button>
+              </div>
+            </div>
+            </div>
             <p className="connection-local-note">音乐账号授权只保存在这台 Mac，可随时在设置中重新授权。</p>
           </section>}
+          </div>
         </div>
       </section>}
 
-      {phase === "settings" && <section className="setup-column setup-form-column setup-settings-screen">
+      {phase === "settings" && <section className={`setup-column setup-form-column setup-settings-screen setup-program-step-${programStep}`}>
         <div className="section-intro section-intro-tight">
-          <p className="eyebrow">02 / PROGRAM</p>
-          <h2 ref={settingsHeadingRef} tabIndex={-1}>设定这档节目的声音与节奏。</h2>
+          <button className="builder-back-button" type="button" onClick={() => programStep === "host" ? onPhaseChange("connect") : setProgramStep("host")} disabled={creating}><ChevronLeft size={14} aria-hidden="true" />{programStep === "host" ? "返回连接平台" : "返回选择主持人"}</button>
+          <WorkflowHeading title={programStep === "host" ? "选择电台主持人" : "设置你的节目"} headingRef={settingsHeadingRef} />
         </div>
-        <form className="program-form" onSubmit={onSubmit}>
-          <section className="program-console program-host-console" aria-labelledby="host-console-title">
-            <div className="console-panel-heading">
-              <div><span className="console-code">VOICE DECK / A</span><h3 id="host-console-title">选择主持人</h3></div>
-            </div>
+        {programStep === "host" ? <div className="program-host-step">
+          <section className="program-console program-host-console host-step-panel" aria-label="选择主持人">
             <div className="form-block host-form-block">
               <div className="field-label-row"><span className="field-label">主持声线</span></div>
-              <div className="host-grid" role="radiogroup" aria-label="主持声线">{HOST_PROFILE_IDS.map((profileId, index) => {
-                const profile = HOST_PROFILES[profileId];
-                const previewing = voicePreviewProfile === profileId;
-                return <div key={profileId} className={`host-option ${hostProfile === profileId ? "selected" : ""}`}>
-                  <button ref={(element) => { hostChoiceRefs.current[index] = element; }} type="button" className="host-choice-button" role="radio" aria-checked={hostProfile === profileId} tabIndex={hostProfile === profileId ? 0 : -1} disabled={creating} onKeyDown={(event) => handleHostChoiceKeyDown(event, index)} onClick={() => onHostProfileChange(profileId)}>
-                    <RadioHostAvatar profileId={profileId} portrait />
-                    <span className="host-card-copy"><strong>{profile.name} <span className="host-gender" aria-hidden="true">{profile.genderSymbol}</span></strong><span className="host-card-meta"><small className="host-age">{profile.age} 岁</small><small className="host-mbti">{profile.mbti}</small></span><p>{HOST_PERSONALITY_COPY[profileId]}</p></span>
-                    {hostProfile === profileId && <span className="host-selected-mark" aria-hidden="true"><Check size={12} /></span>}
-                  </button>
-                  <div className="host-preview-panel"><button type="button" className="host-preview-button" aria-label={previewing ? `停止试听${profile.name}` : `试听${profile.name}`} disabled={voicePreviewProfile !== null && !previewing} onClick={() => onPreviewHost(profileId)}>{previewing ? <Square size={12} /> : <Play size={13} />}<span>{previewing ? "停止" : "试听"}</span></button></div>
-                </div>;
-              })}</div>
-            </div>
-          </section>
-
-          <section className="program-console program-control-console" aria-labelledby="control-console-title">
-            <div className="console-panel-heading">
-              <div><span className="console-code">PROGRAM DECK / B</span><h3 id="control-console-title">节目参数</h3></div>
-            </div>
-            <div className="program-control-grid">
-              <div className="form-block control-duration">
-                <div className="field-label-row"><span className="field-label">时长</span></div>
-                <div className="segmented-control duration-control" role="radiogroup" aria-label="节目时长">{DURATION_OPTIONS.map((duration) => <button key={duration} className={durationMinutes === duration ? "selected" : ""} type="button" role="radio" aria-checked={durationMinutes === duration} onClick={() => onDurationChange(duration)}>{duration}<span>分钟</span></button>)}</div>
-              </div>
-
-              <div className="form-block control-host-settings">
-                <div className="field-label-row"><span className="field-label">主持设置</span></div>
-                <div className="host-lower-controls">
-                  <div className="host-density-block">
-                    <span className="host-setting-title">口播频率</span>
-                    <div className="density-select" role="radiogroup" aria-label="主持频率">{HOST_DENSITY_OPTIONS.map((option) => <button key={option.value} type="button" role="radio" aria-checked={hostDensity === option.value} className={hostDensity === option.value ? "selected" : ""} onClick={() => onDensityChange(option.value)}>{option.label}</button>)}</div>
-                  </div>
-                  <div className="host-companion-row">
-                    <span className="host-setting-title">桌面陪伴</span>
-                    <button type="button" className={`desktop-companion-toggle ${desktopPetEnabled ? "selected" : ""}`} aria-pressed={desktopPetEnabled} onClick={() => onDesktopPetEnabledChange(!desktopPetEnabled)} disabled={creating}><span className="companion-toggle-indicator">{desktopPetEnabled ? <Check size={13} /> : null}</span><span><strong>{desktopPetEnabled ? "开启" : "关闭"}</strong><small>{desktopPetEnabled ? "确认后出现" : "本档不显示"}</small></span></button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="form-block control-recommendation-mode">
-                <div className="field-label-row"><span className="field-label">推荐方式</span></div>
-                <div className="recommendation-mode-select" role="radiogroup" aria-label="推荐方式">{RECOMMENDATION_MODE_OPTIONS.map((option) => <button key={option.value} type="button" role="radio" aria-checked={recommendationMode === option.value} className={recommendationMode === option.value ? "selected" : ""} onClick={() => onRecommendationModeChange(option.value)}><strong>{option.label}</strong><span>{option.detail}</span></button>)}</div>
-              </div>
-
-              {recommendationMode === "atmosphere"
-                ? <div className="form-block control-scene">
-                  <div className="field-label-row"><span className="field-label">音乐氛围</span></div>
-                  <div className="scene-grid" role="radiogroup" aria-label="音乐氛围">{SCENE_PRESETS.map((sceneId) => { const item = SCENE_META[sceneId]; return <button key={sceneId} type="button" className={`scene-option ${scenePreset === sceneId ? "selected" : ""}`} role="radio" aria-checked={scenePreset === sceneId} onClick={() => onSceneChange(sceneId)}><span className="scene-option-label">{item.label}</span><span className="scene-option-hint">{item.hint}</span></button>; })}</div>
-                  <div className="scene-readout"><Zap size={14} /><span>能量曲线</span><strong>{scene.curve}</strong></div>
-                </div>
-                : <div className="form-block control-genres">
-                  <div className="field-label-row"><span className="field-label">音乐风格 <span className="optional">最多选 {MAX_MUSIC_GENRES} 种</span></span><span className="field-help">{musicGenres.length === 0 ? "请选择风格" : `已选 ${musicGenres.length} / ${MAX_MUSIC_GENRES}`}</span></div>
-                  <div className="genre-grid" role="group" aria-label="音乐风格">{MUSIC_GENRE_IDS.map((genreId) => { const genre = MUSIC_GENRES[genreId]; const selectedGenre = musicGenres.includes(genreId); const selectionLimitReached = musicGenres.length >= MAX_MUSIC_GENRES && !selectedGenre; return <button key={genreId} type="button" aria-pressed={selectedGenre} disabled={selectionLimitReached} className={`genre-option ${selectedGenre ? "selected" : ""}`} onClick={() => toggleGenre(genreId)}>{genre.label}</button>; })}</div>
-                </div>}
-
-              <div className="recommendation-controls recommendation-controls-single control-familiarity">
-                <div className="form-block">
-                  <div className="field-label-row"><span className="field-label">熟悉 / 探索</span></div>
-                  <div className="familiarity-select" role="radiogroup" aria-label="熟悉和探索比例">
-                    {FAMILIARITY_OPTIONS.map((option) => (
-                      <button key={option.value} type="button" role="radio" aria-checked={familiarityRatio === option.value} className={familiarityRatio === option.value ? "selected" : ""} onClick={() => onFamiliarityRatioChange(option.value)}>
-                        <strong>{option.label}</strong>
-                        <span>{option.detail}</span>
+              <div className="host-carousel" role="radiogroup" aria-label="主持声线" onPointerDown={handleHostCarouselPointerDown} onPointerMove={handleHostCarouselPointerMove} onPointerUp={handleHostCarouselPointerUp} onPointerCancel={() => { hostSwipeStart.current = null; }} onClickCapture={(event) => { if (suppressHostClick.current && event.detail !== 0) { event.preventDefault(); event.stopPropagation(); suppressHostClick.current = false; } }}>
+                <button className="host-carousel-arrow host-carousel-arrow-left" type="button" aria-label="上一位主持人" onClick={() => moveHostCarousel(-1)} disabled={creating}><ChevronLeft size={18} /></button>
+                <div className="host-carousel-stage">
+                  {HOST_PROFILE_IDS.map((profileId, profileIndex) => {
+                    const offset = (profileIndex - hostCarouselIndex + HOST_PROFILE_IDS.length + 3) % HOST_PROFILE_IDS.length - 3;
+                    const profile = HOST_PROFILES[profileId];
+                    const active = offset === 0;
+                    const previewing = voicePreviewProfile === profileId;
+                    return <article key={profileId} data-host={profileId} className={`host-option host-carousel-card host-carousel-card-${active ? "active" : Math.abs(offset) === 1 ? "near" : Math.abs(offset) === 2 ? "far" : "hidden"} ${active ? "selected" : ""}`} style={{ "--carousel-offset": offset } as CSSProperties}>
+                      <button ref={(element) => { hostChoiceRefs.current[profileIndex] = element; }} type="button" className="host-choice-button" role="radio" aria-checked={hostProfile === profileId} tabIndex={active ? 0 : -1} disabled={creating} onKeyDown={(event) => handleHostChoiceKeyDown(event, profileIndex)} onClick={() => selectHostFromCarousel(profileId)}>
+                        <span className="host-carousel-card-index">{String(profileIndex + 1).padStart(2, "0")} / 06</span>
+                        <span className="host-card-art"><RadioHostAvatar profileId={profileId} portrait />{active && <><span className="host-card-scan" aria-hidden="true" /><span className="host-lock-frame" aria-hidden="true"><i /><i /><i /><i /></span></>}</span>
+                        <span className="host-card-copy"><span className="host-card-identity"><strong>{profile.name} <span className="host-gender" aria-hidden="true">{profile.genderSymbol}</span></strong><span className="host-card-meta"><small className="host-age">{profile.age} 岁</small><small className="host-mbti">{profile.mbti}</small></span></span><span className="host-card-trait">{profile.trait}</span><span className="host-card-description">{HOST_PERSONALITY_COPY[profileId]}</span></span>
+                        {active && <span className="host-lock-label" aria-hidden="true"><Check size={11} /> 已选主持</span>}
                       </button>
-                    ))}
-                  </div>
+                      <div className="host-preview-panel"><button type="button" className={`host-preview-button ${previewing ? "is-previewing" : ""}`} tabIndex={active ? 0 : -1} aria-label={previewing ? `停止试听${profile.name}` : `试听${profile.name}`} aria-pressed={previewing} aria-busy={previewing && voicePreviewLoading} disabled={!active || creating} onClick={() => onPreviewHost(profileId)}>{previewing && voicePreviewLoading ? <LoaderCircle size={14} className="spin" /> : previewing ? <Square size={14} /> : <Play size={15} />}<span>{previewing && voicePreviewLoading ? "取消加载" : previewing ? "停止试听" : "试听声音"}</span><span className="host-preview-wave" aria-hidden="true"><i /><i /><i /><i /><i /></span></button></div>
+                    </article>;
+                  })}
                 </div>
+                <button className="host-carousel-arrow host-carousel-arrow-right" type="button" aria-label="下一位主持人" onClick={() => moveHostCarousel(1)} disabled={creating}><ChevronRight size={18} /></button>
+                <div className="host-carousel-hint" aria-hidden="true"><span>←</span><span>左右滑动切换主持人</span><span>→</span></div>
               </div>
             </div>
           </section>
 
-          <div className="form-submit-row"><button className="secondary-button" type="button" onClick={() => onPhaseChange("connect")} disabled={creating}>返回连接</button>{errorMessage ? <div className="form-feedback" role="alert"><TriangleAlert size={14} /><span>{errorMessage}</span><IconButton label="关闭错误提示" onClick={onDismissError}><X size={13} /></IconButton></div> : createBlocker ? <div className="brief-summary is-warning" role="status"><AlertTriangle size={14} /><span>{createBlocker}</span></div> : <div className="brief-summary"><span className="summary-dot" /><span>{durationMinutes} 分钟 · {recommendationSummary} · {selectedHost.name} · {SOURCE_SHORT_LABELS[selectedSource]}</span></div>}<button className={`primary-button${!canCreate ? " is-blocked" : ""}`} disabled={creating} data-ready={canCreate ? "true" : "false"} type="submit">{creating ? <LoaderCircle size={16} className="spin" /> : <ArrowRight size={16} />}{creating ? "准备中" : "查看计划"}</button></div>
-        </form>
+          <div className="program-step-footer">
+            <div className="program-step-summary" aria-live="polite"><span className="summary-dot" /><span>当前选择：{selectedHost.name} · {selectedHost.trait}</span></div>
+            <button className="primary-button primary-button-wide" type="button" onClick={() => { if (voicePreviewProfile) onPreviewHost(voicePreviewProfile); setProgramStep("parameters"); }} disabled={creating}>确定主持人，继续 <ArrowRight size={16} /></button>
+          </div>
+        </div> : <form className="program-builder" data-page={builderPage} onSubmit={onSubmit}>
+          <nav className="builder-page-nav" aria-label="节目设置分区">
+            {["音乐", "歌单", "主持", "预览"].map((label, index) => <button key={label} type="button" aria-pressed={builderPage === index} onClick={() => setBuilderPage(index)}>{label}</button>)}
+          </nav>
+          <div className="builder-controls">
+            <fieldset className="builder-section" disabled={creating}>
+              <legend><span className="builder-section-index">01</span>今天，想听什么？</legend>
+              <div className="builder-segments builder-modes" style={{ "--choice-count": 2, "--choice-index": recommendationMode === "atmosphere" ? 0 : 1 } as CSSProperties}>
+                {RECOMMENDATION_MODE_OPTIONS.map((option) => <label key={option.value}><input type="radio" name="recommendation-mode" value={option.value} checked={recommendationMode === option.value} onChange={() => onRecommendationModeChange(option.value)} /><span>{option.label}</span></label>)}
+              </div>
+              {recommendationMode === "atmosphere" ? <div className="builder-scenes" role="group" aria-label="音乐氛围">
+                {SCENE_PRESETS.map((sceneId) => <label key={sceneId} className={scenePreset === sceneId ? "is-selected" : ""}>
+                  <input type="radio" name="music-scene" value={sceneId} checked={scenePreset === sceneId} onChange={() => onSceneChange(sceneId)} />
+                  <img className="builder-mood-icon" src={`/media/mood-icons/${sceneId}.png`} alt="" aria-hidden="true" />
+                  <strong>{SCENE_META[sceneId].label}</strong>
+                  <small>{SCENE_META[sceneId].hint}</small>
+                </label>)}
+              </div> : <div className="builder-genres" role="group" aria-label="音乐风格">
+                <p>最多选 {MAX_MUSIC_GENRES} 种 <span>已选 {musicGenres.length} / {MAX_MUSIC_GENRES}</span></p>
+                <div className="builder-genre-options">{MUSIC_GENRE_IDS.slice(genrePage * genresPerPage, genrePage * genresPerPage + genresPerPage).map((genreId) => <button key={genreId} type="button" aria-pressed={musicGenres.includes(genreId)} disabled={musicGenres.length >= MAX_MUSIC_GENRES && !musicGenres.includes(genreId)} onClick={() => toggleGenre(genreId)}>{musicGenres.includes(genreId) && <Check size={12} />}{MUSIC_GENRES[genreId].label}</button>)}</div>
+                <div className="builder-genre-paging"><span>{selectedGenreLabels.length ? selectedGenreLabels.join(" / ") : "选择喜欢的音乐风格"}</span><button type="button" aria-label="上一页风格" disabled={genrePage === 0} onClick={() => setGenrePage((page) => page - 1)}><ChevronLeft size={16} /></button><small>{genrePage + 1} / {Math.ceil(MUSIC_GENRE_IDS.length / genresPerPage)}</small><button type="button" aria-label="下一页风格" disabled={(genrePage + 1) * genresPerPage >= MUSIC_GENRE_IDS.length} onClick={() => setGenrePage((page) => page + 1)}><ChevronRight size={16} /></button></div>
+              </div>}
+            </fieldset>
+
+            <fieldset className="builder-section builder-playlist-section" disabled={creating}>
+              <legend><span className="builder-section-index">02</span>歌单设置</legend>
+              <div className="builder-setting-columns">
+              <div className="builder-setting-field">
+              <div className="builder-field-heading">歌单时长 <small>分钟</small></div>
+              <div className="builder-segments builder-duration" role="group" aria-label="节目时长" style={{ "--choice-count": DURATION_OPTIONS.length, "--choice-index": DURATION_OPTIONS.findIndex((value) => value === durationMinutes) } as CSSProperties}>
+                {DURATION_OPTIONS.map((duration) => <label key={duration}><input type="radio" name="program-duration" aria-label={`${duration} 分钟`} checked={durationMinutes === duration} onChange={() => onDurationChange(duration)} /><span>{duration}</span></label>)}
+              </div>
+              </div>
+              <div className="builder-setting-field">
+              <div className="builder-field-heading">歌曲属性</div>
+              <div className="builder-segments" role="group" aria-label="熟悉和探索比例" style={{ "--choice-count": 3, "--choice-index": FAMILIARITY_OPTIONS.findIndex((option) => option.value === familiarityRatio) } as CSSProperties}>
+                {FAMILIARITY_OPTIONS.map((option) => <label key={option.value}><input type="radio" name="program-familiarity" checked={familiarityRatio === option.value} onChange={() => onFamiliarityRatioChange(option.value)} /><span>{option.label}</span></label>)}
+              </div>
+              </div>
+              </div>
+            </fieldset>
+
+            <fieldset className="builder-section builder-host-section" disabled={creating}>
+              <legend><span className="builder-section-index">03</span>电台主持设置</legend>
+              <div className="builder-setting-columns">
+              <div className="builder-setting-field">
+              <div className="builder-field-heading">口播频率</div>
+              <div className="builder-segments" role="group" aria-label="主持频率" style={{ "--choice-count": 3, "--choice-index": HOST_DENSITY_OPTIONS.findIndex((option) => option.value === hostDensity) } as CSSProperties}>
+                {HOST_DENSITY_OPTIONS.map((option, index) => <label key={option.value}><input type="radio" name="program-density" checked={hostDensity === option.value} onChange={() => onDensityChange(option.value)} /><span>{["少说几句", "适度串场", "多聊一点"][index]}</span></label>)}
+              </div>
+              <p className="builder-density-note">{hostDensity === "low" ? "少些言语，让旋律慢慢流淌。" : hostDensity === "medium" ? "几首歌之间，聊聊音乐与故事。" : "多一点分享，像朋友在身边。"}</p>
+              </div>
+              <div className="builder-setting-field">
+              <div className="builder-field-heading">桌面搭子</div>
+              <div className="builder-companion builder-companion-control"><span>{desktopPetEnabled ? "已开启" : "已关闭"}</span><button type="button" role="switch" aria-label="桌面陪伴" aria-checked={desktopPetEnabled} onClick={() => onDesktopPetEnabledChange(!desktopPetEnabled)}><span /></button></div>
+              <p className="builder-companion-note">开启后，{selectedHost.name}会以桌面搭子的形象陪你听歌。</p>
+              </div>
+              </div>
+            </fieldset>
+          </div>
+
+          <aside className="builder-preview" aria-label="本次节目">
+            <div className="builder-cover"><RadioHostAvatar profileId={hostProfile} portrait /><div className="builder-preview-heading"><span>YOUR PRIVATE RADIO</span><small>节目预览</small></div></div>
+            <div className="builder-signal" aria-label={`节目时长 ${durationMinutes} 分钟`}>
+              <div className="builder-signal-readout" aria-hidden="true"><span>播放时长</span><strong>{durationMinutes}<small>min</small></strong></div>
+              <div className="builder-tuning-scale" aria-hidden="true"><i style={{ left: `${(durationMinutes - 30) / 90 * 100}%` }} /><span>30</span><span>60</span><span>90</span><span>120</span></div>
+            </div>
+            <div className="builder-preview-host"><div className="builder-cover-caption"><span>与你一起听</span><strong>{selectedHost.name}</strong></div><button type="button" onClick={() => setProgramStep("host")} disabled={creating}>更换主持人</button></div>
+            <div className="builder-preview-copy" aria-live="polite" aria-atomic="true">
+              <span className="builder-preview-source">{SOURCE_SHORT_LABELS[selectedSource]} · {durationMinutes} 分钟私人电台</span>
+              <h3>{recommendationMode === "atmosphere" ? scene.label : selectedGenreLabels.join(" / ") || "选择你的风格"}</h3>
+              <div className="builder-energy"><Activity size={16} /><span>{recommendationMode === "atmosphere" ? scene.curve : "围绕你喜欢的风格，自然衔接"}</span></div>
+              <p>{familiarityRatio === 80 ? "以熟悉的音乐为主，穿插少量新发现。" : familiarityRatio === 40 ? "从熟悉的旋律出发，多认识一些新音乐。" : "把大部分时间留给新发现，偶尔遇见熟悉的旋律。"}{hostDensity === "low" ? "主持人偶尔说几句，让音乐多留一会儿。" : hostDensity === "medium" ? "主持人每隔几首歌，自然地接上话。" : "主持人会多聊一点，串联音乐与故事。"}</p>
+              <div className="builder-ratio" aria-hidden="true"><span style={{ transform: `scaleX(${familiarityRatio / 100})` }} /></div>
+              <div className="builder-ratio-labels"><span>熟悉约 {familiarityRatio}%</span><span>探索约 {100 - familiarityRatio}%</span></div>
+              <div className="builder-preview-companion">{desktopPetEnabled ? `桌面搭子：${HOST_PROFILES[desktopPetProfile].name}` : "桌面陪伴已关闭"}</div>
+            </div>
+            <div className="builder-submit">
+              {errorMessage ? <div className="builder-feedback" role="alert"><TriangleAlert size={16} /><span>{errorMessage}</span><IconButton label="关闭错误提示" onClick={onDismissError}><X size={14} /></IconButton></div> : createBlocker ? <p className="builder-feedback" role="status">{createBlocker}</p> : null}
+              <button className="primary-button" aria-busy={creating} disabled={creating || !canCreate} type="submit">{creating ? <LoaderCircle size={17} className="spin" /> : <ArrowRight size={17} />}{creating ? "准备中" : "查看节目计划"}</button>
+              <small>下一步确认歌单，再开始播放</small>
+            </div>
+          </aside>
+          <div className="builder-page-footer"><button type="button" disabled={builderPage === 0} onClick={() => setBuilderPage((page) => page - 1)}>上一步</button><button type="button" disabled={builderPage === 3} onClick={() => setBuilderPage((page) => page + 1)}>{builderPage === 2 ? "查看设置预览" : "下一步"}<ArrowRight size={16} /></button></div>
+        </form>}
       </section>}
     </div>
   );
@@ -3773,7 +4006,7 @@ function SourceGlyph({ sourceId }: { sourceId: SourceId }) {
 }
 
 type PlanEditorMode = "browse" | "batch" | "order";
-function ConfirmView({ program, checks, onExit, onConfirm, canRetryHost, confirming, exiting, updating, onReplace, onRegenerate, onReorder, onUndo }: {
+function ConfirmView({ program, checks, onExit, onConfirm, canRetryHost, confirming, exiting, updating: planUpdating, onReplace, onRegenerate, onReorder, onUndo }: {
   program: LocalProgram;
   checks: { source: boolean; player: boolean; service: boolean; host: boolean; tts: boolean };
   onExit: () => void;
@@ -3790,12 +4023,27 @@ function ConfirmView({ program, checks, onExit, onConfirm, canRetryHost, confirm
   const apiMusic = isApiMusicSource(program.spec.sourceId);
   const rundown = program.rundown ?? [];
   const selectedHost = HOST_PROFILES[program.spec.hostProfile ?? DEFAULT_HOST_PROFILE];
-  const density = HOST_DENSITY_OPTIONS.find((option) => option.value === program.spec.hostDensity);
-  const familiarity = FAMILIARITY_OPTIONS.find((option) => option.value === program.spec.familiarityRatio);
-  const genreLabels = (program.spec.musicGenres ?? []).map((genreId) => MUSIC_GENRES[genreId].label);
   const [replacingTrackId, setReplacingTrackId] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
+  const [editPending, setEditPending] = useState<"replace" | "regenerate" | "batch" | "order" | null>(null);
+  const editBusyRef = useRef(false);
+  const updating = planUpdating || editPending !== null || confirming || exiting;
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const runEdit = async (kind: NonNullable<typeof editPending>, action: () => Promise<void>) => {
+    if (updating || editBusyRef.current) return;
+    editBusyRef.current = true;
+    setEditPending(kind);
+    try {
+      await action();
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : "歌单更新失败，请重试。");
+    } finally {
+      editBusyRef.current = false;
+      setEditPending(null);
+      setReplacingTrackId(null);
+      setRegenerating(false);
+    }
+  };
   const [editorMode, setEditorMode] = useState<PlanEditorMode>("browse");
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(() => new Set());
   const [draftOrder, setDraftOrder] = useState<string[]>(() => rundown.map((track) => track.id));
@@ -3884,50 +4132,30 @@ function ConfirmView({ program, checks, onExit, onConfirm, canRetryHost, confirm
     setActionMessage(result.message);
     if (result.ok) setEditorMode("browse");
   };
-  const undoLastChange = async () => {
-    setActionMessage(null);
-    const result = await onUndo();
-    setActionMessage(result.message);
-    if (result.ok) setEditorMode("browse");
-  };
   return (
     <div className="confirm-view">
-      <div className="confirm-topbar"><p className="eyebrow">确认计划</p><div className="confirm-topbar-actions"><button className="secondary-button" type="button" onClick={onExit} disabled={exiting || confirming || updating}>{exiting ? <LoaderCircle size={15} className="spin" /> : <RotateCcw size={15} />}{exiting ? "退出中" : "退出节目"}</button></div></div>
-      <section className="program-spec-summary" aria-labelledby="program-spec-summary-title">
-        <div className="program-spec-summary-heading"><p className="eyebrow" id="program-spec-summary-title">本次电台参数</p><span>{rundown.length} 首歌曲 · 约 {formatTrackDuration(totalSeconds)}</span></div>
-        <dl className="program-spec-list">
-          <div><dt>音源与时长</dt><dd>{SOURCE_SHORT_LABELS[program.spec.sourceId]} · {program.spec.durationMinutes} 分钟</dd></div>
-          <div><dt>推荐方式</dt><dd>{programRecommendationLabel(program.spec)}</dd></div>
-          <div><dt>主持人</dt><dd>{selectedHost.name} · {selectedHost.trait}{program.spec.desktopPetEnabled ? " · 桌面搭子开启" : ""}</dd></div>
-          <div><dt>口播频率</dt><dd>{density?.label ?? program.spec.hostDensity}频 · {density?.detail ?? "自然衔接"}</dd></div>
-          <div><dt>推荐倾向</dt><dd>{familiarity?.label ?? "平衡推荐"} · 熟悉歌曲目标 {program.spec.familiarityRatio ?? 40}%</dd></div>
-          <div><dt>音乐锚点</dt><dd>{genreLabels.length > 0 ? genreLabels.join(" / ") : "跟随账号听歌画像"}</dd></div>
-        </dl>
-      </section>
-      {apiMusic && (
-        <div className="plan-editor-grid plan-editor-grid-solo">
-          <section className="program-outline" aria-label="节目单">
-            <div className="outline-heading">
-              <div><p className="eyebrow outline-channel-label"><ListMusic size={13} />节目单 <span>CH-A</span></p><h3>{program.playlist?.name ?? program.plannedPlaylistName ?? "本次节目单"}</h3><p className="outline-playlist-name"><span>{rundown.length} 首歌曲</span>约 {formatTrackDuration(totalSeconds)} · 已修改 {modifiedCount} 首</p></div>
-              <span className="outline-console-status"><i />EDIT READY</span>
-            </div>
+      <div className="confirm-topbar"><div><button className="builder-back-button" type="button" onClick={onExit} aria-busy={exiting} disabled={confirming || exiting || updating}>{exiting ? <LoaderCircle size={14} className="spin" /> : <ChevronLeft size={14} />}{exiting ? "正在返回" : "返回节目设置"}</button><div className="confirm-title-row"><WorkflowHeading title="请确认你的歌单" /><div className="confirm-selection-summary" aria-label="已选节目设置"><span><Clock3 size={14} aria-hidden="true" />{program.spec.durationMinutes} 分钟</span><span><Music2 size={14} aria-hidden="true" />{programRecommendationLabel(program.spec)}</span></div></div></div></div>
+      <div className="confirm-workspace">
+        {apiMusic && (
+          <div className="plan-editor-grid plan-editor-grid-solo">
+            <section className="program-outline" aria-label="节目单">
             <div className="plan-editor-toolbar" aria-label="节目单编辑工具">
               <div className="plan-editor-tabs" role="tablist" aria-label="编辑方式">
-                <button type="button" role="tab" aria-selected={editorMode === "browse"} className={editorMode === "browse" ? "selected" : ""} onClick={() => selectMode("browse")}>浏览</button>
-                <button type="button" role="tab" aria-selected={editorMode === "batch"} className={editorMode === "batch" ? "selected" : ""} onClick={() => selectMode("batch")}>批量调整</button>
-                <button type="button" role="tab" aria-selected={editorMode === "order"} className={editorMode === "order" ? "selected" : ""} onClick={() => selectMode("order")}>调整顺序</button>
+                <button type="button" role="tab" disabled={updating} aria-selected={editorMode === "browse"} className={editorMode === "browse" ? "selected" : ""} onClick={() => selectMode("browse")}>浏览</button>
+                <button type="button" role="tab" disabled={updating} aria-selected={editorMode === "batch"} className={editorMode === "batch" ? "selected" : ""} onClick={() => selectMode("batch")}>批量调整</button>
+                <button type="button" role="tab" disabled={updating} aria-selected={editorMode === "order"} className={editorMode === "order" ? "selected" : ""} onClick={() => selectMode("order")}>调整顺序</button>
               </div>
-              <button className="secondary-button plan-refresh-button" type="button" disabled={updating} onClick={() => void regeneratePlan()}>{regenerating ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}重新推荐</button>
+              <button className="secondary-button plan-refresh-button" type="button" disabled={updating} aria-busy={regenerating} onClick={() => void runEdit("regenerate", regeneratePlan)}>{regenerating ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}{regenerating ? "正在生成歌单与推荐语" : "重新推荐"}</button>
             </div>
             {editorMode === "batch" && <div className="batch-adjust-panel">
               <p><strong>已选择 {selectedIds.length} 首歌曲</strong></p>
               <div className="batch-selection-actions">
                 <button className="text-button" type="button" disabled={updating || selectedIds.length === rundown.length} onClick={() => setSelectedTrackIds(new Set(rundown.map((track) => track.id)))}>全选</button>
                 <button className="text-button" type="button" disabled={updating || selectedIds.length === 0} onClick={() => setSelectedTrackIds(new Set())}>清空</button>
-                <button className="primary-button" type="button" disabled={updating || selectedIds.length === 0} onClick={() => void replaceSelectedTracks()}>{updating ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}替换所选{selectedIds.length > 0 ? `（${selectedIds.length}）` : ""}</button>
+                <button className="primary-button" type="button" disabled={updating || selectedIds.length === 0} aria-busy={editPending === "batch"} onClick={() => void runEdit("batch", replaceSelectedTracks)}>{editPending === "batch" ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}{editPending === "batch" ? "替换中" : "替换所选"}{selectedIds.length > 0 ? `（${selectedIds.length}）` : ""}</button>
               </div>
             </div>}
-            {editorMode === "order" && <div className="order-edit-banner"><span>使用每首歌右侧的箭头调整位置。</span><div><button className="text-button" type="button" onClick={() => selectMode("browse")} disabled={updating}>取消</button><button className="secondary-button" type="button" onClick={() => void saveOrder()} disabled={updating}><Check size={15} />保存顺序</button></div></div>}
+            {editorMode === "order" && <div className="order-edit-banner"><span>使用每首歌右侧的箭头调整位置。</span><div><button className="text-button" type="button" onClick={() => selectMode("browse")} disabled={updating}>取消</button><button className="secondary-button" type="button" onClick={() => void runEdit("order", saveOrder)} disabled={updating || !hasPendingOrder} aria-busy={editPending === "order"}>{editPending === "order" ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />}{editPending === "order" ? "保存中" : "保存顺序"}</button></div></div>}
             <ol>{displayRundown.map((track, index) => (
               <li key={track.id} className={`outline-item ${editorMode === "batch" && selectedTrackIds.has(track.id) ? "is-selected" : ""} ${replacingTrackId === track.id ? "is-replacing" : ""}`} aria-busy={replacingTrackId === track.id}>
                 <span className="outline-index-cell"><span className="outline-index">{String(index + 1).padStart(2, "0")}</span><span className={`outline-familiarity ${track.liked ? "is-familiar" : "is-discovery"}`}>{track.liked ? "熟悉" : "探索"}</span></span>
@@ -3935,27 +4163,44 @@ function ConfirmView({ program, checks, onExit, onConfirm, canRetryHost, confirm
                 <div className="outline-track">
                   <div className="outline-track-heading">
                     <div><strong>{track.title}</strong><span className="outline-track-artist"><UserRound size={12} aria-hidden="true" />{track.artist}</span></div>
-                    <div className="outline-track-actions"><time>{Math.floor(track.durationSeconds / 60)}:{String(track.durationSeconds % 60).padStart(2, "0")}</time>{editorMode === "order" ? <div className="order-row-actions"><IconButton label={`将《${track.title}》上移`} disabled={updating || index === 0} onClick={() => moveTrack(index, -1)}><ArrowUp size={14} /></IconButton><IconButton label={`将《${track.title}》下移`} disabled={updating || index === displayRundown.length - 1} onClick={() => moveTrack(index, 1)}><ArrowDown size={14} /></IconButton></div> : editorMode === "batch" ? <label className="batch-track-selector"><input type="checkbox" aria-label={`选择《${track.title}》`} checked={selectedTrackIds.has(track.id)} disabled={updating} onChange={() => toggleTrackSelection(track.id)} /><span aria-hidden="true">选择</span></label> : <div className="track-edit-actions"><button className="track-action-button" type="button" disabled={updating} onClick={() => void replaceTrack(track)}>{replacingTrackId === track.id ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}{replacingTrackId === track.id ? "替换中" : "替换"}</button></div>}</div>
+                    <div className="outline-track-actions"><time>{Math.floor(track.durationSeconds / 60)}:{String(track.durationSeconds % 60).padStart(2, "0")}</time>{editorMode === "order" ? <div className="order-row-actions"><IconButton label={`将《${track.title}》上移`} disabled={updating || index === 0} onClick={() => moveTrack(index, -1)}><ArrowUp size={14} /></IconButton><IconButton label={`将《${track.title}》下移`} disabled={updating || index === displayRundown.length - 1} onClick={() => moveTrack(index, 1)}><ArrowDown size={14} /></IconButton></div> : editorMode === "batch" ? <label className="batch-track-selector"><input type="checkbox" aria-label={`选择《${track.title}》`} checked={selectedTrackIds.has(track.id)} disabled={updating} onChange={() => toggleTrackSelection(track.id)} /><span aria-hidden="true">选择</span></label> : <div className="track-edit-actions"><button className="track-action-button" type="button" disabled={updating} aria-busy={replacingTrackId === track.id} onClick={() => void runEdit("replace", () => replaceTrack(track))}>{replacingTrackId === track.id ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}{replacingTrackId === track.id ? "替换中" : "替换"}</button></div>}</div>
                   </div>
                   {(track.album || track.releaseYear) && <p className="outline-track-meta">{track.album && !releaseTitlesMatch(track.title, track.album) ? track.album : ""}{track.album && track.releaseYear && !releaseTitlesMatch(track.title, track.album) ? " · " : ""}{track.releaseYear ? `${track.releaseYear} 年` : ""}</p>}
                 </div>
               </li>
             ))}</ol>
-          </section>
-        </div>
-      )}
-      <div className="confirm-actions"><div className="plan-history-actions"><button className="secondary-button" type="button" onClick={() => void undoLastChange()} disabled={updating || !program.canUndoPlan}><Undo2 size={15} />撤销</button></div><p className={`confirm-commit-summary ${canConfirm ? "" : "is-blocked"}`}><Info size={14} />{actionMessage ?? confirmationStatusMessage}</p><button className="primary-button primary-button-wide" type="button" onClick={hasPendingOrder ? () => void saveOrder() : onConfirm} disabled={confirming || exiting || updating || !canConfirm}>{confirming ? <LoaderCircle size={16} className="spin" /> : hasPendingOrder ? <Check size={16} /> : <Play size={16} />}{confirming ? "正在生成口播" : updating ? "计划更新中" : hasPendingOrder ? "保存顺序" : canRetryHost ? "重新生成口播" : "完成选歌并生成口播"}</button></div>
+            </section>
+          </div>
+        )}
+        <aside className="playlist-recommendation" aria-labelledby="playlist-recommendation-title">
+          <div className="recommendation-portrait"><RadioHostAvatar profileId={program.spec.hostProfile ?? DEFAULT_HOST_PROFILE} portrait /><div className="recommendation-host"><span>与你一起听</span><strong>{selectedHost.name}</strong></div></div>
+          <div className="recommendation-body">
+            <div className="recommendation-scroll" tabIndex={0} role="region" aria-label="主持人推荐语">
+            <h3 id="playlist-recommendation-title">这份歌单，想推荐给你</h3>
+            {regenerating && <p className="recommendation-status" role="status">正在重新选歌，歌曲确定后会开始撰写推荐语。</p>}
+            <div className="recommendation-copy" aria-live="polite" aria-busy={regenerating || Boolean(program.playlistRecommendation && ["researching", "writing"].includes(program.playlistRecommendation.status))}>
+              {program.playlistRecommendation?.status === "ready"
+                ? program.playlistRecommendation.text?.split(/\n\s*\n|\n/).filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)
+                : <p className="recommendation-status">{program.playlistRecommendation?.status === "researching" ? "正在查阅歌曲与艺人的资料，为你准备这份歌单的推荐语…" : program.playlistRecommendation?.status === "writing" ? `${selectedHost.name}正在整理这份歌单的听点…` : "推荐语暂未生成。你可以继续选歌，整单重新推荐时会再次尝试。"}</p>}
+            </div>
+            {Boolean(program.playlistRecommendation?.sources?.length) && <details className="recommendation-sources"><summary>参考资料 · {program.playlistRecommendation!.sources!.length}</summary>{program.playlistRecommendation!.sources!.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer">{source.title}</a>)}</details>}
+            </div>
+      <div className="confirm-actions"><p className={`confirm-commit-summary ${canConfirm ? "" : "is-blocked"}`}><Info size={14} />{actionMessage ?? confirmationStatusMessage}</p><button className="primary-button primary-button-wide" type="button" aria-busy={confirming || editPending === "order"} onClick={hasPendingOrder ? () => void runEdit("order", saveOrder) : onConfirm} disabled={confirming || exiting || updating || !canConfirm}>{confirming || editPending === "order" ? <LoaderCircle size={16} className="spin" /> : hasPendingOrder ? <Check size={16} /> : <Play size={16} />}{confirming ? "正在生成口播" : updating ? "计划更新中" : hasPendingOrder ? "保存顺序" : canRetryHost ? "重新生成口播" : "确认并生成"}</button></div>
+          </div>
+        </aside>
+      </div>
     </div>
   );
 }
 
-function PlaylistSaveDialog({ sourceId, trackCount, confirming, onKeep, onTemporary, onClose }: { sourceId: ApiMusicSource; trackCount: number; confirming: boolean; onKeep: () => void; onTemporary: () => void; onClose: () => void }) {
+function PlaylistSaveDialog({ sourceId, playlistName, confirming, onKeep, onTemporary, onClose }: { sourceId: ApiMusicSource; playlistName?: string; confirming: boolean; onKeep: () => void; onTemporary: () => void; onClose: () => void }) {
   const dialogRef = useRef<HTMLElement | null>(null);
+  const [choice, setChoice] = useState<"keep" | "temporary" | null>(null);
   const sourceLabel = SOURCE_LABELS[sourceId];
   useEffect(() => {
     dialogRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && !confirming) onClose();
       if (event.key !== "Tab" || !dialogRef.current) return;
       const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>("button:not([disabled])"));
       if (focusable.length === 0) return;
@@ -3971,21 +4216,21 @@ function PlaylistSaveDialog({ sourceId, trackCount, confirming, onKeep, onTempor
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [onClose, confirming]);
   return (
-    <div className="dialog-scrim" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+    <div className="dialog-scrim" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target && !confirming) onClose(); }}>
       <section ref={dialogRef} tabIndex={-1} className="playlist-save-dialog" role="dialog" aria-modal="true" aria-labelledby="playlist-save-title" aria-describedby="playlist-save-desc">
         <div className="dialog-header">
           <div><p className="eyebrow">开播前确认</p><h2 id="playlist-save-title">保存本次歌单到{sourceLabel}吗？</h2></div>
-          <IconButton label="返回确认计划" onClick={onClose}><X size={17} /></IconButton>
+          <IconButton label="返回确认计划" onClick={onClose} disabled={confirming}><X size={17} /></IconButton>
         </div>
         <div className="playlist-save-body" id="playlist-save-desc">
-          <p>本次电台会先准备一份 {trackCount} 首歌的临时歌单，保证播放顺序稳定。</p>
+          <p>本次电台会在对应音乐平台创建{playlistName ? <>一个名为“<span className="playlist-save-name">{playlistName}</span>”的歌单</> : "一个歌单"}。</p>
           <p>选择保存，会把这份歌单留在你的{sourceLabel}账号里；选择不保存，节目播完或退出后会自动删除。</p>
         </div>
         <div className="playlist-save-options">
-          <button className="primary-button" type="button" onClick={onKeep} disabled={confirming}><ListMusic size={15} />保存到{sourceLabel}</button>
-          <button className="secondary-button" type="button" onClick={onTemporary} disabled={confirming}><X size={15} />不保存，播完删除</button>
+          <button className="primary-button" type="button" onClick={() => { setChoice("keep"); onKeep(); }} disabled={confirming} aria-busy={confirming && choice === "keep"}>{confirming && choice === "keep" ? <LoaderCircle size={15} className="spin" /> : <ListMusic size={15} />}{confirming && choice === "keep" ? "正在准备节目" : `保存到${sourceLabel}`}</button>
+          <button className="secondary-button" type="button" onClick={() => { setChoice("temporary"); onTemporary(); }} disabled={confirming} aria-busy={confirming && choice === "temporary"}>{confirming && choice === "temporary" ? <LoaderCircle size={15} className="spin" /> : <X size={15} />}{confirming && choice === "temporary" ? "正在准备节目" : "不保存，播完删除"}</button>
         </div>
       </section>
     </div>
@@ -4030,7 +4275,7 @@ function LikeSongConfirmDialog({ sourceId, trackTitle, liked, confirming, onConf
           <p>{actionCopy}</p>
         </div>
         <div className="playlist-save-options">
-          <button className={liked ? "primary-button" : "stop-button"} type="button" onClick={onConfirm} disabled={confirming}>{confirming ? <LoaderCircle size={15} className="spin" /> : <Heart size={15} fill={liked ? "currentColor" : "none"} />}{confirming ? "处理中" : liked ? "确认喜欢" : "确认取消"}</button>
+          <button className={liked ? "primary-button" : "stop-button"} type="button" onClick={onConfirm} disabled={confirming} aria-busy={confirming}>{confirming ? <LoaderCircle size={15} className="spin" /> : <Heart size={15} fill={liked ? "currentColor" : "none"} />}{confirming ? "处理中" : liked ? "确认喜欢" : "确认取消"}</button>
           <button className="secondary-button" type="button" onClick={onClose} disabled={confirming}><X size={15} />再想想</button>
         </div>
       </section>
@@ -4070,19 +4315,20 @@ const visualizerRuntime = visualizerGlobal.__openMusicRadioVisualizerV3 ??= {
 
 function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HTMLAudioElement | null>; active: boolean; label: string }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const orbitPhaseRef = useRef(0);
+  const frameCountRef = useRef(0);
   const reducedMotion = usePrefersReducedMotion();
   useEffect(() => {
     const canvas = canvasRef.current;
     const audio = audioRef.current;
-    if (!canvas || reducedMotion) return;
+    if (!canvas) return;
     let frame = 0;
     let cancelled = false;
     let source: AudioNode | null = null;
     let meydaAnalyzer: MeydaAnalyzerInstance | null = null;
     let frequencyAnalyzer: AnalyserNode | null = null;
     let features: VisualizerFeatures | null = null;
-    let drawCount = 0;
-    if (audio && active) try {
+    if (audio && active && !reducedMotion) try {
       const graph = musicAudioGraph(audio);
       source = graph.output;
       frequencyAnalyzer = graph.context.createAnalyser();
@@ -4121,6 +4367,7 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
       canvas.dataset.analyserError = error instanceof Error ? `${error.name}: ${error.message}` : "Unknown audio graph error";
     }
     const context = canvas.getContext("2d");
+    const signalRgb = getComputedStyle(canvas.closest<HTMLElement>("#radio-console") ?? canvas).getPropertyValue("--signal-rgb").trim() || "98, 244, 255";
     const frequencyValues = new Uint8Array(frequencyAnalyzer?.frequencyBinCount ?? 0);
     let lastDraw = 0;
     let displayedBeat = 0;
@@ -4129,9 +4376,11 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
     let previousRms = 0;
     const draw = (time: number) => {
       if (cancelled || !context) return;
-      frame = window.requestAnimationFrame(draw);
+      if (active && !reducedMotion) frame = window.requestAnimationFrame(draw);
       if (document.hidden || time - lastDraw < 66) return;
+      const elapsed = lastDraw ? Math.min(time - lastDraw, 100) : 0;
       lastDraw = time;
+      if (active && !reducedMotion) orbitPhaseRef.current += elapsed * .00012;
       const ratio = window.devicePixelRatio || 1;
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
@@ -4158,55 +4407,79 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
       const signalLevel = Math.min(1, Math.pow(Math.max(rmsLevel, loudnessLevel * .72), .78));
       const targetBeat = active ? Math.min(1, .06 + rmsLevel * .94) : 0;
       displayedBeat += (targetBeat - displayedBeat) * (targetBeat > displayedBeat ? .78 : .2);
-      const beatLevel = active ? displayedBeat : 0;
+      const beatLevel = active && !reducedMotion ? displayedBeat : 0;
       const spectrumScale = frequencyValues.length > 0 ? 255 : Math.max(1, ...values);
       canvas.dataset.signalLevel = signalLevel.toFixed(3);
       canvas.dataset.beatLevel = beatLevel.toFixed(3);
       canvas.dataset.featureFrames = String(features?.frames ?? 0);
       canvas.dataset.rms = rawRms.toFixed(5);
       canvas.dataset.analyserEngine = "meyda";
-      canvas.dataset.frame = String(++drawCount);
+      canvas.dataset.frame = String(++frameCountRef.current);
       canvas.closest<HTMLElement>(".broadcast-stage")?.style.setProperty("--audio-beat", beatLevel.toFixed(3));
       const minDimension = Math.min(width, height);
       const canvasRect = canvas.getBoundingClientRect();
-      const coverRect = canvas.closest(".broadcast-stage")?.querySelector<HTMLElement>(".track-art-circular")?.getBoundingClientRect();
+      const coverElement = canvas.closest(".broadcast-stage")?.querySelector<HTMLElement>(".track-art-circular");
+      const coverRect = coverElement?.getBoundingClientRect();
       const centerX = coverRect ? coverRect.left - canvasRect.left + coverRect.width / 2 : width / 2;
       const centerY = coverRect ? coverRect.top - canvasRect.top + coverRect.height / 2 : height / 2;
-      const coverRadius = coverRect ? Math.min(coverRect.width, coverRect.height) / 2 : minDimension * .17;
+      const coverRadius = coverElement ? Math.min(coverElement.offsetWidth, coverElement.offsetHeight) / 2 : minDimension * .17;
       const safeRadius = Math.max(coverRadius + 28, Math.min(centerX, width - centerX, centerY, height - centerY) - 12);
       const baseRadius = Math.min(safeRadius - 18, coverRadius + 12 + beatLevel * minDimension * .04);
       const availableBarLength = Math.max(18, safeRadius - baseRadius);
       const ringStep = Math.min(minDimension * .045, availableBarLength / 3);
-      const rayOuterRadius = Math.min(safeRadius, baseRadius + availableBarLength * .82);
       canvas.dataset.ringCenterX = centerX.toFixed(2);
       canvas.dataset.ringCenterY = centerY.toFixed(2);
       canvas.dataset.coverRadius = coverRadius.toFixed(2);
       canvas.dataset.innerRadius = baseRadius.toFixed(2);
       canvas.dataset.outerRadius = safeRadius.toFixed(2);
       let renderedOuterRadius = baseRadius;
-      const idlePulse = active ? 1 : .72 + Math.sin(time * .0011) * .12;
-      const visualEnergy = Math.max(active ? .12 : .2, signalLevel);
-      context.strokeStyle = `rgba(51,255,0,${.09 + visualEnergy * .08})`;
+      const idlePulse = .72;
+      const visualEnergy = reducedMotion ? .2 : Math.max(active ? .12 : .2, signalLevel);
+      context.strokeStyle = `rgba(${signalRgb},${.045 + visualEnergy * .04})`;
       context.lineWidth = 1;
       for (let ring = 1; ring <= 3; ring += 1) {
         context.beginPath();
         context.arc(centerX, centerY, baseRadius + ring * ringStep, 0, Math.PI * 2);
         context.stroke();
       }
+      const rayOuterRadius = safeRadius + 8;
+      context.strokeStyle = `rgba(${signalRgb},.12)`;
       for (let ray = 0; ray < 16; ray += 1) {
         const angle = ray / 16 * Math.PI * 2;
         context.beginPath();
-        context.moveTo(centerX + Math.cos(angle) * (baseRadius + 8), centerY + Math.sin(angle) * (baseRadius + 8));
+        context.moveTo(centerX + Math.cos(angle) * (coverRadius + 8), centerY + Math.sin(angle) * (coverRadius + 8));
         context.lineTo(centerX + Math.cos(angle) * rayOuterRadius, centerY + Math.sin(angle) * rayOuterRadius);
         context.stroke();
       }
+      // A restrained light rim follows the measured musical energy.
+      context.save();
+      context.strokeStyle = `rgba(146,228,230,${.25 + beatLevel * .3})`;
+      context.shadowColor = "rgba(104,203,215,.6)";
+      context.shadowBlur = 6 + beatLevel * 10;
+      context.lineWidth = 1;
+      context.beginPath();
+      context.arc(centerX, centerY, coverRadius + 5, 0, Math.PI * 2);
+      context.stroke();
+      context.restore();
+      context.save();
+      context.lineWidth = 1.2;
+      for (let arc = 0; arc < 2; arc += 1) {
+        const start = orbitPhaseRef.current + arc * Math.PI;
+        context.strokeStyle = arc ? "rgba(197,183,237,.35)" : "rgba(146,228,230,.4)";
+        context.beginPath();
+        context.arc(centerX, centerY, safeRadius + 4, start, start + .32);
+        context.stroke();
+      }
+      context.restore();
+      canvas.dataset.orbitPhase = orbitPhaseRef.current.toFixed(4);
       const count = 72;
+      const palette = [[104,203,215], [146,228,230], [197,183,237], [128,154,200]];
       let weakestBar = 1;
       let strongestBar = 0;
       for (let index = 0; index < count; index += 1) {
         const sample = values[Math.floor(index / count * values.length)] ?? 0;
         const normalizedSpectrum = Math.min(1, sample / spectrumScale);
-        const strength = active && (frequencyAnalyzer || features)
+        const strength = active && !reducedMotion && (frequencyAnalyzer || features)
           ? Math.min(1, .035 + Math.pow(normalizedSpectrum, .78) * (.68 + signalLevel * .48))
           : .2 * idlePulse;
         weakestBar = Math.min(weakestBar, strength);
@@ -4219,16 +4492,34 @@ function AudioSignalCanvas({ audioRef, active, label }: { audioRef: RefObject<HT
         const y1 = centerY + Math.sin(angle) * inner;
         const x2 = centerX + Math.cos(angle) * outer;
         const y2 = centerY + Math.sin(angle) * outer;
-        context.strokeStyle = `rgba(51,255,0,${.24 + strength * .7})`;
+        const position = Math.max(0, Math.min(2.999, (Math.cos(angle) + 1) * 1.5));
+        const stop = Math.floor(position);
+        const rgb = palette[stop].map((value, channel) => Math.round(value + (palette[stop + 1][channel] - value) * (position - stop))).join(",");
+        const barGradient = context.createLinearGradient(x1, y1, x2, y2);
+        barGradient.addColorStop(0, `rgba(${rgb},.22)`);
+        barGradient.addColorStop(.6, `rgba(${rgb},.7)`);
+        barGradient.addColorStop(1, `rgba(${rgb},1)`);
+        context.strokeStyle = barGradient;
+        context.globalAlpha = .24 + strength * .7;
         context.lineWidth = index % 3 === 0 ? 2.4 : 1.2;
         context.beginPath(); context.moveTo(x1, y1); context.lineTo(x2, y2); context.stroke();
       }
+      context.globalAlpha = 1;
       canvas.dataset.spectrumSpan = (renderedOuterRadius - baseRadius).toFixed(2);
       canvas.dataset.spectrumRange = ((strongestBar - weakestBar) * availableBarLength * .92).toFixed(2);
     };
     frame = window.requestAnimationFrame(draw);
+    const resizeObserver = new ResizeObserver(() => {
+      if (!active || reducedMotion) {
+        window.cancelAnimationFrame(frame);
+        lastDraw = 0;
+        frame = window.requestAnimationFrame(draw);
+      }
+    });
+    resizeObserver.observe(canvas);
     return () => {
       cancelled = true;
+      resizeObserver.disconnect();
       window.cancelAnimationFrame(frame);
       canvas.closest<HTMLElement>(".broadcast-stage")?.style.setProperty("--audio-beat", "0");
       meydaAnalyzer?.stop();
@@ -4287,7 +4578,7 @@ function StreamingHostText({ text, active, plannedDurationSeconds }: { text: str
   return <p className={`host-line host-line-streaming${active ? " is-typing" : ""}`}><span aria-hidden="true">{visible}</span><span className="sr-only" aria-live="polite">{active ? `主持人口播：${text}` : `已锁定主持词：${text}`}</span></p>;
 }
 
-function OnAirView({ program, remainingSeconds, onNext, onStop, nexting, stopping, onPlaylist, onBackToSetup, audioPlaying, trackElapsedSeconds, trackDurationSeconds, onToggleAudio, audioNeedsGesture, audioError, onEnableAudio, hostPreviewPending, likePending, onToggleCurrentLike, audioRef }: { program: LocalProgram; remainingSeconds: number; onNext: () => void; onStop: () => void; nexting: boolean; stopping: boolean; onPlaylist: () => void; onBackToSetup: () => void; audioPlaying: boolean; trackElapsedSeconds: number; trackDurationSeconds: number; onToggleAudio: () => void; audioNeedsGesture: boolean; audioError: string | null; onEnableAudio: () => void; hostPreviewPending: boolean; likePending: boolean; onToggleCurrentLike: () => void; audioRef: RefObject<HTMLAudioElement | null> }) {
+function OnAirView({ program, remainingSeconds, onNext, onStop, nexting, stopping, onPlaylist, onBackToSetup, audioPlaying, audioActionPending, trackElapsedSeconds, trackDurationSeconds, onToggleAudio, audioNeedsGesture, audioError, onEnableAudio, hostPreviewPending, likePending, onToggleCurrentLike, audioRef }: { program: LocalProgram; remainingSeconds: number; onNext: () => void; onStop: () => void; nexting: boolean; stopping: boolean; onPlaylist: () => void; onBackToSetup: () => void; audioPlaying: boolean; audioActionPending: boolean; trackElapsedSeconds: number; trackDurationSeconds: number; onToggleAudio: () => void; audioNeedsGesture: boolean; audioError: string | null; onEnableAudio: () => void; hostPreviewPending: boolean; likePending: boolean; onToggleCurrentLike: () => void; audioRef: RefObject<HTMLAudioElement | null> }) {
   const current = program.currentTrack;
   const next = program.nextTrack;
   const terminal = ["completed", "stopped", "failed", "control_lost", "stop_unconfirmed"].includes(program.status);
@@ -4296,15 +4587,6 @@ function OnAirView({ program, remainingSeconds, onNext, onStop, nexting, stoppin
   const playlistDeleted = program.playlist?.status === "deleted";
   const effectiveTrackDuration = trackDurationSeconds > 0 ? trackDurationSeconds : current?.durationSeconds ?? 0;
   const currentRundownItem = program.rundown?.find((item) => item.id === current?.id) ?? current as ProgramRundownItem | null;
-  const creditParts = currentRundownItem?.credits ? [
-    currentRundownItem.credits.lyricists.length > 0 ? `词 ${currentRundownItem.credits.lyricists.join(" / ")}` : "",
-    currentRundownItem.credits.composers.length > 0 ? `曲 ${currentRundownItem.credits.composers.join(" / ")}` : "",
-    currentRundownItem.credits.arrangers.length > 0 ? `编曲 ${currentRundownItem.credits.arrangers.join(" / ")}` : "",
-  ].filter(Boolean) : [];
-  const releaseParts = [
-    currentRundownItem?.album && current && !releaseTitlesMatch(current.title, currentRundownItem.album) ? `《${currentRundownItem.album}》` : "",
-    currentRundownItem?.releaseYear ? `${currentRundownItem.releaseYear} 年` : "",
-  ].filter(Boolean);
   const trackProgress = effectiveTrackDuration > 0 ? Math.max(0, Math.min(100, trackElapsedSeconds / effectiveTrackDuration * 100)) : 0;
   const currentHostScript = currentRundownItem?.hostScript;
   const lockedHostText = currentHostScript?.text ?? program.host?.text ?? "";
@@ -4324,17 +4606,24 @@ function OnAirView({ program, remainingSeconds, onNext, onStop, nexting, stoppin
       <div className="on-air-topline"><div><p className="eyebrow">{terminal ? "会话已结束" : "直播节目"}</p><h2>{programRecommendationLabel(program.spec)}<span className="title-slash">/</span><span className="muted-title">{program.spec.durationMinutes} 分钟</span></h2></div><div className={`air-status ${terminal ? "air-status-ended" : ""}`}><StatusDot tone={program.status === "control_lost" || program.status === "stop_unconfirmed" ? "error" : terminal ? "muted" : "ready"} />{programPhaseLabel(program.status)}</div></div>
       <div className="air-main-grid">
         <section className="now-playing-panel">
+          <p className="player-source-label">{desktopSource ? "桌面客户端队列" : isApiMusicSource(program.spec.sourceId) ? `${SOURCE_LABELS[program.spec.sourceId]}专属节目单` : current ? `曲目 ${current.id.split("-").pop()}` : "暂无曲目"}</p>
           <div className="panel-kicker"><span><Activity size={14} />正在播放</span><span className="signal-label"><StatusDot tone={terminal ? "muted" : syntheticFixture ? "blocked" : "ready"} />{syntheticFixture ? "合成测试信号" : "音源信号"}</span></div>
           <div className="broadcast-stage"><AudioSignalCanvas audioRef={audioRef} active={audioPlaying && !terminal} label={program.host?.status === "playing" ? "MUSIC BED / DUCKED" : "LIVE AUDIO SPECTRUM"} /><TrackArtwork track={current} fixture={syntheticFixture} circular spinning={audioPlaying && !terminal} /></div>
-          <div className="track-copy"><p className="track-overline">{desktopSource ? "桌面客户端队列" : isApiMusicSource(program.spec.sourceId) ? `${SOURCE_LABELS[program.spec.sourceId]}专属节目单` : current ? `曲目 ${current.id.split("-").pop()}` : "暂无曲目"}</p><h3>{current?.title ?? "暂无当前曲目"}</h3><p>{current?.artist ?? "等待音源确认"}</p></div>
-          <div className="track-meta">{desktopSource ? <><span>曲目信息以客户端为准</span><span>实时播放</span></> : <><span>{current ? formatTrackDuration(current.durationSeconds) : "--:--"}</span>{creditParts.length > 0 && <span>{creditParts.join(" · ")}</span>}{releaseParts.length > 0 && <span>{releaseParts.join(" · ")}</span>}</>}</div>
+          <div className="track-copy">
+            <h3>{current?.title ?? "暂无当前曲目"}</h3>
+            <p className="player-track-artist">{current?.artist ?? "等待音源确认"}</p>
+            <p className="player-track-release">
+              <span className="player-track-album">{currentRundownItem?.album ? `《${currentRundownItem.album}》` : "专辑信息暂缺"}</span>{" "}
+              <span className="player-track-year">{currentRundownItem?.releaseYear ? `${currentRundownItem.releaseYear} 年` : "发行年份暂缺"}</span>
+            </p>
+          </div>
           {audioError && <p className="audio-error"><AlertTriangle size={13} />{audioError}</p>}
           {!terminal && <div className="playback-actions">
-            {likeSupported && <button className={`audio-toggle like-song-button${currentLiked ? " is-liked" : ""}`} type="button" aria-pressed={currentLiked} aria-label={currentLiked ? `取消喜欢《${current?.title ?? "当前歌曲"}》` : `喜欢《${current?.title ?? "当前歌曲"}》`} onClick={onToggleCurrentLike} disabled={likePending || nexting || stopping}>{likePending ? <LoaderCircle size={16} className="spin" /> : <Heart size={16} fill={currentLiked ? "currentColor" : "none"} />}{likePending ? "保存中" : currentLiked ? "已喜欢" : "喜欢歌曲"}</button>}
+            {likeSupported && <button className={`audio-toggle like-song-button${currentLiked ? " is-liked" : ""}`} type="button" aria-pressed={currentLiked} aria-label={currentLiked ? `取消喜欢《${current?.title ?? "当前歌曲"}》` : `喜欢《${current?.title ?? "当前歌曲"}》`} onClick={onToggleCurrentLike} aria-busy={likePending} disabled={likePending || nexting || stopping}>{likePending ? <LoaderCircle size={16} className="spin" /> : <Heart size={16} fill={currentLiked ? "currentColor" : "none"} />}{likePending ? "保存中" : currentLiked ? "已喜欢" : "喜欢歌曲"}</button>}
             {!program.localOnly && current?.audioUrl && (audioNeedsGesture
-              ? <button className="audio-toggle audio-enable" type="button" onClick={onEnableAudio}><Play size={15} />开启声音</button>
-              : <button className="audio-toggle" type="button" onClick={onToggleAudio}>{audioPlaying ? <Pause size={15} /> : <Play size={15} />}{isApiMusicSource(program.spec.sourceId) ? audioPlaying ? "暂停音乐" : "继续音乐" : audioPlaying ? "暂停测试音" : "播放测试音"}</button>)}
-            <button className="audio-toggle next-button" type="button" onClick={onNext} disabled={program.status !== "on_air" || nexting || stopping}><SkipForward size={16} />{nexting ? "切换中" : program.status === "preparing" ? "准备中" : "下一首"}</button>
+              ? <button className="audio-toggle audio-enable" type="button" onClick={onEnableAudio} aria-busy={audioActionPending} disabled={audioActionPending || nexting || stopping}>{audioActionPending ? <LoaderCircle size={15} className="spin" /> : <Play size={15} />}{audioActionPending ? "正在开启" : "开启声音"}</button>
+              : <button className="audio-toggle" type="button" onClick={onToggleAudio} aria-busy={audioActionPending} disabled={audioActionPending || nexting || stopping}>{audioActionPending ? <LoaderCircle size={15} className="spin" /> : audioPlaying ? <Pause size={15} /> : <Play size={15} />}{audioActionPending ? "正在连接音频" : isApiMusicSource(program.spec.sourceId) ? audioPlaying ? "暂停音乐" : "继续音乐" : audioPlaying ? "暂停测试音" : "播放测试音"}</button>)}
+            <button className="audio-toggle next-button" type="button" onClick={onNext} aria-busy={nexting} disabled={program.status !== "on_air" || nexting || stopping || audioActionPending}>{nexting ? <LoaderCircle size={16} className="spin" /> : <SkipForward size={16} />}{nexting ? "切换中" : program.status === "preparing" ? "准备中" : "下一首"}</button>
           </div>}
         </section>
 
@@ -4347,9 +4636,9 @@ function OnAirView({ program, remainingSeconds, onNext, onStop, nexting, stoppin
           </div>
           <div className="host-panel"><div className="panel-kicker"><span><Mic2 size={14} />主持人口播</span><span className={`host-state ${program.host?.audioUrl ? "host-ready" : "host-failed"}`}><span className="host-pulse" />{hostStateLabel}</span></div><div className="host-panel-content"><span className="on-air-host-avatar"><RadioHostAvatar profileId={program.spec.hostProfile ?? DEFAULT_HOST_PROFILE} portrait /></span><div className="host-copy"><strong>{HOST_PROFILES[program.spec.hostProfile ?? DEFAULT_HOST_PROFILE].name}</strong></div><div className="host-script-scroll" tabIndex={0} aria-label="主持人口播内容">{lockedHostText ? <StreamingHostText key={`${program.id}:${program.generation}:${current?.id ?? "none"}:${lockedHostText}`} text={lockedHostText} active={program.host?.status === "playing"} plannedDurationSeconds={currentHostScript?.plannedDurationSeconds ?? program.host?.plannedDurationSeconds} /> : <p className="host-line">{hostPreviewPending ? "主持人即将开口。" : "这一首不安排口播。"}</p>}</div></div></div>
           <div className="queue-panel"><div className="panel-kicker"><span><Music2 size={14} />下一首</span><span>{desktopSource ? "客户端维护" : `${program.queue.length + (next ? 1 : 0)} 首待播`}</span></div>{next ? <div className="queue-track"><TrackArtwork track={next} fixture={syntheticFixture} compact /><span><strong>{next.title}</strong><small>{next.artist}</small></span><span className="queue-duration">{desktopSource ? "--:--" : formatTrackDuration(next.durationSeconds)}</span></div> : <div className="queue-empty"><Square size={14} />本档节目即将结束</div>}</div>
+      <div className="air-controls"><div className="control-note"><span className="control-lock"><Wifi size={13} /></span><span>{terminal ? "本次节目已结束" : "电台信号连接中"}<small>{terminal ? "可以查看本次歌单或创建下一档节目" : playlistDeleted ? "临时歌单已在音乐平台清理" : "播放与截止时间由本地服务保持"}</small></span></div><div className="control-actions"><button className="secondary-button" type="button" onClick={onPlaylist}><ListMusic size={15} />查看歌单</button>{terminal ? <button className="secondary-button" type="button" onClick={onBackToSetup}><RotateCcw size={15} />新建节目</button> : <button className="stop-button" type="button" onClick={onStop} aria-busy={stopping} disabled={stopping || nexting}>{stopping ? <LoaderCircle size={16} className="spin" /> : <RotateCcw size={16} />}{stopping ? "退出中" : "退出节目"}</button>}</div></div>
         </section>
       </div>
-      <div className="air-controls"><div className="control-note"><span className="control-lock"><Wifi size={13} /></span><span>{terminal ? "本次节目已结束" : "电台信号连接中"}<small>{terminal ? "可以查看本次歌单或创建下一档节目" : playlistDeleted ? "临时歌单已在音乐平台清理" : "播放与截止时间由本地服务保持"}</small></span></div><div className="control-actions"><button className="secondary-button" type="button" onClick={onPlaylist}><ListMusic size={15} />查看歌单</button>{terminal ? <button className="secondary-button" type="button" onClick={onBackToSetup}><RotateCcw size={15} />新建节目</button> : <button className="stop-button" type="button" onClick={onStop} disabled={stopping || nexting}><RotateCcw size={16} />{stopping ? "退出中" : "退出节目"}</button>}</div></div>
     </div>
   );
 }

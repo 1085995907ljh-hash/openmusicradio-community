@@ -34,7 +34,7 @@ import {
 } from "../shared/program-options.js";
 import { FIXTURE_TRACKS } from "../core/fixtures.js";
 import { personalizeCandidates, type PersonalizationCandidate } from "../core/personalization.js";
-import { isDisallowedRecommendationCandidate, isExplorationVersionCandidate } from "../core/recommendation-guards.js";
+import { hasKnownRecommendationAlbum, isDisallowedRecommendationCandidate, isExplorationVersionCandidate } from "../core/recommendation-guards.js";
 import { buildListeningProfile, inferSongTags } from "../core/listening-profile.js";
 import { isCompleteAccountPlayback } from "../core/playback-access.js";
 import {
@@ -44,7 +44,7 @@ import {
   type RundownAdjustmentTrack,
   type RundownReplacementCriteria,
 } from "../core/rundown-adjustment.js";
-import { energyRangeForPhase, getSceneConfig, phaseForElapsedSeconds } from "../core/scenes.js";
+import { arrangeRundown } from "../core/rundown-order.js";
 import {
   estimateHostDurationSeconds,
   hostScriptRepeats,
@@ -78,6 +78,7 @@ import { QwenTtsProvider } from "../providers/qwen-tts.js";
 import { ProviderError } from "../providers/types.js";
 import { LocalAiConfigStore, LLM_PROVIDER_IDS, TTS_PROVIDER_IDS, type LocalAiSettings } from "./local-ai-config.js";
 import { LocalConfiguredHostProvider, LocalConfiguredTtsProvider } from "./local-ai-providers.js";
+import { PlaylistRecommendations } from "./playlist-recommendation.js";
 import { musicResearchForWriting, musicResearchFactText, type MusicResearchReport } from "../shared/music-research.js";
 import { CloudAccessStore, ManagedAiConfigStore } from "./cloud-access.js";
 import { loadRadioHostReviewSkill, loadRadioHostSkill } from "./radio-host-skill.js";
@@ -113,7 +114,7 @@ const LEGACY_DISCOVERY_YEARS = 10;
 const PROGRAM_DURATION_TOLERANCE_RATIO = 0.08;
 const MAX_PROGRAM_DURATION_SHORTFALL_SECONDS = 5 * 60;
 const SCENE_STYLE_TAGS: Record<ScenePreset, MusicGenreId[]> = {
-  late_night: ["new_age", "rnb_soul", "jazz", "easy_listening", "folk"],
+  late_night: ["rnb_soul", "jazz", "easy_listening", "folk", "pop"],
   study: ["easy_listening", "new_age", "jazz", "classical", "bossa_nova"],
   workout: ["electronic", "dance", "hiphop", "rock", "pop"],
   commute: ["pop", "rnb_soul", "britpop", "folk", "electronic"],
@@ -203,7 +204,7 @@ const MUSIC_GENRE_QUERY_ALIASES: Readonly<Record<MusicGenreId, readonly string[]
   bossa_nova: ["bossa nova", "巴萨诺瓦"],
 };
 const SCENE_PLAYLIST_QUERY_TERMS: Record<ScenePreset, readonly string[]> = {
-  late_night: ["深夜 放松 氛围 歌单", "夜晚 松弛 音乐 歌单", "睡前 安静 陪伴 歌单", "Late Night Chill 歌单"],
+  late_night: ["松弛 轻柔 流行 歌单", "夜晚 温柔 民谣 歌单", "轻柔 爵士 灵魂乐 歌单", "Late Night Chill Songs 歌单"],
   study: ["学习 专注 氛围 歌单", "工作 阅读 专注 歌单", "咖啡馆 学习 音乐 歌单", "Focus Study 歌单"],
   workout: ["运动 健身 高能 歌单", "跑步 训练 节奏 歌单", "健身房 热力 音乐 歌单", "Workout Energy 歌单"],
   commute: ["通勤 开车 律动 歌单", "上班路上 轻快 歌单", "城市通勤 音乐 歌单", "Drive Commute 歌单"],
@@ -301,6 +302,8 @@ interface EngineLike {
 }
 
 interface HostProviderLike {
+  researchPlaylist?: import("./playlist-recommendation.js").RecommendationProvider["research"];
+  writePlaylistRecommendation?(system: string, user: string, signal: AbortSignal): Promise<string>;
   generate(context: HostContextPack, options?: { signal?: AbortSignal }): unknown;
   generateShow?(request: {
     scenePreset: ScenePreset;
@@ -659,6 +662,7 @@ function programStyleTags(scenePreset: ScenePreset, musicGenres: readonly MusicG
 }
 
 function trackMatchesProgramIntent(spec: ProgramSpec, track: ProgramRundownItem): boolean {
+  if (isDisallowedRecommendationCandidate(track, spec)) return false;
   const selectedStyles = new Set(programStyleTags(spec.scenePreset, spec.musicGenres ?? []));
   const tags = track.styleTags ?? [];
   if (tags.length > 0) return tags.some((tag) => selectedStyles.has(tag as MusicGenreId));
@@ -1234,6 +1238,10 @@ function validateProgramSpec(value: unknown): ProgramSpec {
     throw new ServiceError("INVALID_INPUT", 400, "hostProfile is invalid");
   }
   const musicGenres = value.musicGenres ?? [];
+  const desktopPetProfile = value.desktopPetProfile ?? hostProfile;
+  if (!HOST_PROFILE_IDS.includes(desktopPetProfile as HostProfileId)) {
+    throw new ServiceError("INVALID_INPUT", 400, "desktopPetProfile is invalid");
+  }
   if (!Array.isArray(musicGenres) || musicGenres.some((item) => !MUSIC_GENRE_IDS.includes(item as MusicGenreId))) {
     throw new ServiceError("INVALID_INPUT", 400, "musicGenres contains an invalid music style");
   }
@@ -1263,6 +1271,7 @@ function validateProgramSpec(value: unknown): ProgramSpec {
     hostProfile: hostProfile as HostProfileId,
     musicGenres: recommendationMode === "genre" ? uniqueMusicGenres : [],
     desktopPetEnabled: value.desktopPetEnabled ?? false,
+    desktopPetProfile: desktopPetProfile as HostProfileId,
   };
 }
 
@@ -1732,6 +1741,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     ?? (process.env.ONE_RADIO_AI_MODE === "local" ? new LocalAiConfigStore() : new ManagedAiConfigStore(cloudAccessStore));
   const adminFetch = options.adminFetch ?? globalThis.fetch;
   const hostProvider = options.hostProvider ?? new LocalConfiguredHostProvider(aiConfigStore);
+  const playlistRecommendations = new PlaylistRecommendations(hostProvider);
   const ttsProvider = options.ttsProvider ?? new LocalConfiguredTtsProvider(aiConfigStore);
   const neteaseProvider = options.neteaseProvider ?? loadedProviders.netease;
   const qqProvider = options.qqProvider ?? loadedProviders.qq;
@@ -1769,6 +1779,8 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
   };
   const createResults = new Map<string, { spec: ProgramSpec; state: ProgramState }>();
   const taskProgress = new Map<string, { completedSteps: number; status: TaskProgressStatus; updatedAt: string }>();
+  const generationControllers = new Map<string, AbortController>();
+  const cancelledGenerationOperations = new Set<string>();
   const updateTaskProgress = (operationId: string | null | undefined, completedSteps: number, status: TaskProgressStatus = "running") => {
     if (!operationId) return;
     const previous = taskProgress.get(operationId);
@@ -1876,6 +1888,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     accountRundowns.clear();
     accountPlaylists.clear();
     accountPlaylistNames.clear();
+    playlistRecommendations.clear();
     accountPlaylistKeepRequests.clear();
     uncertainAccountPlaylistCreates.clear();
     qqQrLoginTypes.clear();
@@ -1971,8 +1984,13 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     );
     if (!response) return response;
     const plannedPlaylistName = accountPlaylistNames.get(response.id);
+    const recommendation = playlistRecommendations.get(response.id);
+    if (rundown && response.status === "awaiting_confirmation" && (!recommendation || recommendation.status === "failed" || (recommendation.status === "ready" && !recommendation.text?.trim()))) {
+      void playlistRecommendations.start(response.id, response.spec, rundown.items);
+    }
     return {
       ...response,
+      playlistRecommendation: playlistRecommendations.get(response.id),
       ...(rundown ? { canUndoPlan: rundown.history.length > 0, canRedoPlan: rundown.future.length > 0 } : {}),
       ...(rundown?.listenerProfile ? { listenerProfile: rundown.listenerProfile } : {}),
       ...(plannedPlaylistName ? { plannedPlaylistName } : {}),
@@ -2528,7 +2546,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       for (const group of playlistSearchGroups) {
         const playlist = group.playlists[playlistIndex];
         if (!isRecord(playlist) || typeof playlist.id !== "string") continue;
-        if (isDisallowedRecommendationCandidate(playlist)) continue;
+        if (isDisallowedRecommendationCandidate(playlist, { scenePreset, recommendationMode })) continue;
         const styleVerified = group.queryGenre !== null && playlistHasStyleEvidence(playlist, group.queryGenre);
         if (recommendationMode === "genre" && (!group.queryGenre || (!styleVerified && playlistHasConflictingStyleEvidence(playlist, group.queryGenre)))) continue;
         const existing = publicPlaylistSeedById.get(playlist.id);
@@ -2548,6 +2566,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       if (task.status !== "fulfilled" || !isRecord(task.value) || !Array.isArray(task.value.tracks)) return [];
       const playlist = publicPlaylistSeeds[index];
       if (!playlist) return [];
+      if (isDisallowedRecommendationCandidate(task.value, { scenePreset, recommendationMode })) return [];
       if (recommendationMode === "genre" && (playlist.styleTags.length !== 1 || playlistHasConflictingStyleEvidence(task.value, playlist.styleTags[0]!))) return [];
       return task.value.tracks
         .map((song, trackIndex) => isRecord(song) ? {
@@ -2583,7 +2602,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const candidateFromSong = (value: unknown): PersonalizationCandidate | null => {
       const record = isRecord(value) && isRecord(value.song) ? value.song : value;
       if (!isRecord(record) || typeof record.id !== "string" || typeof record.title !== "string" || !Array.isArray(record.artists)) return null;
-      if (isDisallowedRecommendationCandidate(record)) return null;
+      if (isDisallowedRecommendationCandidate(record, { scenePreset, recommendationMode })) return null;
       const styleTags = inferStyleTags(record);
       return {
         id: record.id,
@@ -2805,10 +2824,10 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const planned = Array.isArray(preferences.programPlan) ? preferences.programPlan : [];
     const playable: ProgramRundownItem[] = [];
     const usedIds = new Set<string>();
-    const measuredEnergyById = new Map<string, number>();
     const inspectPlannedSong = async (value: unknown): Promise<ProgramRundownItem | null> => {
       if (!isRecord(value) || typeof value.id !== "string" || typeof value.title !== "string") return null;
-      if (isDisallowedRecommendationCandidate(value)) return null;
+      if (!hasKnownRecommendationAlbum(value)) return null;
+      if (isDisallowedRecommendationCandidate(value, spec)) return null;
       if (value.liked !== true && isExplorationVersionCandidate(value)) return null;
       const artists = Array.isArray(value.artists) ? value.artists.map((artist) => {
         if (typeof artist === "string") return artist.trim();
@@ -2829,7 +2848,6 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       if (!allowedUrl) return null;
       const durationMs = typeof value.durationMs === "number" && value.durationMs > 0 ? value.durationMs : 210_000;
       const measuredEnergy = typeof value.energy === "number" && Number.isFinite(value.energy) ? Math.max(0, Math.min(1, value.energy)) : null;
-      if (measuredEnergy !== null) measuredEnergyById.set(value.id, measuredEnergy);
       const knownMood = Array.isArray(value.mood) && value.mood.length > 0
         ? value.mood.filter((item): item is string => typeof item === "string")
         : [];
@@ -2948,35 +2966,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         if (!item) break;
         selected.push(item);
       }
-      const relevance = new Map(playable.map((track, index) => [track.id, playable.length <= 1 ? 0.5 : 1 - index / (playable.length - 1)]));
-      const remaining = [...selected];
-      const ordered: ProgramRundownItem[] = [];
-      const totalDurationSeconds = selected.reduce((total, track) => total + track.durationSeconds, 0);
-      let elapsedSeconds = 0;
-      for (let index = 0; index < selected.length; index += 1) {
-        const phase = phaseForElapsedSeconds(elapsedSeconds, Math.max(1, totalDurationSeconds));
-        const arrangementScene = arrangementSceneForSpec(spec);
-        const range = energyRangeForPhase(arrangementScene, phase);
-        const target = (range.min + range.max) / 2;
-        let bestIndex = 0;
-        let bestDistance = Number.POSITIVE_INFINITY;
-        for (let candidateIndex = 0; candidateIndex < remaining.length; candidateIndex += 1) {
-          const track = remaining[candidateIndex]!;
-          const measured = measuredEnergyById.get(track.id) ?? null;
-          const proxy = measured ?? relevance.get(track.id) ?? 0.5;
-          const distance = Math.abs(proxy - target);
-          if (distance < bestDistance) {
-            bestDistance = distance;
-            bestIndex = candidateIndex;
-          }
-        }
-        const [track] = remaining.splice(bestIndex, 1);
-        if (track) {
-          ordered.push({ ...track, arrangementTargetEnergy: target, reasons: [...track.reasons, mode === "genre" ? `按所选风格的${phase}段落编排` : `按${getSceneConfig(spec.scenePreset).label}氛围的${phase}段落编排`] });
-          elapsedSeconds += track.durationSeconds;
-        }
-      }
-      return ordered;
+      return selected;
     };
     let items: ProgramRundownItem[] = [];
     const requestedDurationSeconds = spec.durationMinutes * 60;
@@ -2997,7 +2987,8 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       }
     }
     if (items.length === 0 && maximumTrackCount > 0) items = selectApproximate(maximumTrackCount);
-    const rundown: ProgramRundownItem[] = items.map((item) => ({ ...item, heard: item.liked === true }));
+    const rundown = arrangeRundown(items, arrangementSceneForSpec(spec), recommendationModeForSpec(spec))
+      .map((item) => ({ ...item, heard: item.liked === true }));
     if (providerId === "netease" && "songCredits" in provider && typeof provider.songCredits === "function") {
       for (let offset = 0; offset < rundown.length; offset += 4) {
         const batch = rundown.slice(offset, offset + 4);
@@ -3050,7 +3041,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         const queryEntry = playlistQueries[index];
         if (!queryEntry) return [];
         return result.playlists.flatMap((playlist) => {
-          if (!isRecord(playlist) || typeof playlist.id !== "string" || seenPlaylistIds.has(playlist.id) || isDisallowedRecommendationCandidate(playlist) || !playlistHasStyleEvidence(playlist, queryEntry.genre)) return [];
+          if (!isRecord(playlist) || typeof playlist.id !== "string" || seenPlaylistIds.has(playlist.id) || isDisallowedRecommendationCandidate(playlist, spec) || !playlistHasStyleEvidence(playlist, queryEntry.genre)) return [];
           seenPlaylistIds.add(playlist.id);
           return [{ id: playlist.id, query: queryEntry.query, genre: queryEntry.genre }];
         });
@@ -3058,7 +3049,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       const playlistDetails = await Promise.all(playlistSeeds.map((playlist) => invokeAccount(providerId, () => provider.playlistDetail!(playlist.id, signal))));
       searchSongs = playlistDetails.flatMap((detail, index) => {
         const seed = playlistSeeds[index];
-        if (!seed || !isRecord(detail) || !Array.isArray(detail.tracks) || !playlistHasStyleEvidence(detail, seed.genre)) return [];
+        if (!seed || !isRecord(detail) || !Array.isArray(detail.tracks) || isDisallowedRecommendationCandidate(detail, spec) || !playlistHasStyleEvidence(detail, seed.genre)) return [];
         return detail.tracks.map((track) => withSearchContext(track, seed.query, [seed.genre]));
       });
     } else {
@@ -3073,6 +3064,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const currentIds = new Set(artifact.items.map((track) => track.id));
     const seenIds = new Set<string>();
     searchSongs = searchSongs.filter((song) => {
+      if (isDisallowedRecommendationCandidate(song, spec)) return false;
       const track = providerSongAdjustmentTrack(song);
       if (!track || seenIds.has(track.id) || currentIds.has(track.id) || artifact.excludedTrackIds.has(track.id)) return false;
       if (criteria.artist && !providerSongMatchesArtist(song, criteria.artist)) return false;
@@ -3106,6 +3098,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
     const provider = providerId === "qq" ? await requireQq() : await requireNetease();
     if (typeof provider.songUrl !== "function") throw new ServiceError(providerId === "qq" ? "QQ_UNAVAILABLE" : "NETEASE_UNAVAILABLE", 503, publicMessage(providerId === "qq" ? "QQ_UNAVAILABLE" : "NETEASE_UNAVAILABLE"));
     const inspect = async (item: ProgramRundownItem): Promise<boolean> => {
+      if (isDisallowedRecommendationCandidate(item, spec)) return false;
       try {
         const playback = await invokeAccount(providerId, () => provider.songUrl!(item.id, { signal }));
         return isCompleteAccountPlayback(playback, item.durationSeconds * 1_000);
@@ -4569,6 +4562,35 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       writeJson(res, 200, { player });
       return;
     }
+    if (pathname === "/api/programs/cancel-generation") {
+      assertPlayerControlAuthorized(req);
+      const operationId = operationIdFromBody(body, true)!;
+      const preparing = body.mode === "preparing";
+      const programId = typeof body.programId === "string" ? validateProgramId(body.programId) : null;
+      cancelledGenerationOperations.add(operationId);
+      if (cancelledGenerationOperations.size > 128) cancelledGenerationOperations.delete(cancelledGenerationOperations.values().next().value!);
+      generationControllers.get(operationId)?.abort();
+      if (preparing && programId) generationControllers.get(`confirm:${programId}`)?.abort();
+      const cancel = async () => {
+        const current = stateNow();
+        if (preparing) {
+          if (!current || current.id !== programId) throw new ServiceError("PROGRAM_NOT_FOUND", 404, "节目已不存在。");
+          if (!["draft", "awaiting_confirmation"].includes(current.status)) throw new ServiceError("PROGRAM_NOT_ACTIVE", 409, "开播准备已经完成，请使用退出节目。");
+          return current;
+        }
+        const created = createResults.get(operationId)?.state;
+        if (current && (current.id === programId || current.id === created?.id)) {
+          if (!["draft", "awaiting_confirmation"].includes(current.status)) throw new ServiceError("PROGRAM_NOT_ACTIVE", 409, "节目已经开始，请使用退出节目。");
+          playlistRecommendations.clear();
+          const stopped = await invokeEngine("stop", [current.id]);
+          if (stopped) updateDesktopPet(stopped);
+        }
+        return null;
+      };
+      const result = preparing && programId ? await serializeProgramAction(programId, cancel) : await serializeCreateAction(cancel);
+      writeJson(res, 200, { cancelled: true, program: result ? responseProgram(result) : null });
+      return;
+    }
     if (pathname === "/api/programs") {
       const operationId = operationIdFromBody(body, false);
       const spec = validateProgramSpec(body.spec);
@@ -4577,7 +4599,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       if (accountSource) assertPlayerControlAuthorized(req);
       const source = buildSourceDiagnostics().find((item) => item.sourceId === spec.sourceId);
       if (!source?.hostedProgramAllowed) throw new ServiceError("SOURCE_NOT_ALLOWED", 409, publicMessage("SOURCE_NOT_ALLOWED"));
-      const createController = accountSource ? new AbortController() : null;
+      const createController = new AbortController();
+      if (operationId) generationControllers.set(operationId, createController);
+      if (operationId && cancelledGenerationOperations.has(operationId)) createController.abort();
       const abortCreate = () => createController?.abort();
       if (createController) {
         req.once("aborted", abortCreate);
@@ -4630,6 +4654,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             if (previousId !== state.id) accountRundowns.delete(previousId);
           }
           accountRundowns.set(state.id, { items: plannedAccountRundown, index: 0, revision: 0, excludedTrackIds: new Set(), hostAudio: new Map(), hostScriptsPending: true, history: [], future: [], ...(accountPreferences ? { preferences: accountPreferences } : {}), ...(listenerProfile ? { listenerProfile } : {}), ...(accountUid ? { accountUid } : {}) });
+          void playlistRecommendations.start(state.id, state.spec, plannedAccountRundown);
         }
         rememberCreateResult(state);
         updateCreateProgress(4, "completed");
@@ -4657,6 +4682,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         updateCreateProgress(taskProgress.get(operationId ?? "")?.completedSteps ?? 0, "failed");
         throw error;
       } finally {
+        if (operationId && generationControllers.get(operationId) === createController) generationControllers.delete(operationId);
         req.off("aborted", abortCreate);
         res.off("close", abortCreate);
       }
@@ -4968,7 +4994,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                     const queryEntry = playlistQueries[index];
                     if (!queryEntry) return [];
                     return result.playlists.flatMap((playlist) => {
-                      if (!isRecord(playlist) || typeof playlist.id !== "string" || seenPlaylistIds.has(playlist.id) || isDisallowedRecommendationCandidate(playlist) || !playlistHasStyleEvidence(playlist, queryEntry.genre)) return [];
+                      if (!isRecord(playlist) || typeof playlist.id !== "string" || seenPlaylistIds.has(playlist.id) || isDisallowedRecommendationCandidate(playlist, lockedState.spec) || !playlistHasStyleEvidence(playlist, queryEntry.genre)) return [];
                       seenPlaylistIds.add(playlist.id);
                       return [{ id: playlist.id, query: queryEntry.query, genre: queryEntry.genre }];
                     });
@@ -4976,7 +5002,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
                   const playlistDetails = await Promise.all(playlistSeeds.map((playlist) => invokeAccount(providerId, () => provider.playlistDetail!(playlist.id, controller.signal))));
                   searchSongs = playlistDetails.flatMap((detail, index) => {
                     const seed = playlistSeeds[index];
-                    if (!seed || !isRecord(detail) || !Array.isArray(detail.tracks) || !playlistHasStyleEvidence(detail, seed.genre)) return [];
+                    if (!seed || !isRecord(detail) || !Array.isArray(detail.tracks) || isDisallowedRecommendationCandidate(detail, lockedState.spec) || !playlistHasStyleEvidence(detail, seed.genre)) return [];
                     return detail.tracks.map((track) => withSearchContext(track, seed.query, [seed.genre]));
                   });
                 } else {
@@ -5040,6 +5066,9 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
             artifact.hostAudio.clear();
             artifact.hostScriptsPending = true;
             artifact.revision += 1;
+            if (typedAction === "regenerate" && body.replaceTrackIds === undefined) {
+              void playlistRecommendations.start(programId, lockedState.spec, ordered);
+            }
             rememberPlanOperation(operationKeyValue, { action: typedAction, baseRevision, revision: artifact.revision, ...(actionMessage ? { message: actionMessage } : {}) });
             return { state: lockedState, message: actionMessage };
           });
@@ -5098,7 +5127,10 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
         const accountWriteSource = state.spec.sourceId === "netease_music" || qqApiSource;
         if (desktopSource || accountWriteSource) assertPlayerControlAuthorized(req);
         const operationId = operationIdFromBody(body, desktopSource || accountWriteSource);
-        const confirmController = accountWriteSource ? new AbortController() : null;
+        const confirmController = new AbortController();
+        if (operationId) generationControllers.set(operationId, confirmController);
+        generationControllers.set(`confirm:${programId}`, confirmController);
+        if (operationId && cancelledGenerationOperations.has(operationId)) confirmController.abort();
         const abortConfirm = () => {
           if (!res.writableEnded) confirmController?.abort();
         };
@@ -5237,6 +5269,8 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
           updateTaskProgress(operationId, taskProgress.get(operationId ?? "")?.completedSteps ?? 0, "failed");
           throw error;
         } finally {
+          if (operationId && generationControllers.get(operationId) === confirmController) generationControllers.delete(operationId);
+          if (generationControllers.get(`confirm:${programId}`) === confirmController) generationControllers.delete(`confirm:${programId}`);
           if (confirmController) {
             req.off("aborted", abortConfirm);
             res.off("close", abortConfirm);
@@ -5474,6 +5508,7 @@ export async function createLocalService(options: LocalServiceOptions = {}): Pro
       for (const programId of accountRundowns.keys()) releaseProgramHostAudio(programId);
       audio.clear();
       desktopPetController.stop();
+      playlistRecommendations.clear();
       let active: ProgramState | null = null;
       try {
         active = stateNow();

@@ -6,6 +6,8 @@ import { hostPreviewText, hostTtsInstruction, MUSIC_GENRE_IDS, MUSIC_GENRES, typ
 import type { RundownAdjustmentConversationMessage, RundownAdjustmentIntent, RundownAdjustmentTrack } from "../core/rundown-adjustment.js";
 import { LocalAiConfigStore, type LlmProviderId, type TtsProviderId } from "./local-ai-config.js";
 import { AutonomousMusicResearchService } from "./autonomous-music-research.js";
+import { musicResearchTrackKey, type MusicResearchReport } from "../shared/music-research.js";
+import { isTimeoutError, withDeadline } from "../shared/async-deadline.js";
 
 const OPENAI_VOICES: Record<HostProfileId, string> = { anxuan: "coral", anran: "nova", anya: "shimmer", xiaocheng: "onyx", longxin: "alloy", longhao: "echo" };
 const AZURE_VOICES: Record<HostProfileId, string> = { anxuan: "zh-CN-XiaoxiaoNeural", anran: "zh-CN-XiaoyiNeural", anya: "zh-CN-XiaochenMultilingualNeural", xiaocheng: "zh-CN-YunxiNeural", longxin: "zh-CN-YunyangNeural", longhao: "zh-CN-YunjianNeural" };
@@ -49,6 +51,28 @@ export class LocalConfiguredHostProvider {
 
   async generatePlaylistNames(request: Parameters<OpenAICompatibleHostProvider["generatePlaylistNames"]>[0], options: { signal?: AbortSignal } = {}) {
     return (await this.provider()).generatePlaylistNames(request, options);
+  }
+
+  async writePlaylistRecommendation(system: string, user: string, signal: AbortSignal): Promise<string> {
+    return (await this.provider()).writePlaylistRecommendation(system, user, signal);
+  }
+
+  async researchPlaylist(request: Parameters<OpenAICompatibleHostProvider["research"]>[0], options: { signal?: AbortSignal; onProgress?: (report: MusicResearchReport) => void } = {}): Promise<MusicResearchReport> {
+    const partial: MusicResearchReport = { tracks: [] };
+    const rows = await Promise.all(request.tracks.map(async (track) => {
+      try {
+        const result = await withDeadline((signal) => this.research({ ...request, tracks: [track] }, { signal }), options.signal, 120_000);
+        partial.tracks.push(...result.tracks);
+        if (!options.signal?.aborted) options.onProgress?.(structuredClone(partial));
+        return result.tracks;
+      } catch (error) {
+        if (isTimeoutError(error)) partial.timedOut = true;
+        if (!options.signal?.aborted) options.onProgress?.(structuredClone(partial));
+        return [{ trackKey: musicResearchTrackKey(track), status: "failed" as const, completedAt: new Date().toISOString(), attempts: [], facts: [] }];
+      }
+    }));
+    options.signal?.throwIfAborted();
+    return { tracks: rows.flat(), ...(partial.timedOut ? { timedOut: true } : {}) };
   }
 
   async test(signal?: AbortSignal): Promise<void> {
@@ -248,7 +272,6 @@ export class LocalConfiguredTtsProvider {
 
 function llmDetails(provider: LlmProviderId, custom?: string): { baseUrl: string; translate: boolean } {
   if (provider === "deepseek") return { baseUrl: "https://api.deepseek.com", translate: false };
-  if (provider === "qwen") return { baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", translate: false };
   if (provider === "anthropic") return { baseUrl: "https://api.anthropic.com/v1", translate: true };
   if (provider === "gemini") return { baseUrl: "https://generativelanguage.googleapis.com/v1beta", translate: true };
   if (provider === "custom") return { baseUrl: custom!, translate: false };

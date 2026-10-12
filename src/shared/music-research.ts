@@ -33,6 +33,7 @@ export interface MusicResearchReceipt {
 
 export interface MusicResearchReport {
   tracks: MusicResearchReceipt[];
+  timedOut?: boolean;
 }
 
 const RESEARCH_FAILURE_MESSAGES: Record<NonNullable<MusicResearchReceipt["failureCode"]>, string> = {
