@@ -5,6 +5,26 @@ import { join } from "node:path";
 import test from "node:test";
 import { CloudAccessStore } from "../src/server/cloud-access.js";
 
+test("fresh and legacy-placeholder installs use the managed gateway while custom endpoints are preserved", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "omr-gateway-default-"));
+  const previous = process.env.ONE_RADIO_CLOUD_BASE_URL;
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.ONE_RADIO_CLOUD_BASE_URL;
+    else process.env.ONE_RADIO_CLOUD_BASE_URL = previous;
+  });
+  const store = new CloudAccessStore(join(dir, "access.json"));
+  for (const value of [undefined, "", "https://<your-function-endpoint>"]) {
+    if (value === undefined) delete process.env.ONE_RADIO_CLOUD_BASE_URL;
+    else process.env.ONE_RADIO_CLOUD_BASE_URL = value;
+    assert.equal(await store.baseUrl(), "https://openmusicradio-gateway.vercel.app");
+  }
+  process.env.ONE_RADIO_CLOUD_BASE_URL = "https://custom.example/";
+  assert.equal(await store.baseUrl(), "https://custom.example");
+  process.env.ONE_RADIO_CLOUD_BASE_URL = "not-a-url";
+  assert.equal(await store.baseUrl(), "");
+});
+
 test("installation receipt persists across retries and concurrent client instances", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "omr-invite-"));
   const previous = process.env.ONE_RADIO_CLOUD_BASE_URL;

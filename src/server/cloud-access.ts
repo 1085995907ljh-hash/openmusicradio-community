@@ -9,10 +9,8 @@ import { LocalAiConfigStore } from "./local-ai-config.js";
 
 const DEFAULT_CONFIG_PATH = join(homedir(), ".one-radio", "cloud-access.json");
 const DEFAULT_KEYCHAIN_SERVICE = "dev.openmusicradio.cloud-access";
-// The managed endpoint is intentionally deployment-specific. Keeping a
-// provider URL in the client would couple new installs to the retired
-// Cloudflare Worker.
-const DEFAULT_CLOUD_BASE_URL = "";
+// Public service address, not a credential. Self-hosted installs can override it.
+const DEFAULT_CLOUD_BASE_URL = "https://openmusicradio-gateway.vercel.app";
 const LOCAL_PREVIEW_BASE_URL = "local-preview://managed";
 const LOCAL_PREVIEW_CODES = new Set([
   "OMR-NEON01",
@@ -178,7 +176,11 @@ export class CloudAccessStore {
   }
 
   private configuredBaseUrl(): string | null {
-    const value = process.env.ONE_RADIO_CLOUD_BASE_URL?.trim() || DEFAULT_CLOUD_BASE_URL;
+    const configured = process.env.ONE_RADIO_CLOUD_BASE_URL?.trim();
+    // Earlier installation instructions copied this placeholder into .env.local.
+    const value = !configured || configured === "https://<your-function-endpoint>"
+      ? DEFAULT_CLOUD_BASE_URL
+      : configured;
     try {
       const url = new URL(value);
       if (url.protocol !== "https:" && !(url.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(url.hostname))) return null;
