@@ -7,6 +7,8 @@ const previous = {
   authSecret: process.env.AUTH_SECRET,
   inviteCodes: process.env.INVITE_CODES,
   baseUrl: process.env.DASHSCOPE_BASE_URL,
+  redisUrl: process.env.UPSTASH_REDIS_REST_URL,
+  redisToken: process.env.UPSTASH_REDIS_REST_TOKEN,
 };
 
 function configure() {
@@ -14,10 +16,12 @@ function configure() {
   process.env.AUTH_SECRET = "a-secret-long-enough-for-tests";
   process.env.INVITE_CODES = "OMR-TEST01";
   process.env.DASHSCOPE_BASE_URL = "https://bailian.test/v1";
+  process.env.UPSTASH_REDIS_REST_URL = "https://redis.test";
+  process.env.UPSTASH_REDIS_REST_TOKEN = "test-redis-token";
 }
 
 test.after(() => {
-  for (const [key, value] of Object.entries({ DASHSCOPE_API_KEY: previous.apiKey, AUTH_SECRET: previous.authSecret, INVITE_CODES: previous.inviteCodes, DASHSCOPE_BASE_URL: previous.baseUrl })) {
+  for (const [key, value] of Object.entries({ UPSTASH_REDIS_REST_URL: previous.redisUrl, UPSTASH_REDIS_REST_TOKEN: previous.redisToken, DASHSCOPE_API_KEY: previous.apiKey, AUTH_SECRET: previous.authSecret, INVITE_CODES: previous.inviteCodes, DASHSCOPE_BASE_URL: previous.baseUrl })) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
@@ -29,8 +33,8 @@ test("Alibaba gateway issues a signed device token and forwards LLM requests to 
     httpMethod: "POST",
     path: "/auth/invite/claim",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ inviteCode: "OMR-TEST01", displayName: "测试用户", deviceName: "Test Mac" }),
-  });
+    body: JSON.stringify({ inviteCode: "OMR-TEST01", displayName: "测试用户", deviceName: "Test Mac", claimId: "a".repeat(64) }),
+  }, async (_input, init) => Response.json({ result: JSON.parse(String(init?.body))[5] }));
   assert.equal(claim.statusCode, 200);
   const claimBody = JSON.parse(claim.body) as { token: string; user: { id: string } };
   assert.match(claimBody.token, /^omr_v1\./);

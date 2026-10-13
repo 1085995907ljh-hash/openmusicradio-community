@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "functions": {
+    "api/gateway.js": {
+      "maxDuration": 300
+    }
+  },
+  "rewrites": [
+    { "source": "/:path*", "destination": "/api/gateway?route=:path*" }
+  ]
+}

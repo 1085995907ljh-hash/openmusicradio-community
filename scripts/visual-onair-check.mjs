@@ -134,6 +134,13 @@ for (const [name, viewport] of viewports) {
     continue;
   }
   const hostPanel = page.locator(".host-panel");
+  if (viewport.width >= 1024) {
+    const unusedSpace = await hostPanel.evaluate((panel) => {
+      const scroll = panel.querySelector(".host-script-scroll");
+      return panel.getBoundingClientRect().bottom - parseFloat(getComputedStyle(panel).paddingBottom) - scroll.getBoundingClientRect().bottom;
+    });
+    if (Math.abs(unusedSpace) > 3) throw new Error(`${name}: host transcript leaves ${unusedSpace}px unused at the bottom`);
+  }
   const hostPanelBeforeOverflow = await hostPanel.boundingBox();
   const scrollResult = await page.locator(".host-script-scroll").evaluate((node) => {
     const visibleText = node.querySelector(".host-line-streaming > span[aria-hidden='true']");

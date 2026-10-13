@@ -16,7 +16,7 @@
 npm run invite:create
 ```
 
-把邀请码写入 `ONE_RADIO_INVITE_CODES`，多个值用逗号分隔。函数计算网关不维护 Cloudflare D1；需要撤销邀请码时，更新环境变量并重新部署函数。邀请码只用于换取签名设备令牌，客户端后续请求不携带百炼密钥。
+当前 Vercel 网关使用 `INVITE_CODES`，多个值用逗号分隔；旧函数计算部署变量名为 `ONE_RADIO_INVITE_CODES`。单次核销版本还需配置持久化 Redis，见 [单次核销部署说明](INVITATION-REDEMPTION.md)。移除邀请码只会阻止后续兑换，不会撤销已经签发的设备凭证。客户端后续请求不携带百炼密钥。
 
 ## 用量说明
 

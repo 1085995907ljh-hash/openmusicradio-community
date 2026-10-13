@@ -29,6 +29,8 @@ resources:
         AUTH_SECRET: ${env('ONE_RADIO_AUTH_SECRET')}
         PROXY_TOKEN: ${env('ONE_RADIO_PROXY_TOKEN', '')}
         INVITE_CODES: ${env('ONE_RADIO_INVITE_CODES')}
+        UPSTASH_REDIS_REST_URL: ${env('UPSTASH_REDIS_REST_URL')}
+        UPSTASH_REDIS_REST_TOKEN: ${env('UPSTASH_REDIS_REST_TOKEN')}
       triggers:
         - triggerName: http
           triggerType: http

@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { redeemInvitation } from "./invitation-store.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const LLM_ROUTES = new Map([
@@ -119,7 +120,7 @@ function requestJson(body) {
   try { return JSON.parse(body.toString("utf8")); } catch { return null; }
 }
 
-async function claimInvitation(event) {
+async function claimInvitation(event, fetchImpl) {
   const body = requestJson(decodeEventBody(event));
   const inviteCode = typeof body?.inviteCode === "string" ? body.inviteCode.trim().toUpperCase() : "";
   const displayName = typeof body?.displayName === "string" ? body.displayName.trim() : "";
@@ -129,12 +130,22 @@ async function claimInvitation(event) {
   }
   if (!inviteCodes().has(inviteCode)) return errorResponse(401, "Invitation code is invalid", "invitation_error");
   if (!configured(process.env.AUTH_SECRET)) return errorResponse(503, "Alibaba gateway authentication is not configured", "configuration_error");
-  const token = issueDeviceToken(displayName, deviceName);
+  if (typeof body.claimId !== "string" || !/^[a-f0-9]{64}$/.test(body.claimId)) {
+    return errorResponse(400, "请更新客户端后再兑换邀请码。", "claim_id_required");
+  }
+  let token;
+  try {
+    token = await redeemInvitation(inviteCode, body.claimId, issueDeviceToken(displayName, deviceName), fetchImpl);
+  } catch {
+    return errorResponse(503, "邀请码验证服务暂不可用，请稍后重试。", "invitation_storage_unavailable");
+  }
+  if (token === null) return errorResponse(409, "邀请码已被其他设备使用，请申请新的邀请码。", "invitation_used");
   const identity = verifyDeviceToken(token);
+  if (!identity) return errorResponse(401, "原设备凭证已失效，请申请新的邀请码。", "invitation_credential_expired");
   return jsonResponse(200, {
     token,
-    user: { id: identity.userId, displayName },
-    device: { id: identity.deviceId, name: deviceName },
+    user: { id: identity.userId, displayName: identity.displayName },
+    device: { id: identity.deviceId, name: identity.deviceName },
   });
 }
 
@@ -185,7 +196,7 @@ export async function handleEvent(event, fetchImpl = fetch) {
   if (method === "GET" && pathname === "/health") {
     return jsonResponse(200, { status: configured(process.env.DASHSCOPE_API_KEY) && configured(process.env.AUTH_SECRET) ? "ready" : "unconfigured" });
   }
-  if (method === "POST" && pathname === "/auth/invite/claim") return claimInvitation({ ...event, headers });
+  if (method === "POST" && pathname === "/auth/invite/claim") return claimInvitation({ ...event, headers }, fetchImpl);
   if (method === "GET" && pathname === "/auth/session") {
     const identity = authenticate(headers);
     if (!identity) return errorResponse(401, "Device authorization is invalid", "authentication_error");

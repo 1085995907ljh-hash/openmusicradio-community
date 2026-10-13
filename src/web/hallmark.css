@@ -11650,6 +11650,31 @@ button:disabled,
   -webkit-line-clamp: unset;
 }
 
+@media (min-width: 64rem) {
+  .view-on_air .host-panel,
+  .view-ended .host-panel {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .view-on_air .host-panel > .panel-kicker,
+  .view-ended .host-panel > .panel-kicker {
+    flex: 0 0 auto;
+  }
+
+  .view-on_air .host-panel-content,
+  .view-ended .host-panel-content {
+    flex: 1 1 0;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .view-on_air .host-script-scroll,
+  .view-ended .host-script-scroll {
+    height: 100%;
+    min-height: 0;
+  }
+}
+
 @media (max-width: 63.999rem) {
   .host-script-scroll {
     height: 9rem;

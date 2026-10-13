@@ -1,5 +1,5 @@
 import http from "node:http";
-import { handleEvent } from "./index.js";
+import { handleEvent } from "./src/index.js";
 
 const port = Number(process.env.PORT || 9000);
 
@@ -32,3 +32,5 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, "0.0.0.0");
+
+export default server;

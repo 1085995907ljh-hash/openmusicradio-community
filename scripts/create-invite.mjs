@@ -7,5 +7,6 @@ const bytes = randomBytes(8);
 const suffix = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
 const code = `OMR-${suffix}`;
 console.log(`邀请码：${code}`);
-console.log("\n把下面这一项追加到函数计算环境变量 ONE_RADIO_INVITE_CODES：\n");
-console.log(`ONE_RADIO_INVITE_CODES=${code}`);
+console.log("\n把下面的值追加到 Vercel 网关的 INVITE_CODES（逗号分隔，不覆盖已有值）：\n");
+console.log(code);
+console.log("\n需要已配置持久化核销存储；生成本身不会启用邀请码。旧函数计算部署对应 ONE_RADIO_INVITE_CODES。");

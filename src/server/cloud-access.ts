@@ -1,5 +1,6 @@
 import { execFile as nodeExecFile, spawn } from "node:child_process";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -130,10 +131,11 @@ export class CloudAccessStore {
       await Promise.all([this.writeRecord(record), this.writeToken(`preview-${code}-${process.pid}`)]);
       return { configured: true, connected: true, state: "connected", user: record.user, device: record.device, service: this.serviceMetadata(), detail: "正在使用仅限本机开发的邀请测试模式。" };
     }
+    const claimId = await this.invitationClaimId(baseUrl, code);
     const response = await this.fetchImpl(`${baseUrl}/auth/invite/claim`, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ inviteCode: code, displayName: name, deviceName: normalizedDeviceName.slice(0, 80) }),
+      body: JSON.stringify({ inviteCode: code, displayName: name, deviceName: normalizedDeviceName.slice(0, 80), claimId }),
       signal: AbortSignal.timeout(12_000),
     });
     const payload = await response.json().catch(() => ({})) as ClaimResponse & { error?: { message?: string } };
@@ -188,6 +190,29 @@ export class CloudAccessStore {
 
   private localPreviewEnabled(): boolean {
     return process.env.NODE_ENV !== "production" && process.env.ONE_RADIO_ALLOW_LOCAL_PREVIEW === "1";
+  }
+
+  private async invitationClaimId(baseUrl: string, code: string): Promise<string> {
+    const path = `${this.configPath}.activation-secret`;
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    try {
+      await readFile(path, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, randomBytes(32).toString("hex"), { mode: 0o600, flag: "wx" });
+        // Publish a complete file without overwriting a concurrent caller's secret.
+        try { await link(temporary, path); } catch (linkError) {
+          if ((linkError as NodeJS.ErrnoException).code !== "EEXIST") throw linkError;
+        }
+      } finally {
+        await rm(temporary, { force: true });
+      }
+    }
+    const secret = await readFile(path, "utf8");
+    if (!/^[a-f0-9]{64}$/.test(secret)) throw new Error("设备激活记录损坏，请联系管理员。");
+    return createHmac("sha256", secret).update(`${baseUrl}\0${code}`).digest("hex");
   }
 
   private async readRecord(): Promise<PersistedCloudAccess | null> {

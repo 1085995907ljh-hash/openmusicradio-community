@@ -465,7 +465,24 @@
 #radio-console .broadcast-stage { min-height: 0; height: min(48vh, 440px); aspect-ratio: auto; margin: 14px 0; border-color: rgba(98, 244, 255, .26); background: radial-gradient(circle at 50% 48%, rgba(98, 244, 255, .11), transparent 48%), #080a13; }
 #radio-console .track-art-circular { box-shadow: 0 0 0 1px rgba(98, 244, 255, .72), 0 0 0 9px rgba(98, 244, 255, .045), 0 0 38px rgba(98, 244, 255, .16); }
 #radio-console .signal-canvas > span { color: var(--neon-cyan); }
-#radio-console .track-copy h3 { color: var(--console-ink); text-shadow: none; font-family: inherit; font-size: clamp(22px, 2.6vw, 36px); }
+@font-face {
+  font-family: "Manrope";
+  src: url("/fonts/manrope/Manrope-variable.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+}
+
+#radio-console .track-copy,
+#radio-console .queue-track > span:not(.queue-duration) {
+  font-family: "Manrope", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+#radio-console .track-copy h3 { color: var(--console-ink); text-shadow: none; font-family: inherit; font-size: clamp(22px, 2.6vw, 36px); font-weight: 600; letter-spacing: -0.025em; line-height: 1.2; }
+#radio-console .queue-track strong { font-family: inherit; font-weight: 600; letter-spacing: 0; line-height: 1.4; }
+#radio-console .track-copy .player-track-artist,
+#radio-console .track-copy .player-track-release,
+#radio-console .queue-track small { font-family: inherit; font-weight: 400; letter-spacing: 0; }
 #radio-console .track-progress > span, #radio-console .ratio-track > span { background: var(--neon-cyan); box-shadow: 0 0 10px rgba(98, 244, 255, .45); }
 #radio-console .audio-enable, #radio-console .next-button { color: #071116; border-color: var(--neon-cyan); background: var(--neon-cyan); }
 #radio-console .like-song-button.is-liked { color: var(--neon-pink); border-color: var(--neon-pink); background: var(--neon-pink-soft); }
