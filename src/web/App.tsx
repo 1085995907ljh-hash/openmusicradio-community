@@ -904,8 +904,11 @@ function App() {
   const programActive = Boolean(program && ["preparing", "on_air", "closing"].includes(program.status));
   const remainingSeconds = useMemo(() => {
     if (!program) return 0;
-    if (program.localOnly && program.deadlineAt && ["on_air", "preparing", "closing"].includes(program.status)) {
-      return Math.max(0, Math.ceil((new Date(program.deadlineAt).getTime() - nowMs) / 1000));
+    const deadlineMs = program.deadlineAt ? Date.parse(program.deadlineAt) : NaN;
+    // Polls and heartbeats may arrive between clock ticks with stale remainingSeconds.
+    // Use the fixed deadline for live programs so network timing cannot move the clock.
+    if (Number.isFinite(deadlineMs) && ["on_air", "preparing", "closing"].includes(program.status)) {
+      return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000));
     }
     return Math.max(0, Math.floor(program.remainingSeconds));
   }, [nowMs, program]);
