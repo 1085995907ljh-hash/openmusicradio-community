@@ -19,9 +19,15 @@
 
 ![OpenMusicRadio 开屏与进入按钮](docs/screenshots/openmusicradio-landing.png)
 
+### 选择主持人
+
+![OpenMusicRadio 电台主持人选择页](docs/screenshots/openmusicradio-hosts.png)
+
+选择喜欢的主持人，并试听声音。
+
 ### 设置节目
 
-![OpenMusicRadio 主持人与节目参数设置页](docs/screenshots/openmusicradio-settings.png)
+![OpenMusicRadio 节目参数设置页](docs/screenshots/openmusicradio-settings.png)
 
 选择主持人、节目时长、口播频率、推荐方式、音乐氛围或风格，以及熟悉歌曲的比例。
 
