@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/brand/openmusicradio-icon-note-headphones.png" width="88" alt="OpenMusicRadio 图标">
+  <img src="public/brand/openmusicradio-logo-full.png" width="88" alt="OpenMusicRadio 图标">
 </p>
 
 <h1 align="center">OpenMusicRadio</h1>
