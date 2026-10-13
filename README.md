@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="public/brand/openmusicradio-logo-full.png" width="88" alt="OpenMusicRadio 图标">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="public/brand/openmusicradio-mark-dark.svg">
+    <img src="public/brand/openmusicradio-mark-light.svg" width="56" height="56" alt="OpenMusicRadio 图标">
+  </picture>
 </p>
 
 <h1 align="center">OpenMusicRadio</h1>
@@ -7,10 +10,8 @@
 <p align="center">把自己的音乐账号变成一档有主持人的私人电台。</p>
 
 <p align="center">
-  <strong>QQ 音乐与网易云音乐扫码连接</strong> ·
-  <strong>按氛围或风格编排</strong> ·
-  <strong>AI 主持人口播</strong> ·
-  <strong>网页播放</strong>
+  QQ 音乐 / 网易云音乐 · 按氛围或风格编排<br>
+  AI 主持人口播 · 网页播放
 </p>
 
 ## 界面预览

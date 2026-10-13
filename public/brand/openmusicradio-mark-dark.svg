@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="#f0f6fc">
+  <title>OpenMusicRadio</title>
+  <path d="M4 4H32V32C16 32 4 20 4 4Z"/>
+  <path d="M4 4H32V32C16 32 4 20 4 4Z" transform="rotate(90 32 32)"/>
+  <path d="M4 4H32V32C16 32 4 20 4 4Z" transform="rotate(180 32 32)"/>
+  <path d="M4 4H32V32C16 32 4 20 4 4Z" transform="rotate(270 32 32)"/>
+</svg>
